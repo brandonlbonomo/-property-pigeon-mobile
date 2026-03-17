@@ -2,17 +2,26 @@ import os
 import json
 import re
 import hashlib
+import bcrypt
 import base64
 import threading
 import time as _time
 import secrets
+import tempfile
+import functools
+import logging
+import requests
 from email.utils import parsedate_to_datetime
+
+# ── Logging configuration ────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("portfoliopigeon")
 from flask import Flask, jsonify, request, redirect, send_file, g
 from flask_cors import CORS
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request as GoogleAuthRequest
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build as google_build
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -29,12 +38,41 @@ from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
 from plaid.model.transactions_refresh_request import TransactionsRefreshRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── Encryption helpers for sensitive per-user data ──────────
+_FERNET = None
+
+def _get_fernet():
+    """Return a cached Fernet instance using ENCRYPTION_KEY env var."""
+    global _FERNET
+    if _FERNET is None:
+        key = os.environ.get("ENCRYPTION_KEY", "")
+        if not key:
+            # Dev fallback: generate ephemeral key (data won't survive restart)
+            key = Fernet.generate_key().decode()
+            logger.warning("ENCRYPTION_KEY not set — using ephemeral key (dev only)")
+        _FERNET = Fernet(key.encode() if isinstance(key, str) else key)
+    return _FERNET
+
+def _encrypt(plaintext: str) -> str:
+    """Encrypt a string and return the Fernet token as a UTF-8 string."""
+    return _get_fernet().encrypt(plaintext.encode()).decode()
+
+def _decrypt(ciphertext: str) -> str:
+    """Decrypt a Fernet token back to the original string."""
+    return _get_fernet().decrypt(ciphertext.encode()).decode()
+
 app = Flask(__name__, static_folder=".", static_url_path="")
-CORS(app, origins="*")
+CORS(app, origins=[
+    "https://portfoliopigeon.com",
+    "http://localhost:3000",
+    "http://localhost:8081",
+])
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB global request size limit
 
 PLAID_ENV         = os.getenv("PLAID_ENV", "development")
 PLAID_CLIENT_ID   = os.getenv("PLAID_CLIENT_ID")
@@ -55,10 +93,10 @@ api_client   = plaid.ApiClient(configuration)
 plaid_client = plaid_api.PlaidApi(api_client)
 
 PLAID_HOST = env_map.get(PLAID_ENV, "https://development.plaid.com")
-print(f"🏦 Plaid env  : {PLAID_ENV}")
-print(f"🌐 Plaid host : {PLAID_HOST}")
-print(f"🔑 Client ID  : {PLAID_CLIENT_ID[:6]}..." if PLAID_CLIENT_ID else "⚠️  PLAID_CLIENT_ID not set")
-print(f"🪝 Webhook URL: {PLAID_WEBHOOK_URL or '(not set — webhooks disabled)'}")
+logger.info("Plaid env : %s", PLAID_ENV)
+logger.info("Plaid host : %s", PLAID_HOST)
+logger.warning("Client ID : %s..." if PLAID_CLIENT_ID else " PLAID_CLIENT_ID not set", PLAID_CLIENT_ID[:6])
+logger.info("Webhook URL: %s", PLAID_WEBHOOK_URL or '(not set — webhooks disabled)')
 
 # ── Stripe billing config ─────────────────────────────────────
 import stripe
@@ -71,10 +109,10 @@ def _ensure_stripe_products():
     """Idempotent: find-or-create Stripe products + prices using lookup_key."""
     global STRIPE_PRODUCTS
     if not stripe.api_key:
-        print("⚠️  STRIPE_SECRET_KEY not set — billing disabled")
+        logger.warning("STRIPE_SECRET_KEY not set — billing disabled")
         return
     plans = {
-        "pp_pro_monthly": {"name": "Property Pigeon Pro", "amount": 1299},
+        "pp_pro_monthly": {"name": "Portfolio Pigeon Pro", "amount": 1299},
         "cleaner_pro_monthly": {"name": "Cleaner Pro", "amount": 799},
     }
     for lookup_key, info in plans.items():
@@ -82,7 +120,7 @@ def _ensure_stripe_products():
             prices = stripe.Price.list(lookup_keys=[lookup_key], limit=1)
             if prices.data:
                 STRIPE_PRODUCTS[lookup_key] = prices.data[0].id
-                print(f"💳 Found price {lookup_key}: {prices.data[0].id}")
+                logger.info("Found price %s: %s", lookup_key, prices.data[0].id)
             else:
                 product = stripe.Product.create(name=info["name"])
                 price = stripe.Price.create(
@@ -93,19 +131,28 @@ def _ensure_stripe_products():
                     lookup_key=lookup_key,
                 )
                 STRIPE_PRODUCTS[lookup_key] = price.id
-                print(f"💳 Created price {lookup_key}: {price.id}")
+                logger.info("Created price %s: %s", lookup_key, price.id)
         except Exception as e:
-            print(f"⚠️  Stripe product setup error ({lookup_key}): {e}")
+            logger.error("Stripe product setup error (%s): %s", lookup_key, e)
+
+    # Ensure referral coupon exists
+    try:
+        stripe.Coupon.retrieve("referral_50_off")
+        logger.info("Found coupon referral_50_off")
+    except Exception:
+        try:
+            stripe.Coupon.create(
+                id="referral_50_off",
+                percent_off=50,
+                duration="once",
+                name="Referral Reward — 50% Off",
+            )
+            logger.info("Created coupon referral_50_off")
+        except Exception as e:
+            logger.error("Stripe coupon setup error: %s", e)
 
 _ensure_stripe_products()
-print(f"💳 Stripe products: {STRIPE_PRODUCTS}")
-
-# ── Gmail OAuth config ────────────────────────────────────────
-GMAIL_CLIENT_ID     = os.getenv("GMAIL_CLIENT_ID", "")
-GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "")
-GMAIL_REDIRECT_URI  = os.getenv("GMAIL_REDIRECT_URI", "")
-GMAIL_SCOPES        = ["https://www.googleapis.com/auth/gmail.readonly"]
-print(f"📧 Gmail client : {GMAIL_CLIENT_ID[:6]}..." if GMAIL_CLIENT_ID else "⚠️  GMAIL_CLIENT_ID not set")
+logger.info("Stripe products: %s", STRIPE_PRODUCTS)
 
 # OAuth states stored in persistent file store so all gunicorn workers share them
 
@@ -116,7 +163,7 @@ print(f"📧 Gmail client : {GMAIL_CLIENT_ID[:6]}..." if GMAIL_CLIENT_ID else "�
 # Use persistent disk if available, fall back to local
 import os as _os
 STORE_FILE = "/data/plaid_store.json" if _os.path.isdir("/data") else "plaid_store.json"
-print(f"Store file: {STORE_FILE}")
+logger.info("Store file: %s", STORE_FILE)
 STORE_ENV   = "PLAID_STORE_JSON"  # Render env var — survives deploys and filesystem wipes
 
 def _user_store_file():
@@ -124,6 +171,9 @@ def _user_store_file():
     try:
         uid = getattr(g, 'user_id', None)
         if uid:
+            # Validate user_id format to prevent path traversal
+            if not re.match(r'^u_[0-9a-f]{16}$', uid):
+                return None
             base = "/data" if _os.path.isdir("/data") else "."
             return f"{base}/store_{uid}.json"
     except RuntimeError:
@@ -131,6 +181,14 @@ def _user_store_file():
     return None
 
 def load_store():
+    # Per-request cache: avoid re-reading disk within the same request
+    try:
+        cached = getattr(g, '_store_cache', None)
+        if cached is not None:
+            return cached
+    except RuntimeError:
+        pass  # Outside request context
+
     # Per-user store if authenticated
     user_sf = _user_store_file()
     if user_sf:
@@ -139,11 +197,25 @@ def load_store():
                 data = json.load(f)
                 if "accounts" not in data:
                     data["accounts"] = []
+                try:
+                    g._store_cache = data
+                except RuntimeError:
+                    pass
                 return data
         except Exception:
             return {"accounts": []}
 
-    # Global store: Priority: 1) disk file  2) env var backup  3) empty
+    # No authenticated user — return empty store (data isolation)
+    # The global STORE_FILE is only used by scheduler jobs (outside request context)
+    try:
+        # Check if we're in a request context
+        _ = g.user_id
+        # In a request but no user — return empty (prevents data leaks)
+        return {"accounts": []}
+    except RuntimeError:
+        pass
+
+    # Outside request context (scheduler jobs) — use global store
     try:
         with open(STORE_FILE, "r") as f:
             data = json.load(f)
@@ -159,37 +231,36 @@ def load_store():
             data = json.loads(raw)
             if "accounts" not in data:
                 data["accounts"] = []
-            print("✅ Loaded store from env var backup")
+            logger.info("Loaded store from env var backup")
             # Restore to disk immediately
             with open(STORE_FILE, "w") as f:
                 json.dump(data, f)
             return data
     except Exception as e:
-        print(f"Env var restore failed: {e}")
+        logger.error("Env var restore failed: %s", e)
     return {"accounts": []}
 
 def save_store(data):
+    # Invalidate per-request cache so subsequent reads see the new data
+    try:
+        g._store_cache = data
+    except RuntimeError:
+        pass
     # Per-user store if authenticated
     user_sf = _user_store_file()
     if user_sf:
-        try:
-            with open(user_sf, "w") as f:
-                json.dump(data, f)
-        except Exception as e:
-            print(f"Failed to save user store: {e}")
+        lock = _get_store_lock(user_sf)
+        _atomic_write_json(user_sf, data, lock)
         return  # No env var backup for per-user stores
 
     # Global store — save to disk
-    try:
-        with open(STORE_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        print("Failed to save store to disk:", e)
+    lock = _get_store_lock(STORE_FILE)
+    _atomic_write_json(STORE_FILE, data, lock)
     # Update in-process env var immediately — survives dyno sleep/wake within same process
     try:
         os.environ[STORE_ENV] = json.dumps(data)
     except Exception as e:
-        print(f"In-process env var update failed: {e}")
+        logger.error("In-process env var update failed: %s", e)
     # Also update env var via Render API in background — survives redeploys
     def _render_backup():
         try:
@@ -220,9 +291,9 @@ def save_store(data):
             )
             with urllib.request.urlopen(patch, timeout=8):
                 pass
-            print("✅ Env var backup updated")
+            logger.info("Env var backup updated")
         except Exception as e:
-            print(f"Env var backup skipped: {e}")
+            logger.warning("Env var backup skipped: %s", e)
     import threading
     threading.Thread(target=_render_backup, daemon=True).start()
 
@@ -240,11 +311,232 @@ def load_users():
         return {}
 
 def save_users(data):
+    _atomic_write_json(USERS_FILE, data, _users_file_lock)
+    # Invalidate the user-id index cache
+    global _user_id_index, _user_id_index_ts
+    _user_id_index = None
+    _user_id_index_ts = 0
+
+# ── User ID reverse index (O(1) lookup by user_id) ──────────
+_user_id_index = None  # {user_id: email}
+_user_id_index_ts = 0
+
+def _build_user_id_index(users):
+    """Build/refresh user_id → email reverse index."""
+    global _user_id_index, _user_id_index_ts
+    _user_id_index = {u["id"]: email for email, u in users.items() if "id" in u}
+    _user_id_index_ts = _time.time()
+    return _user_id_index
+
+def _find_user_by_id(users, user_id):
+    """O(1) lookup: returns (email, user_dict) or (None, None)."""
+    global _user_id_index
+    if _user_id_index is None or _time.time() - _user_id_index_ts > 60:
+        _build_user_id_index(users)
+    email = _user_id_index.get(user_id)
+    if email and email in users:
+        return email, users[email]
+    # Fallback: index stale, do linear scan + rebuild
+    for e, u in users.items():
+        if u.get("id") == user_id:
+            _user_id_index[user_id] = e
+            return e, u
+    return None, None
+
+# ── Atomic write utility (Phase 2) ───────────────────────────
+_users_file_lock = threading.Lock()
+_store_file_locks = {}  # per-path locks for user store files
+_store_file_locks_lock = threading.Lock()
+
+def _get_store_lock(path):
+    """Get or create a lock for a specific store file path."""
+    with _store_file_locks_lock:
+        if path not in _store_file_locks:
+            _store_file_locks[path] = threading.Lock()
+        return _store_file_locks[path]
+
+def _atomic_write_json(filepath, data, lock=None):
+    """Write JSON atomically: write to temp file, then os.replace (POSIX atomic)."""
+    dir_name = os.path.dirname(filepath) or "."
     try:
-        with open(USERS_FILE, "w") as f:
-            json.dump(data, f)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, filepath)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception as e:
-        print(f"Failed to save users: {e}")
+        logger.error("Failed to save %s: %s", filepath, e)
+
+# ── In-memory token cache (Phase 1) ──────────────────────────
+_token_cache = {}  # token → (user_id, issued_at)
+_token_cache_lock = threading.Lock()
+
+def _cache_token(token, user_id, issued_at):
+    with _token_cache_lock:
+        _token_cache[token] = (user_id, issued_at)
+
+def _invalidate_token(token):
+    with _token_cache_lock:
+        _token_cache.pop(token, None)
+
+def _invalidate_user_tokens(user_id):
+    """Remove all cached tokens for a given user_id."""
+    with _token_cache_lock:
+        to_remove = [t for t, (uid, _) in _token_cache.items() if uid == user_id]
+        for t in to_remove:
+            del _token_cache[t]
+
+def _warm_token_cache():
+    """Populate token cache from users.json on startup."""
+    users = load_users()
+    with _token_cache_lock:
+        for email, u in users.items():
+            token = u.get("token")
+            if token:
+                _token_cache[token] = (u["id"], u.get("token_issued_at", 0))
+    logger.info("Token cache warmed: %s tokens cached", len(_token_cache))
+
+# ── Rate limiter (Phase 3) ───────────────────────────────────
+_rate_buckets = {}  # (endpoint, ip) → [timestamp, ...]
+_rate_buckets_lock = threading.Lock()
+
+def _rate_limit_check(key, max_requests, window_seconds):
+    """Check rate limit for a key. Returns True if allowed, False if exceeded."""
+    now = _time.time()
+    with _rate_buckets_lock:
+        timestamps = _rate_buckets.get(key, [])
+        # Remove expired entries
+        cutoff = now - window_seconds
+        timestamps = [t for t in timestamps if t > cutoff]
+        if len(timestamps) >= max_requests:
+            _rate_buckets[key] = timestamps
+            return False
+        timestamps.append(now)
+        _rate_buckets[key] = timestamps
+        return True
+
+def rate_limit(max_requests, window_seconds):
+    """Decorator: rate limit by IP address."""
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
+            key = (f.__name__, ip)
+            if not _rate_limit_check(key, max_requests, window_seconds):
+                return jsonify({"error": "Too many requests. Please try again later."}), 429
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+def _cleanup_rate_buckets():
+    """Remove expired rate limit entries (run periodically)."""
+    now = _time.time()
+    with _rate_buckets_lock:
+        expired_keys = []
+        for key, timestamps in _rate_buckets.items():
+            timestamps[:] = [t for t in timestamps if t > now - 600]
+            if not timestamps:
+                expired_keys.append(key)
+        for key in expired_keys:
+            del _rate_buckets[key]
+
+# ── Error sanitization (Phase 5) ─────────────────────────────
+def _safe_error(e, context="operation"):
+    """Log full error server-side, return sanitized message to client."""
+    err_str = str(e)
+    logger.error("%s error: %s", context, err_str, exc_info=True)
+
+    # Plaid-specific safe messages
+    if "ITEM_LOGIN_REQUIRED" in err_str:
+        return "Bank connection expired — please re-authenticate", 400
+    if "INVALID_ACCESS_TOKEN" in err_str:
+        return "Bank connection is invalid — please re-link your account", 400
+    if "RATE_LIMIT" in err_str or "rate limit" in err_str.lower():
+        return "Service rate limit reached — please try again in a few minutes", 429
+    if "INSTITUTION_NOT_RESPONDING" in err_str:
+        return "Your bank is not responding — please try again later", 503
+    if "INSTITUTION_DOWN" in err_str:
+        return "Your bank is currently unavailable — please try again later", 503
+
+    # Stripe-specific safe messages
+    if "stripe" in context.lower() or "billing" in context.lower() or "checkout" in context.lower():
+        return "Billing service error — please try again", 500
+
+    # Generic safe message
+    return f"{context} failed — please try again", 500
+
+# ── Response caching (Phase 6) ───────────────────────────────
+_response_cache = {}  # (endpoint, user_id) → {"data": ..., "ts": float}
+_response_cache_lock = threading.Lock()
+
+def _get_cached_response(endpoint, user_id, ttl_seconds):
+    """Return cached response if fresh, else None."""
+    with _response_cache_lock:
+        key = (endpoint, user_id)
+        entry = _response_cache.get(key)
+        if entry and (_time.time() - entry["ts"]) < ttl_seconds:
+            return entry["data"]
+    return None
+
+def _set_cached_response(endpoint, user_id, data):
+    """Cache a response."""
+    with _response_cache_lock:
+        _response_cache[(endpoint, user_id)] = {"data": data, "ts": _time.time()}
+
+def _invalidate_cache(endpoint, user_id=None):
+    """Invalidate cache for an endpoint, optionally for a specific user."""
+    with _response_cache_lock:
+        if user_id:
+            _response_cache.pop((endpoint, user_id), None)
+        else:
+            keys = [k for k in _response_cache if k[0] == endpoint]
+            for k in keys:
+                del _response_cache[k]
+
+# ── SSRF protection ───────────────────────────────────────────
+import ipaddress as _ipaddress
+import urllib.parse as _urlparse
+
+def _is_safe_url(url):
+    """Validate URL is safe to fetch server-side (prevent SSRF)."""
+    try:
+        parsed = _urlparse.urlparse(url)
+        # Only allow HTTP(S)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname or ""
+        # Block empty hostname
+        if not hostname:
+            return False
+        # Block localhost variants
+        if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"):
+            return False
+        # Block private/reserved IP ranges
+        try:
+            ip = _ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+                return False
+        except ValueError:
+            pass  # hostname is a domain, not an IP — that's fine
+        # Block cloud metadata endpoints
+        if hostname in ("169.254.169.254", "metadata.google.internal"):
+            return False
+        return True
+    except Exception:
+        return False
+
+# ── User ID format validation ────────────────────────────────
+_USER_ID_RE = re.compile(r'^u_[0-9a-f]{16}$')
+
+def _is_valid_user_id(uid):
+    """Validate user_id matches expected format to prevent path traversal."""
+    return bool(_USER_ID_RE.match(uid))
 
 # ── Billing meta (lifetime-free counter) ─────────────────────
 BILLING_META_FILE = "/data/billing_meta.json" if _os.path.isdir("/data") else "billing_meta.json"
@@ -257,15 +549,12 @@ def _load_billing_meta():
         return {"plaid_free_users": []}
 
 def _save_billing_meta(data):
-    try:
-        with open(BILLING_META_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        print(f"Failed to save billing meta: {e}")
+    _atomic_write_json(BILLING_META_FILE, data)
 
 PUSH_TOKENS_FILE = "/data/push_tokens.json" if _os.path.isdir("/data") else "push_tokens.json"
 FOLLOWS_FILE = "/data/follows.json" if _os.path.isdir("/data") else "follows.json"
 NOTIFICATIONS_FILE = "/data/notifications.json" if _os.path.isdir("/data") else "notifications.json"
+PROPERTY_REQUESTS_FILE = "/data/property_requests.json" if _os.path.isdir("/data") else "property_requests.json"
 
 def _load_json_file(path):
     try:
@@ -275,11 +564,7 @@ def _load_json_file(path):
         return {}
 
 def _save_json_file(path, data):
-    try:
-        with open(path, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        print(f"Failed to save {path}: {e}")
+    _atomic_write_json(path, data)
 
 def _send_push(tokens, title, body, data=None):
     """Send push notification via Expo push API."""
@@ -303,7 +588,7 @@ def _send_push(tokens, title, body, data=None):
         )
         urllib.request.urlopen(req, timeout=10)
     except Exception as e:
-        print(f"Push send error: {e}")
+        logger.error("Push send error: %s", e)
 
 def _store_notification(user_id, ntype, title, body, data=None):
     """Store notification in history."""
@@ -330,6 +615,8 @@ def _get_user_push_tokens(user_id):
 
 def _load_store_for_user(user_id):
     """Load store for a specific user (for cross-user data access)."""
+    if not re.match(r'^u_[0-9a-f]{16}$', user_id):
+        return {"accounts": [], "transactions": {}}
     base = "/data" if _os.path.isdir("/data") else "."
     sf = f"{base}/store_{user_id}.json"
     try:
@@ -342,75 +629,276 @@ def _load_store_for_user(user_id):
         return {"accounts": [], "transactions": {}}
 
 # ── Auth: before_request middleware ───────────────────────────
-PUBLIC_PREFIXES = ("/", "/api/auth/", "/api/health", "/api/webhook", "/api/billing/",
-                   "/manifest.json",
-                   "/icon-", "/cleaner", "/api/debug", "/api/users/")
+PUBLIC_PREFIXES = (
+    "/api/auth/", "/api/health", "/api/webhook",
+    "/api/billing/webhook", "/api/billing/success", "/api/billing/cancel",
+    "/api/billing/portal-return",
+    "/api/iap/apple-notifications",
+    "/manifest.json", "/icon-",
+    "/api/users/search", "/api/users/profile/", "/api/cities",
+    "/api/referral/validate",
+    "/privacy", "/terms",
+    "/api/messages/files/",
+)
 
 @app.before_request
 def check_bearer_token():
-    """Validate Bearer token and set g.user_id for per-user data isolation."""
+    """Validate Bearer token and enforce auth on non-public routes."""
     g.user_id = None
+
+    # Extract token if present
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
-        users = load_users()
-        for email, u in users.items():
-            if u.get("token") == token:
-                g.user_id = u["id"]
-                break
+        # Phase 1: O(1) cache lookup first
+        with _token_cache_lock:
+            cached = _token_cache.get(token)
+        if cached:
+            user_id, issued_at = cached
+            if _time.time() - issued_at <= 30 * 86400:
+                g.user_id = user_id
+            # else: expired — fall through as unauthenticated
+        else:
+            # Cache miss — fall back to disk scan, then populate cache
+            users = load_users()
+            for email, u in users.items():
+                if u.get("token") == token:
+                    issued = u.get("token_issued_at", 0)
+                    if _time.time() - issued > 30 * 86400:
+                        break  # expired
+                    g.user_id = u["id"]
+                    _cache_token(token, u["id"], issued)
+                    break
+
+    # Allow public routes without auth
+    path = request.path
+    if path == "/" or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+        return  # Allow through
+
+    # All other routes require valid auth
+    if g.user_id is None:
+        return jsonify({"error": "Not authenticated"}), 401
+
+@app.after_request
+def _log_request(response):
+    """Log every request with method, path, status, user, and elapsed time."""
+    try:
+        elapsed = (_time.time() - getattr(g, '_request_start', _time.time())) * 1000
+        uid = getattr(g, 'user_id', None) or '-'
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr) or '-'
+        level = logging.WARNING if response.status_code >= 400 else logging.INFO
+        logger.log(level, "%s %s %s %.0fms user=%s ip=%s",
+                   request.method, request.path, response.status_code,
+                   elapsed, uid, ip)
+    except Exception:
+        pass
+    return response
+
+@app.before_request
+def _start_timer():
+    g._request_start = _time.time()
 
 # ── Auth endpoints ────────────────────────────────────────────
 @app.route("/api/auth/register", methods=["POST"])
 @app.route("/api/register", methods=["POST"])
+@rate_limit(5, 300)  # 5 requests per 5 minutes per IP
 def auth_register():
     body = request.get_json(force=True) or {}
     email = (body.get("email") or "").strip().lower()
     password = body.get("password") or ""
     if not email or not password:
         return jsonify({"ok": False, "error": "Email and password required"}), 400
+    if len(password) < 8:
+        return jsonify({"ok": False, "error": "Password must be at least 8 characters"}), 400
+    if "@" not in email or not _has_valid_mx(email.split("@")[1]):
+        return jsonify({"ok": False, "error": "Please use a valid email address"}), 400
     users = load_users()
     if email in users:
         return jsonify({"ok": False, "error": "Account already exists"}), 409
     user_id = "u_" + secrets.token_hex(8)
     token = secrets.token_hex(32)
-    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     role = body.get("role", "owner")  # "owner" or "cleaner"
-    username = body.get("username", "")
+    username = (body.get("username") or "").strip().lower()
+    # Check username uniqueness (case-insensitive, also checks email prefixes)
+    if username:
+        for reg_email, u in users.items():
+            stored = (u.get("username") or "").lower()
+            email_prefix = reg_email.split("@")[0].lower()
+            if stored == username or email_prefix == username:
+                return jsonify({"ok": False, "error": "Username is already taken"}), 409
     follow_code = "PPG-" + secrets.token_hex(3).upper() if role == "owner" else ""
+    referral_code = "REF-" + secrets.token_hex(3).upper()
+
+    # Check if registering with a referral code
+    referred_by = None
+    input_referral = (body.get("referral_code") or "").strip().upper()
+    if input_referral:
+        for _, u in users.items():
+            if u.get("referral_code") == input_referral:
+                referred_by = u["id"]
+                break
+
     users[email] = {
         "id": user_id,
         "password_hash": pw_hash,
         "token": token,
+        "token_issued_at": _time.time(),
         "role": role,
         "username": username,
         "follow_code": follow_code,
+        "referral_code": referral_code,
+        "referred_by": referred_by,
+        "referral_rewarded": False,
         "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
     }
-    save_users(users)
-    print(f"✅ Registered user {email} → {user_id}")
+    with _users_file_lock:
+        save_users(users)
+    _cache_token(token, user_id, _time.time())
+    logger.info("Registered user %s -> %s%s", email, user_id, " (referred by %s)" % referred_by if referred_by else "")
     return jsonify({"ok": True, "user_id": user_id, "token": token, "email": email})
+
+def _has_valid_mx(domain):
+    """Check if domain has real MX records (not null MX)."""
+    try:
+        import dns.resolver
+        answers = dns.resolver.resolve(domain, 'MX')
+        for rdata in answers:
+            mx = str(rdata.exchange).rstrip('.')
+            if mx and mx != '.':
+                return True
+        return False
+    except Exception:
+        return False
+
+@app.route("/api/auth/check-email", methods=["POST"])
+@rate_limit(20, 60)  # 20 requests per minute per IP
+def auth_check_email():
+    body = request.get_json(force=True) or {}
+    email = (body.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"available": False, "error": "Invalid email"}), 400
+    domain = email.split("@")[1]
+    if not domain or "." not in domain:
+        return jsonify({"available": False, "error": "Invalid email"}), 400
+    # Check domain has real mail servers
+    if not _has_valid_mx(domain):
+        return jsonify({"available": False, "error": "Invalid email domain"})
+    users = load_users()
+    if email in users:
+        return jsonify({"available": False, "error": "Email already registered"})
+    return jsonify({"available": True})
+
+@app.route("/api/auth/check-username", methods=["POST"])
+@rate_limit(20, 60)  # 20 requests per minute per IP
+def auth_check_username():
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip().lower()
+    if not username or len(username) < 3:
+        return jsonify({"available": False}), 400
+    # If authenticated, exclude self so users can claim their own email prefix
+    current_uid = None
+    try:
+        current_uid, _, _ = _authenticate()
+    except Exception:
+        pass
+    users = load_users()
+    for email, u in users.items():
+        # Skip self when checking availability
+        if current_uid and u.get("id") == current_uid:
+            continue
+        stored = (u.get("username") or "").lower()
+        email_prefix = email.split("@")[0].lower()
+        if stored == username or email_prefix == username:
+            return jsonify({"available": False})
+    return jsonify({"available": True})
+
+@app.route("/api/auth/update-username", methods=["POST"])
+def auth_update_username():
+    uid, status, error = _authenticate()
+    if error:
+        return error, status
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "").strip().lower()
+    if not username or len(username) < 3:
+        return jsonify({"ok": False, "error": "Username must be at least 3 characters"}), 400
+    if not re.match(r'^[a-zA-Z0-9._-]+$', username):
+        return jsonify({"ok": False, "error": "Username can only contain letters, numbers, dots, dashes, underscores"}), 400
+    users = load_users()
+    # Find current user's email
+    current_email = None
+    for email, u in users.items():
+        if u.get("id") == uid:
+            current_email = email
+            break
+    if not current_email:
+        return jsonify({"ok": False, "error": "User not found"}), 404
+    # Check uniqueness (exclude self)
+    for email, u in users.items():
+        if email == current_email:
+            continue
+        stored = (u.get("username") or "").lower()
+        email_prefix = email.split("@")[0].lower()
+        if stored == username or email_prefix == username:
+            return jsonify({"ok": False, "error": "Username is already taken"}), 409
+    users[current_email]["username"] = username
+    with _users_file_lock:
+        save_users(users)
+    return jsonify({"ok": True, "username": username})
 
 @app.route("/api/auth/login", methods=["POST"])
 @app.route("/api/login", methods=["POST"])
+@rate_limit(10, 300)  # 10 requests per 5 minutes per IP
 def auth_login():
     body = request.get_json(force=True) or {}
-    email = (body.get("email") or "").strip().lower()
+    identifier = (body.get("email") or "").strip().lower()
     password = body.get("password") or ""
-    if not email or not password:
-        return jsonify({"ok": False, "error": "Email and password required"}), 400
+    if not identifier or not password:
+        return jsonify({"ok": False, "error": "Email or username and password required"}), 400
     users = load_users()
-    user = users.get(email)
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
+    # Try direct email lookup first
+    email = identifier
+    user = users.get(identifier)
+    # If not found by email, search by username or email prefix
     if not user:
+        for user_email, u in users.items():
+            stored_username = (u.get("username") or "").lower()
+            email_prefix = user_email.split("@")[0].lower()
+            if (stored_username and stored_username == identifier) or email_prefix == identifier:
+                user = u
+                email = user_email
+                break
+    if not user:
+        logger.warning("Login failed: unknown identifier=%s ip=%s", identifier, ip)
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
-    pw_hash = hashlib.sha256(password.encode()).hexdigest()
-    if user["password_hash"] != pw_hash:
-        return jsonify({"ok": False, "error": "Invalid credentials"}), 401
+    stored_hash = user["password_hash"]
+    # Transparent migration: old SHA256 hashes are 64 hex chars
+    if len(stored_hash) == 64:
+        # Legacy SHA256 check
+        if hashlib.sha256(password.encode()).hexdigest() != stored_hash:
+            logger.warning("Login failed: bad password email=%s ip=%s", email, ip)
+            return jsonify({"ok": False, "error": "Invalid credentials"}), 401
+        # Upgrade to bcrypt on successful login
+        user["password_hash"] = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    else:
+        # bcrypt check
+        if not bcrypt.checkpw(password.encode(), stored_hash.encode()):
+            logger.warning("Login failed: bad password email=%s ip=%s", email, ip)
+            return jsonify({"ok": False, "error": "Invalid credentials"}), 401
+    # Invalidate old token from cache before issuing new one
+    old_token = user.get("token")
+    if old_token:
+        _invalidate_token(old_token)
     # Generate a fresh token on each login
     token = secrets.token_hex(32)
     user["token"] = token
-    save_users(users)
-    print(f"✅ Login for {email}")
-    return jsonify({"ok": True, "user_id": user["id"], "token": token, "email": email})
+    user["token_issued_at"] = _time.time()
+    with _users_file_lock:
+        save_users(users)
+    _cache_token(token, user["id"], user["token_issued_at"])
+    logger.info("Login success: email=%s user=%s ip=%s", email, user["id"], ip)
+    return jsonify({"ok": True, "user_id": user["id"], "token": token, "email": email, "username": user.get("username", "")})
 
 @app.route("/api/auth/delete", methods=["POST"])
 def auth_delete():
@@ -426,8 +914,13 @@ def auth_delete():
             break
     if not target_email:
         return jsonify({"ok": False, "error": "User not found"}), 404
+    # Invalidate token cache before deleting
+    old_token = users[target_email].get("token")
+    if old_token:
+        _invalidate_token(old_token)
     del users[target_email]
-    save_users(users)
+    with _users_file_lock:
+        save_users(users)
     # Delete per-user store file
     base = "/data" if _os.path.isdir("/data") else "."
     store_file = f"{base}/store_{uid}.json"
@@ -435,8 +928,141 @@ def auth_delete():
         os.remove(store_file)
     except Exception:
         pass
-    print(f"🗑️ Deleted user {target_email} ({uid})")
+    logger.info("Deleted user %s (%s)", target_email, uid)
     return jsonify({"ok": True})
+
+# ── Forgot / Reset password ──────────────────────────────────
+@app.route("/api/auth/forgot-password", methods=["POST"])
+@rate_limit(3, 600)  # 3 requests per 10 minutes per IP
+def auth_forgot_password():
+    body = request.get_json(force=True) or {}
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"ok": False, "error": "Email required"}), 400
+    users = load_users()
+    user = users.get(email)
+    if not user:
+        # Don't reveal whether email exists — return ok either way
+        return jsonify({"ok": True})
+    code = str(secrets.randbelow(900000) + 100000)  # 6-digit numeric
+    user["reset_code"] = code
+    user["reset_code_expires"] = _time.time() + 900  # 15 minutes
+    save_users(users)
+    logger.info("Password reset code generated for %s", email)
+    return jsonify({"ok": True})
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+@rate_limit(5, 300)  # 5 requests per 5 minutes per IP
+def auth_reset_password():
+    body = request.get_json(force=True) or {}
+    email = (body.get("email") or "").strip().lower()
+    code = (body.get("code") or "").strip()
+    new_password = body.get("new_password") or ""
+    if not email or not code or not new_password:
+        return jsonify({"ok": False, "error": "Email, code, and new_password required"}), 400
+    if len(new_password) < 8:
+        return jsonify({"ok": False, "error": "Password must be at least 8 characters"}), 400
+    users = load_users()
+    user = users.get(email)
+    if not user:
+        return jsonify({"ok": False, "error": "Invalid code"}), 400
+    stored_code = user.get("reset_code")
+    expires = user.get("reset_code_expires", 0)
+    if not stored_code or not secrets.compare_digest(stored_code, code):
+        return jsonify({"ok": False, "error": "Invalid code"}), 400
+    if _time.time() > expires:
+        return jsonify({"ok": False, "error": "Code expired"}), 400
+    pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+    user["password_hash"] = pw_hash
+    user.pop("reset_code", None)
+    user.pop("reset_code_expires", None)
+    # Invalidate old token — force re-login after password reset
+    old_token = user.get("token")
+    if old_token:
+        _invalidate_token(old_token)
+    new_token = secrets.token_hex(32)
+    user["token"] = new_token
+    user["token_issued_at"] = _time.time()
+    with _users_file_lock:
+        save_users(users)
+    _cache_token(new_token, user["id"], _time.time())
+    logger.info("Password reset for %s", email)
+    return jsonify({"ok": True, "token": new_token})
+
+# ── Referral endpoints ────────────────────────────────────────
+@app.route("/api/referral/validate", methods=["POST"])
+@rate_limit(10, 60)  # 10 requests per minute per IP
+def referral_validate():
+    body = request.get_json(force=True) or {}
+    code = (body.get("referral_code") or "").strip().upper()
+    if not code:
+        return jsonify({"valid": False})
+    users = load_users()
+    for _, u in users.items():
+        if u.get("referral_code") == code:
+            return jsonify({"valid": True})
+    return jsonify({"valid": False})
+
+
+@app.route("/api/referral/code", methods=["GET"])
+def referral_code():
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+    users = load_users()
+    user = None
+    for _, u in users.items():
+        if u.get("id") == uid:
+            user = u
+            break
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    # Count how many users this person has referred
+    referral_count = sum(1 for _, u in users.items() if u.get("referred_by") == uid)
+    return jsonify({
+        "referral_code": user.get("referral_code"),
+        "referred_by": user.get("referred_by"),
+        "referral_count": referral_count,
+    })
+
+
+def _handle_referral_reward(paying_user_id):
+    """Apply 50% off coupon to referrer when referred user's first payment succeeds."""
+    users = load_users()
+    paying_user = None
+    for _, u in users.items():
+        if u.get("id") == paying_user_id:
+            paying_user = u
+            break
+    if not paying_user:
+        return
+    referred_by = paying_user.get("referred_by")
+    if not referred_by or paying_user.get("referral_rewarded"):
+        return
+    # Find the referrer
+    referrer = None
+    for _, u in users.items():
+        if u.get("id") == referred_by:
+            referrer = u
+            break
+    if not referrer:
+        return
+    referrer_sub = referrer.get("subscription_id")
+    referrer_customer = referrer.get("stripe_customer_id")
+    if not referrer_sub or not referrer_customer:
+        return
+    try:
+        stripe.Subscription.modify(referrer_sub, coupon="referral_50_off")
+        # Mark as rewarded to prevent duplicate rewards
+        for _, u in users.items():
+            if u.get("id") == paying_user_id:
+                u["referral_rewarded"] = True
+                break
+        save_users(users)
+        logger.info("Referral reward: applied 50% off to %s for referring %s", referred_by, paying_user_id)
+    except Exception as e:
+        logger.error("Referral reward failed for %s: %s", paying_user_id, e)
+
 
 # ── Frontend ──────────────────────────────────────────────────
 @app.route("/")
@@ -451,7 +1077,7 @@ def frontend():
 @app.route("/manifest.json")
 def manifest():
     return jsonify({
-        "name": "Property Pigeon",
+        "name": "Portfolio Pigeon",
         "short_name": "Pigeon",
         "start_url": "/",
         "display": "standalone",
@@ -486,30 +1112,156 @@ def health():
         "accounts":         [a.get("name") for a in store["accounts"]],
     })
 
-# ── Store diagnostics ─────────────────────────────────────────
-@app.route("/api/debug")
-def debug():
-    store = load_store()
-    txs = list(store.get("transactions", {}).values())
-    dates = sorted([t["date"] for t in txs if t.get("date")])
-    # Per-account breakdown
-    by_account = {}
-    for t in txs:
-        acc = t.get("account", "unknown")
-        if acc not in by_account:
-            by_account[acc] = {"count": 0, "newest": "", "oldest": "9999"}
-        by_account[acc]["count"] += 1
-        d = t.get("date", "")
-        if d > by_account[acc]["newest"]: by_account[acc]["newest"] = d
-        if d < by_account[acc]["oldest"]: by_account[acc]["oldest"] = d
-    return jsonify({
-        "total_transactions": len(txs),
-        "oldest_date":        dates[0]  if dates else None,
-        "newest_date":        dates[-1] if dates else None,
-        "by_account":         by_account,
-        "cursors":            {a["name"]: (a.get("cursor") or "")[:40] + "..." if a.get("cursor") else None
-                               for a in store["accounts"]},
-    })
+# ── Legal pages ───────────────────────────────────────────────
+@app.route("/privacy")
+def privacy_policy():
+    return """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — Portfolio Pigeon</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#1a1a1a;line-height:1.7}
+h1{font-size:28px}h2{font-size:20px;margin-top:32px}p,li{font-size:15px}a{color:#3B82F6}</style></head>
+<body>
+<h1>Privacy Policy</h1>
+<p><strong>Last updated:</strong> March 15, 2026</p>
+<p>Portfolio Pigeon ("we", "us", "our") operates the Portfolio Pigeon mobile application (the "App"). This policy explains what data we collect, how we use it, and your rights.</p>
+
+<h2>1. Information We Collect</h2>
+<p><strong>Account information:</strong> Email address, username, and a securely hashed password when you create an account.</p>
+<p><strong>Financial data (optional):</strong> If you connect a bank account via Plaid, we receive transaction data (dates, amounts, merchant names) and account metadata. We never receive or store your bank login credentials — Plaid handles authentication directly.</p>
+<p><strong>Property data:</strong> Property names, addresses, calendar feeds (iCal URLs), rental income, expense records, and inventory information you choose to enter.</p>
+<p><strong>Biometric data:</strong> If you enable Face ID / Touch ID, authentication is handled entirely on your device by Apple's LocalAuthentication framework. We do not collect, store, or transmit any biometric data.</p>
+<p><strong>Device information:</strong> Push notification tokens (if you enable notifications), device type, and operating system version for crash reporting and compatibility.</p>
+<p><strong>Usage data:</strong> We may collect anonymized usage analytics such as feature usage frequency and screen views to improve the App. This data is not linked to your identity.</p>
+
+<h2>2. How We Use Your Data</h2>
+<ul>
+<li>Display your financial dashboard, calendar, and inventory within the App</li>
+<li>Sync transactions from connected bank accounts via Plaid</li>
+<li>Send push notifications you've opted into (e.g., cleaning schedules, follow requests)</li>
+<li>Process subscription payments via Apple In-App Purchase and Stripe</li>
+<li>Improve and personalize your experience within the App</li>
+</ul>
+
+<h2>3. Third-Party Services</h2>
+<p>We use the following third-party services that may receive your data:</p>
+<ul>
+<li><strong>Apple (In-App Purchase):</strong> Subscription payment processing. <a href="https://www.apple.com/legal/privacy/">Apple's privacy policy</a> applies.</li>
+<li><strong>RevenueCat:</strong> Subscription management and entitlement verification. RevenueCat processes purchase receipts from Apple.</li>
+<li><strong>Plaid:</strong> Bank account linking and transaction data retrieval. <a href="https://plaid.com/legal/">Plaid's end-user privacy policy</a> applies.</li>
+<li><strong>Stripe:</strong> Payment processing for web-based subscriptions. <a href="https://stripe.com/privacy">Stripe's privacy policy</a> applies.</li>
+<li><strong>Render:</strong> Cloud hosting infrastructure for our backend servers.</li>
+<li><strong>Expo / React Native:</strong> Application framework and push notification delivery.</li>
+</ul>
+<p>We do not sell, rent, or share your personal data with third parties for advertising or marketing purposes. We do not use your data for tracking across other apps or websites.</p>
+
+<h2>4. Data Storage & Security</h2>
+<p>Your data is stored on secure servers hosted by Render. Authentication tokens are stored on-device using Apple's encrypted Keychain (via expo-secure-store). Passwords are hashed with bcrypt. All API communication uses HTTPS/TLS encryption in transit.</p>
+
+<h2>5. Data Retention & Deletion</h2>
+<p>We retain your data for as long as your account is active. You can delete your account at any time from Settings &gt; Account &gt; Delete Account, which permanently and irreversibly removes all your data from our servers within 30 days. Upon deletion, all associated properties, transactions, calendar feeds, and personal information are erased.</p>
+
+<h2>6. Your Rights</h2>
+<p>Depending on your jurisdiction, you may have the right to:</p>
+<ul>
+<li><strong>Access:</strong> Request a copy of the personal data we hold about you</li>
+<li><strong>Correction:</strong> Request correction of inaccurate personal data</li>
+<li><strong>Deletion:</strong> Delete your account and all associated data via the in-app deletion feature</li>
+<li><strong>Portability:</strong> Request your data in a machine-readable format</li>
+</ul>
+<p>California residents have additional rights under the CCPA/CPRA, including the right to know what data is collected and the right to opt out of sale (we do not sell personal data). EU/EEA residents have rights under GDPR.</p>
+
+<h2>7. Children's Privacy</h2>
+<p>The App is not directed to children under 13 (or under 16 in the EU/EEA). We do not knowingly collect personal data from children. If we become aware that we have collected data from a child without parental consent, we will promptly delete it.</p>
+
+<h2>8. International Data Transfers</h2>
+<p>Your data may be transferred to and processed in the United States, where our servers are located. By using the App, you consent to this transfer. We take appropriate measures to protect your data in accordance with this Privacy Policy.</p>
+
+<h2>9. Changes to This Policy</h2>
+<p>We may update this policy from time to time. We will notify you of material changes via the App or email. Continued use of the App after changes constitutes acceptance of the updated policy.</p>
+
+<h2>10. Contact Us</h2>
+<p>If you have questions about this Privacy Policy or wish to exercise your data rights, contact us at <a href="mailto:brandonlbonomo@gmail.com">brandonlbonomo@gmail.com</a>.</p>
+</body></html>"""
+
+@app.route("/terms")
+def terms_of_service():
+    return """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terms of Service — Portfolio Pigeon</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#1a1a1a;line-height:1.7}
+h1{font-size:28px}h2{font-size:20px;margin-top:32px}p,li{font-size:15px}a{color:#3B82F6}</style></head>
+<body>
+<h1>Terms of Service</h1>
+<p><strong>Last updated:</strong> March 15, 2026</p>
+<p>By using Portfolio Pigeon ("the App"), you agree to the following terms. These terms constitute a legally binding agreement between you and Portfolio Pigeon.</p>
+
+<h2>1. Acceptance of Terms</h2>
+<p>By creating an account or using the App, you agree to these Terms of Service and our <a href="/privacy">Privacy Policy</a>. If you do not agree, do not use the App.</p>
+
+<h2>2. Description of Service</h2>
+<p>Portfolio Pigeon is a property management tool for short-term and long-term rental owners and cleaning professionals. The App provides financial dashboards, calendar management, inventory tracking, invoicing, and related features. The App is provided "as is" and is intended for informational purposes only — it does not provide financial, tax, or legal advice.</p>
+
+<h2>3. Account Responsibilities</h2>
+<ul>
+<li>You must provide accurate information when creating an account</li>
+<li>You are responsible for maintaining the security of your account credentials</li>
+<li>You must be at least 18 years old to use the App</li>
+<li>One person may not maintain more than one account</li>
+<li>You are responsible for all activity that occurs under your account</li>
+</ul>
+
+<h2>4. Financial Data Disclaimer</h2>
+<p>The App displays financial information from connected bank accounts and user-entered data. This information is for personal reference only and does not constitute financial, tax, or legal advice. You should consult a qualified professional for financial decisions. We are not responsible for the accuracy of data provided by third-party services such as Plaid.</p>
+
+<h2>5. Subscriptions & Auto-Renewable Payments</h2>
+<p>Portfolio Pigeon Pro is available as an auto-renewable subscription. The following terms apply:</p>
+<ul>
+<li>Payment is charged to your Apple ID account at confirmation of purchase</li>
+<li>Subscriptions automatically renew unless auto-renew is turned off at least 24 hours before the end of the current period</li>
+<li>Your account will be charged for renewal within 24 hours prior to the end of the current period at the same price</li>
+<li>You can manage and cancel your subscriptions by going to your Account Settings on the App Store after purchase</li>
+<li>Any unused portion of a free trial period, if offered, will be forfeited when you purchase a subscription</li>
+</ul>
+<p>Subscription prices may vary by region. Current pricing is displayed in the App before purchase. All prices are in your local currency as determined by the App Store.</p>
+
+<h2>6. Free Trial</h2>
+<p>We may offer a free trial period for new subscribers. During the free trial, you have full access to Pro features at no charge. If you do not cancel before the trial ends, your subscription will automatically convert to a paid subscription at the displayed price.</p>
+
+<h2>7. Acceptable Use</h2>
+<p>You agree not to:</p>
+<ul>
+<li>Use the App for any unlawful purpose</li>
+<li>Attempt to gain unauthorized access to other users' data</li>
+<li>Interfere with the App's infrastructure or security</li>
+<li>Scrape, harvest, or collect data from other users</li>
+<li>Use the App to send spam or unsolicited messages</li>
+<li>Reverse-engineer, decompile, or disassemble the App</li>
+</ul>
+
+<h2>8. Intellectual Property</h2>
+<p>The App, its design, code, and content are owned by Portfolio Pigeon and protected by copyright and intellectual property laws. You are granted a limited, non-exclusive, non-transferable license to use the App for personal, non-commercial purposes. You retain ownership of any data you enter into the App.</p>
+
+<h2>9. Disclaimer of Warranties</h2>
+<p>THE APP IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE APP WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE.</p>
+
+<h2>10. Limitation of Liability</h2>
+<p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, PORTFOLIO PIGEON SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING FROM YOUR USE OF THE APP, INCLUDING BUT NOT LIMITED TO LOSS OF DATA, REVENUE, OR PROFITS. OUR TOTAL LIABILITY SHALL NOT EXCEED THE AMOUNT YOU PAID FOR THE APP IN THE 12 MONTHS PRECEDING THE CLAIM.</p>
+
+<h2>11. Indemnification</h2>
+<p>You agree to indemnify and hold harmless Portfolio Pigeon from any claims, damages, losses, or expenses arising from your use of the App or violation of these terms.</p>
+
+<h2>12. Termination</h2>
+<p>We reserve the right to suspend or terminate accounts that violate these terms. You may delete your account at any time from Settings. Upon termination, your right to use the App ceases immediately.</p>
+
+<h2>13. Governing Law</h2>
+<p>These terms shall be governed by and construed in accordance with the laws of the State of New York, United States, without regard to its conflict of law provisions.</p>
+
+<h2>14. Changes to Terms</h2>
+<p>We may modify these terms at any time. We will notify you of material changes via the App. Continued use of the App after changes constitutes acceptance of the updated terms.</p>
+
+<h2>15. Contact</h2>
+<p>Questions about these terms? Contact us at <a href="mailto:brandonlbonomo@gmail.com">brandonlbonomo@gmail.com</a>.</p>
+</body></html>"""
 
 # ── Link status ───────────────────────────────────────────────
 @app.route("/api/link-status")
@@ -519,6 +1271,51 @@ def link_status():
                   "needs_reauth": a.get("needs_reauth", False)} for a in store["accounts"]]
     return jsonify({"linked": len(store["accounts"]) > 0, "accounts": accounts})
 
+# Alias: frontend calls /api/plaid/accounts
+@app.route("/api/plaid/accounts", methods=["GET"])
+def plaid_accounts_alias():
+    return link_status()
+
+@app.route("/api/plaid/accounts/<item_id>", methods=["DELETE"])
+def plaid_accounts_delete_alias(item_id):
+    store = load_store()
+    store["accounts"] = [a for a in store["accounts"] if a["item_id"] != item_id]
+    save_store(store)
+    return jsonify({"ok": True})
+
+# ── Batch init — single request for mobile app startup ────────
+@app.route("/api/init", methods=["GET"])
+def batch_init():
+    """Return all data needed for mobile app startup in one request.
+    Eliminates 6-8 separate API calls on app launch."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    store = load_store()  # Single disk read, cached for this request
+    tx_store = store.get("transactions", {})
+    tags = store.get("tags", {})
+    # Merge tags into transactions
+    txs = []
+    for tx in tx_store.values():
+        t = dict(tx)
+        tid = t.get("id", "")
+        if tid in tags:
+            t["property_tag"] = tags[tid]
+        txs.append(t)
+    return jsonify({
+        "cockpit": None,  # Cockpit requires computation — use /api/cockpit
+        "transactions": txs,
+        "tags": tags,
+        "props": store.get("custom_props", []),
+        "ical_events": store.get("ical_events", []),
+        "inv_groups": store.get("inv_groups", []),
+        "settings": store.get("settings", {}),
+        "manual_income": store.get("manual_income", {}),
+        "linked": len(store["accounts"]) > 0,
+        "accounts": [{"item_id": a["item_id"], "name": a.get("name", "Bank Account"),
+                       "needs_reauth": a.get("needs_reauth", False)} for a in store["accounts"]],
+    })
+
 # ── Create link token ─────────────────────────────────────────
 @app.route("/api/create-link-token", methods=["POST"])
 def create_link_token():
@@ -526,7 +1323,7 @@ def create_link_token():
     try:
         kwargs = dict(
             user=LinkTokenCreateRequestUser(client_user_id="pigeon-user"),
-            client_name="Property Pigeon",
+            client_name="Portfolio Pigeon",
             products=[Products("transactions")],
             country_codes=[CountryCode("US")],
             language="en",
@@ -537,8 +1334,8 @@ def create_link_token():
         response = plaid_client.link_token_create(req)
         return jsonify({"link_token": response["link_token"]})
     except Exception as e:
-        print("create-link-token error:", str(e))
-        return jsonify({"error": str(e)}), 500
+        msg, code = _safe_error(e, "Plaid link token")
+        return jsonify({"error": msg}), code
 
 @app.route("/api/create-update-token", methods=["POST"])
 def create_update_token():
@@ -553,7 +1350,7 @@ def create_update_token():
     try:
         req = LinkTokenCreateRequest(
             user=LinkTokenCreateRequestUser(client_user_id="pigeon-user"),
-            client_name="Property Pigeon",
+            client_name="Portfolio Pigeon",
             access_token=account["access_token"],
             country_codes=[CountryCode("US")],
             language="en",
@@ -561,8 +1358,8 @@ def create_update_token():
         response = plaid_client.link_token_create(req)
         return jsonify({"link_token": response["link_token"]})
     except Exception as e:
-        print("create-update-token error:", str(e))
-        return jsonify({"error": str(e)}), 500
+        msg, code = _safe_error(e, "Plaid update token")
+        return jsonify({"error": msg}), code
 
 # ══════════════════════════════════════════════════════════════
 # ── Stripe Billing endpoints ─────────────────────────────────
@@ -571,27 +1368,27 @@ def create_update_token():
 def _get_user_billing_fields(user_id):
     """Get billing-related fields for a user."""
     users = load_users()
-    for email, u in users.items():
-        if u.get("id") == user_id:
-            return {
-                "stripe_customer_id": u.get("stripe_customer_id"),
-                "subscription_id": u.get("subscription_id"),
-                "subscription_status": u.get("subscription_status"),
-                "subscription_plan": u.get("subscription_plan"),
-                "subscription_current_period_end": u.get("subscription_current_period_end"),
-                "is_founder": u.get("is_founder", False),
-                "lifetime_free": u.get("lifetime_free", False),
-            }
+    _, u = _find_user_by_id(users, user_id)
+    if u:
+        return {
+            "stripe_customer_id": u.get("stripe_customer_id"),
+            "subscription_id": u.get("subscription_id"),
+            "subscription_status": u.get("subscription_status"),
+            "subscription_plan": u.get("subscription_plan"),
+            "subscription_current_period_end": u.get("subscription_current_period_end"),
+            "is_founder": u.get("is_founder", False),
+            "lifetime_free": u.get("lifetime_free", False),
+        }
     return None
 
 def _update_user_billing(user_id, fields):
     """Update billing fields for a user by user_id."""
     users = load_users()
-    for email, u in users.items():
-        if u.get("id") == user_id:
-            u.update(fields)
-            save_users(users)
-            return True
+    email, u = _find_user_by_id(users, user_id)
+    if u:
+        u.update(fields)
+        save_users(users)
+        return True
     return False
 
 def _find_user_by_stripe_customer(customer_id):
@@ -647,7 +1444,7 @@ def billing_create_checkout():
         try:
             stripe.Customer.retrieve(customer_id)
         except Exception:
-            print(f"⚠️  Stored customer {customer_id} invalid — creating new one")
+            logger.error("Stored customer %s invalid — creating new one", customer_id)
             customer_id = None
 
     if not customer_id:
@@ -662,7 +1459,7 @@ def billing_create_checkout():
         customer_id = customer.id
         _update_user_billing(uid, {"stripe_customer_id": customer_id})
 
-    base_url = os.getenv("APP_BASE_URL", "https://propertypigeon.onrender.com")
+    base_url = os.getenv("APP_BASE_URL", "https://portfoliopigeon.com")
     try:
         session = stripe.checkout.Session.create(
             customer=customer_id,
@@ -675,8 +1472,8 @@ def billing_create_checkout():
         )
         return jsonify({"checkout_url": session.url, "session_id": session.id})
     except Exception as e:
-        print(f"Checkout error: {e}")
-        return jsonify({"error": str(e)}), 500
+        msg, code = _safe_error(e, "Checkout")
+        return jsonify({"error": msg}), code
 
 
 @app.route("/api/billing/create-portal", methods=["POST"])
@@ -692,7 +1489,7 @@ def billing_create_portal():
     if not customer_id:
         return jsonify({"error": "No billing account found"}), 404
 
-    base_url = os.getenv("APP_BASE_URL", "https://propertypigeon.onrender.com")
+    base_url = os.getenv("APP_BASE_URL", "https://portfoliopigeon.com")
     try:
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
@@ -700,8 +1497,84 @@ def billing_create_portal():
         )
         return jsonify({"portal_url": session.url})
     except Exception as e:
-        print(f"Portal error: {e}")
-        return jsonify({"error": str(e)}), 500
+        msg, code = _safe_error(e, "Billing portal")
+        return jsonify({"error": msg}), code
+
+
+@app.route("/api/billing/verify-session", methods=["POST"])
+def billing_verify_session():
+    """Verify a checkout session and activate subscription (no webhook dependency)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+    if not stripe.api_key:
+        return jsonify({"error": "Billing not configured"}), 503
+
+    body = request.get_json(force=True) or {}
+    session_id = body.get("session_id")
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+
+    try:
+        session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
+
+        # Verify this session belongs to the authenticated user
+        if session.customer:
+            customer_uid, _ = _find_user_by_stripe_customer(
+                session.customer if isinstance(session.customer, str) else session.customer.id
+            )
+            if customer_uid and customer_uid != uid:
+                return jsonify({"error": "Session does not belong to this user"}), 403
+
+        # Session is complete if paid or if using a trial (no_payment_required)
+        is_complete = (
+            session.status == "complete"
+            or session.payment_status in ("paid", "no_payment_required")
+        )
+        if not is_complete:
+            billing = _get_user_billing_fields(uid)
+            billing["is_active"] = _is_subscription_active(billing) if billing else False
+            return jsonify(billing)
+
+        sub = session.subscription
+        if sub:
+            # Stripe StripeObject supports dict-like access via .get()
+            sub_id = sub.id if hasattr(sub, 'id') else (sub.get("id") if isinstance(sub, dict) else str(sub))
+            sub_status = sub.status if hasattr(sub, 'status') else (sub.get("status", "active") if isinstance(sub, dict) else "active")
+            sub_period_end = sub.current_period_end if hasattr(sub, 'current_period_end') else (sub.get("current_period_end") if isinstance(sub, dict) else None)
+
+            # Determine plan from subscription items
+            plan = "unknown"
+            items_data = None
+            if hasattr(sub, 'items') and sub.items and hasattr(sub.items, 'data'):
+                items_data = sub.items.data
+            elif isinstance(sub, dict) and sub.get("items", {}).get("data"):
+                items_data = sub["items"]["data"]
+
+            if items_data and len(items_data) > 0:
+                price = items_data[0]
+                if hasattr(price, 'price'):
+                    price = price.price
+                elif isinstance(price, dict):
+                    price = price.get("price", price)
+                lk = price.lookup_key if hasattr(price, 'lookup_key') else (price.get("lookup_key") if isinstance(price, dict) else None)
+                pid = price.id if hasattr(price, 'id') else (price.get("id", "unknown") if isinstance(price, dict) else "unknown")
+                plan = lk or pid
+
+            _update_user_billing(uid, {
+                "subscription_id": sub_id,
+                "subscription_status": sub_status,
+                "subscription_plan": plan,
+                "subscription_current_period_end": sub_period_end,
+            })
+            logger.info("Verified session %s: %s (%s) for user %s", session_id, sub_status, plan, uid)
+
+        billing = _get_user_billing_fields(uid)
+        billing["is_active"] = _is_subscription_active(billing)
+        return jsonify(billing)
+    except Exception as e:
+        msg, code = _safe_error(e, "Billing verification")
+        return jsonify({"error": msg}), code
 
 
 @app.route("/api/billing/success")
@@ -746,18 +1619,21 @@ def billing_webhook():
         try:
             event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
         except ValueError:
-            print("⚠️  Stripe webhook: invalid payload")
+            logger.error("Stripe webhook: invalid payload")
             return "Invalid payload", 400
         except stripe.error.SignatureVerificationError:
-            print("⚠️  Stripe webhook: invalid signature")
+            logger.error("Stripe webhook: invalid signature")
             return "Invalid signature", 400
     else:
-        # No secret configured — parse raw (dev mode)
+        # No secret configured — reject in production
+        if os.getenv("RENDER") or os.getenv("FLASK_ENV") == "production":
+            logger.warning("Stripe webhook: STRIPE_WEBHOOK_SECRET not configured")
+            return "Webhook secret not configured", 500
         event = json.loads(payload)
 
     event_type = event.get("type", "")
     data_obj = event.get("data", {}).get("object", {})
-    print(f"💳 Webhook: {event_type}")
+    logger.info("Webhook: %s", event_type)
 
     if event_type in (
         "customer.subscription.created",
@@ -780,7 +1656,7 @@ def billing_webhook():
                 "subscription_plan": plan,
                 "subscription_current_period_end": data_obj.get("current_period_end"),
             })
-            print(f"💳 Updated subscription for {uid}: {data_obj.get('status')} ({plan})")
+            logger.info("Updated subscription for %s: %s (%s)", uid, data_obj.get('status'), plan)
 
     elif event_type == "customer.subscription.deleted":
         customer_id = data_obj.get("customer")
@@ -790,23 +1666,31 @@ def billing_webhook():
                 "subscription_status": "canceled",
                 "subscription_current_period_end": data_obj.get("current_period_end"),
             })
-            print(f"💳 Subscription canceled for {uid}")
+            logger.info("Subscription canceled for %s", uid)
+
+    elif event_type == "invoice.payment_succeeded":
+        customer_id = data_obj.get("customer")
+        uid, _ = _find_user_by_stripe_customer(customer_id)
+        if uid:
+            _handle_referral_reward(uid)
 
     elif event_type == "invoice.payment_failed":
         customer_id = data_obj.get("customer")
         uid, _ = _find_user_by_stripe_customer(customer_id)
         if uid:
             _update_user_billing(uid, {"subscription_status": "past_due"})
-            print(f"💳 Payment failed for {uid}")
+            logger.error("Payment failed for %s", uid)
 
     return "ok", 200
 
 # ── Exchange token ────────────────────────────────────────────
 @app.route("/api/exchange-token", methods=["POST"])
+@rate_limit(10, 60)  # 10 per minute — bank linking
 def exchange_token():
     store = load_store()
-    public_token  = request.json.get("public_token")
-    account_name  = request.json.get("account_name", "Bank Account")
+    body = request.json or {}
+    public_token  = body.get("public_token")
+    account_name  = body.get("account_name", "Bank Account")
     if not public_token:
         return jsonify({"error": "public_token required"}), 400
     try:
@@ -847,20 +1731,21 @@ def exchange_token():
                     if u.get("id") == uid:
                         u["lifetime_free"] = True
                         save_users(users)
-                        print(f"🎁 User {uid} gets lifetime free (Plaid early adopter #{len(free_users)})")
+                        logger.info("User %s gets lifetime free (Plaid early adopter #%s)", uid, len(free_users))
                         break
 
-        print(f"✅ Linked: {account_name} ({item_id})")
+        logger.info("Linked: %s (%s)", account_name, item_id)
         return jsonify({"ok": True, "item_id": item_id})
     except Exception as e:
-        print("exchange-token error:", str(e))
-        return jsonify({"error": str(e)}), 500
+        msg, code = _safe_error(e, "Bank account linking")
+        return jsonify({"error": msg}), code
 
 # ── Remove account ────────────────────────────────────────────
 @app.route("/api/remove-account", methods=["POST"])
 def remove_account():
     store = load_store()
-    item_id = request.json.get("item_id")
+    body = request.json or {}
+    item_id = body.get("item_id")
     store["accounts"] = [a for a in store["accounts"] if a["item_id"] != item_id]
     save_store(store)
     return jsonify({"ok": True})
@@ -871,7 +1756,7 @@ def run_sync():
     Returns a summary dict; raises no exceptions (errors are logged per-account)."""
     store = load_store()
     if not store["accounts"]:
-        print("Scheduled sync: no accounts linked, skipping.")
+        logger.info("Scheduled sync: no accounts linked, skipping.")
         return {"total_stored": 0, "total": 0}
 
     tx_store = store.get("transactions", {})
@@ -885,7 +1770,7 @@ def run_sync():
             has_more = True
             page     = 0
 
-            print(f"🔄 Syncing {name} — cursor={'set' if cursor else 'none (full sync)'}")
+            logger.info("Syncing %s — cursor=%s", name, 'set' if cursor else 'none (full sync)')
 
             while has_more:
                 page += 1
@@ -898,7 +1783,7 @@ def run_sync():
                     err_str = str(sync_err)
                     # If cursor is invalid/expired, reset it and retry as a full sync
                     if cursor and ("INVALID_CURSOR" in err_str or "cursor" in err_str.lower()):
-                        print(f"⚠️  Invalid cursor for {name} — resetting and retrying full sync")
+                        logger.error("Invalid cursor for %s — resetting and retrying full sync", name)
                         account["cursor"] = None
                         cursor = None
                         save_store(store)
@@ -916,13 +1801,13 @@ def run_sync():
                 removed  += page_removed
                 has_more  = data.get("has_more", False)
                 cursor    = data.get("next_cursor")
-                print(f"  Page {page}: +{len(page_added)} added, "
-                      f"~{len(page_modified)} modified, -{len(page_removed)} removed"
-                      f"{', more…' if has_more else ''}")
+                logger.info("Page %s: +%s added, ~%s modified, -%s removed%s",
+                      page, len(page_added), len(page_modified), len(page_removed),
+                      ", more..." if has_more else "")
 
             account["cursor"] = cursor
-            print(f"  ✅ {name}: {len(added)} added, {len(modified)} modified, "
-                  f"{len(removed)} removed | cursor={'set' if cursor else 'none'}")
+            logger.info("%s: %s added, %s modified, %s removed | cursor=%s",
+                  name, len(added), len(modified), len(removed), "set" if cursor else "none")
 
             def normalize(tx):
                 amount = tx.get("amount", 0)
@@ -962,13 +1847,17 @@ def run_sync():
             if "ITEM_LOGIN_REQUIRED" in err_str:
                 account["needs_reauth"] = True
                 save_store(store)
-                print(f"⚠️  {name}: Chase connection expired — re-authentication required (ITEM_LOGIN_REQUIRED)")
+                logger.warning("%s: Chase connection expired — re-authentication required (ITEM_LOGIN_REQUIRED)", name)
             else:
-                print(f"❌ Sync error for {name}: {e}")
+                logger.error("Sync error for %s: %s", name, e)
             continue
 
     store["transactions"] = tx_store
     save_store(store)
+
+    # Invalidate caches after sync
+    _invalidate_cache("cockpit")
+    _invalidate_cache("transactions")
 
     return {
         "added":         all_added,
@@ -980,7 +1869,8 @@ def run_sync():
     }
 
 # ── Sync all accounts ─────────────────────────────────────────
-@app.route("/api/transactions/sync")
+@app.route("/api/transactions/sync", methods=["GET", "POST"])
+@rate_limit(10, 60)  # 10 per minute — expensive Plaid call
 def sync_transactions():
     store = load_store()
     if not store["accounts"]:
@@ -1004,11 +1894,10 @@ def refresh_transactions():
                 access_token=account["access_token"]
             ))
             results.append(account.get("name"))
-            print(f"🔄 Transactions refresh triggered for {account.get('name')}")
+            logger.info("Transactions refresh triggered for %s", account.get('name'))
         except Exception as e:
-            err = f"{account.get('name')}: {str(e)}"
-            print(f"❌ Transactions refresh error: {err}")
-            errors.append(err)
+            msg, _ = _safe_error(e, f"Transactions refresh ({account.get('name')})")
+            errors.append(f"{account.get('name')}: {msg}")
     return jsonify({
         "ok":        len(errors) == 0,
         "refreshed": results,
@@ -1032,7 +1921,7 @@ def plaid_webhook():
     webhook_code = data.get("webhook_code", "")
     item_id      = data.get("item_id", "")
 
-    print(f"📩 Plaid webhook: {webhook_type}/{webhook_code}  item={item_id}")
+    logger.info("Plaid webhook: %s/%s item=%s", webhook_type, webhook_code, item_id)
 
     # Only act on transaction webhooks
     if webhook_type != "TRANSACTIONS":
@@ -1051,14 +1940,14 @@ def plaid_webhook():
     # Verify this item_id belongs to an account we actually own
     store = load_store()
     if item_id and not any(a["item_id"] == item_id for a in store["accounts"]):
-        print(f"⚠️  Webhook item_id {item_id} not found in store — ignoring")
+        logger.warning("Webhook item_id %s not found in store — ignoring", item_id)
         return jsonify({"ok": True, "action": "unknown_item"})
 
     # Paginate through ALL available updates (run_sync loops has_more automatically)
     try:
         result = run_sync()
-        print(f"✅ Webhook sync done: {result.get('total', 0)} new, "
-              f"{result.get('total_stored', 0)} total stored")
+        logger.info("Webhook sync done: %s new, %s total stored",
+              result.get('total', 0), result.get('total_stored', 0))
         return jsonify({
             "ok":          True,
             "action":      "synced",
@@ -1066,8 +1955,8 @@ def plaid_webhook():
             "total_stored": result.get("total_stored", 0),
         })
     except Exception as e:
-        print(f"❌ Webhook sync error: {e}")
-        return jsonify({"error": str(e)}), 500
+        msg, code = _safe_error(e, "Webhook sync")
+        return jsonify({"error": msg}), code
 
 
 # ── Register webhook on existing Plaid items ──────────────────────────────
@@ -1090,11 +1979,10 @@ def update_webhook():
                 )
             )
             updated.append(account.get("name", account["item_id"]))
-            print(f"✅ Webhook registered for {account.get('name')}: {webhook_url}")
+            logger.info("Webhook registered for %s: %s", account.get('name'), webhook_url)
         except Exception as e:
-            err = f"{account.get('name')}: {str(e)}"
-            print(f"❌ update-webhook error: {err}")
-            errors.append(err)
+            msg, _ = _safe_error(e, f"Webhook update ({account.get('name')})")
+            errors.append(f"{account.get('name')}: {msg}")
 
     return jsonify({"ok": True, "webhook_url": webhook_url, "updated": updated, "errors": errors})
 
@@ -1103,9 +1991,12 @@ def update_webhook():
 # Call this once after linking a new account to backfill history.
 # transactions/sync alone only returns ~90 days on first call.
 @app.route("/api/transactions/historical", methods=["POST"])
+@app.route("/api/plaid/history", methods=["POST"])
+@rate_limit(3, 300)  # 3 per 5 min — very heavy Plaid call
 def historical_pull():
     store = load_store()
-    item_id = request.json.get("item_id")  # optional: pull for specific account only
+    body = request.json or {}
+    item_id = body.get("item_id")  # optional: pull for specific account only
     if not store["accounts"]:
         return jsonify({"error": "No accounts linked"}), 400
 
@@ -1121,10 +2012,12 @@ def historical_pull():
 
     accounts_to_pull = [a for a in store["accounts"] if not item_id or a["item_id"] == item_id]
 
+    MAX_HISTORY_PAGES = 50  # 50 pages × 500 txns = 25,000 max
     for account in accounts_to_pull:
         try:
             offset = 0
             batch_size = 500
+            pages = 0
             while True:
                 options = TransactionsGetRequestOptions(
                     count=batch_size,
@@ -1159,15 +2052,15 @@ def historical_pull():
                     total_added += 1
 
                 offset += len(txs)
-                if offset >= total_txs or not txs:
+                pages += 1
+                if offset >= total_txs or not txs or pages >= MAX_HISTORY_PAGES:
                     break
 
-            print(f"✅ Historical pull: {account.get('name')} — {offset} transactions fetched")
+            logger.info("Historical pull: %s — %s transactions fetched", account.get('name'), offset)
 
         except Exception as e:
-            err = f"{account.get('name')}: {str(e)}"
-            print(f"❌ Historical pull error: {err}")
-            errors.append(err)
+            msg, _ = _safe_error(e, f"Historical pull ({account.get('name')})")
+            errors.append(f"{account.get('name')}: {msg}")
 
     store["transactions"] = tx_store
     save_store(store)
@@ -1182,7 +2075,8 @@ def historical_pull():
 @app.route("/api/transactions/delete", methods=["POST"])
 def delete_transactions():
     store = load_store()
-    ids = request.json.get("ids", [])
+    body = request.json or {}
+    ids = body.get("ids", [])
     tx_store = store.get("transactions", {})
     if ids == "__ALL__":
         deleted = len(tx_store)
@@ -1210,7 +2104,7 @@ def update_transaction():
     if "date" in body and body["date"]:
         tx_store[tx_id]["date"]      = body["date"]
         tx_store[tx_id]["user_date"] = body["date"]  # survives future Plaid sync
-        print(f"📅 Transaction {tx_id}: date overridden to {body['date']}")
+        logger.info("Transaction %s: date overridden to %s", tx_id, body['date'])
     if "amount" in body and body["amount"] is not None:
         tx_store[tx_id]["amount"]      = float(body["amount"])
         tx_store[tx_id]["user_amount"] = float(body["amount"])
@@ -1235,6 +2129,7 @@ def update_transaction():
 
 # ── POST /api/transactions/csv ─────────────────────────────────
 @app.route("/api/transactions/csv", methods=["POST"])
+@rate_limit(10, 60)  # 10 per minute — CSV import
 def import_csv():
     """Import transactions from a parsed Chase CSV export.
     Expects JSON: {rows: [{date, payee, amount, type?}]}
@@ -1242,6 +2137,8 @@ def import_csv():
     """
     body  = request.json or {}
     rows  = body.get("rows", [])
+    if len(rows) > 50000:
+        return jsonify({"ok": False, "error": "Too many rows (max 50,000)"}), 400
     store    = load_store()
     tx_store = store.get("transactions", {})
     added = 0
@@ -1270,7 +2167,7 @@ def import_csv():
         added += 1
     store["transactions"] = tx_store
     save_store(store)
-    print(f"📄 CSV import: {added} new transactions added ({len(tx_store)} total)")
+    logger.info("CSV import: %s new transactions added (%s total)", added, len(tx_store))
     return jsonify({"ok": True, "added": added, "total": len(tx_store)})
 
 
@@ -1284,6 +2181,12 @@ def manual_transaction():
     prop_id = body.get("prop_id", "llc")
     if not amt or not date:
         return jsonify({"ok": False, "error": "amount and date required"}), 400
+    try:
+        amt_float = float(amt)
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid amount"}), 400
+    if abs(amt_float) > 10_000_000:
+        return jsonify({"ok": False, "error": "Amount exceeds maximum allowed value"}), 400
     tx = {
         "id":      f"manual-{date}-{int(float(amt)*100)}-{int(_time.time())}",
         "date":    date,
@@ -1301,246 +2204,7 @@ def manual_transaction():
     return jsonify({"ok": True, "tx": tx})
 
 
-_last_csv_debug = {}  # module-level store for last CSV debug info
-
-
-@app.route("/api/debug/csv-last")
-def debug_csv_last():
-    """Returns raw first rows of the last uploaded CSV for debugging."""
-    return jsonify(_last_csv_debug)
-
-
-# ── Admin: full hard reset + booking seed ─────────────────────────────────
-_SEED_BOOKINGS = [
-    # listing_name, check_in, check_out, booked_date, revenue
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-03-12","2026-03-16","2026-03-07",850.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-03-19","2026-03-23","2026-03-07",696.00),
-    ("24 B · River & Falls Retreat","2026-05-01","2026-05-03","2026-03-06",325.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-03-13","2026-03-15","2026-03-05",441.00),
-    ("26 B · The Gorge Getaway","2026-03-07","2026-03-20","2026-03-03",1103.80),
-    ("24 B · River & Falls Retreat","2026-03-20","2026-03-22","2026-03-02",242.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-03-06","2026-03-10","2026-03-01",569.16),
-    ("24 B · River & Falls Retreat","2026-03-29","2026-04-02","2026-03-01",431.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-03-06","2026-03-08","2026-02-28",357.30),
-    ("24 B · River & Falls Retreat","2026-04-18","2026-04-20","2026-02-28",256.00),
-    ("24 B · River & Falls Retreat","2026-10-01","2026-10-08","2026-02-26",1272.00),
-    ("24 B · River & Falls Retreat","2026-04-22","2026-04-25","2026-02-25",354.00),
-    ("24 B · River & Falls Retreat","2027-09-09","2027-09-11","2026-02-23",195.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-02-26","2026-03-02","2026-02-22",473.94),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-03-20","2026-03-23","2026-02-21",283.20),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-02-20","2026-02-25","2026-02-21",327.60),
-    ("26 B · The Gorge Getaway","2026-02-20","2026-02-27","2026-02-20",562.50),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-03-25","2026-03-29","2026-02-19",356.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-02-26","2026-03-01","2026-02-19",464.43),
-    ("24 B · River & Falls Retreat","2026-06-04","2026-06-08","2026-02-18",1017.00),
-    ("24 B · River & Falls Retreat","2026-02-17","2026-03-01","2026-02-17",1077.00),
-    ("24 B · River & Falls Retreat","2027-09-30","2027-10-02","2026-02-15",189.15),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-15","2026-02-20","2026-02-15",287.24),
-    ("24 B · River & Falls Retreat","2026-02-14","2026-02-15","2026-02-12",88.00),
-    ("26 B · The Gorge Getaway","2026-02-13","2026-02-16","2026-02-12",286.60),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-02-12","2026-02-16","2026-02-11",373.20),
-    ("26 B · The Gorge Getaway","2026-02-10","2026-02-13","2026-02-10",151.90),
-    ("24 B · River & Falls Retreat","2026-03-01","2026-03-07","2026-02-10",445.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-22","2026-02-25","2026-02-10",192.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-03-17","2026-03-20","2026-02-09",264.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-10","2026-02-13","2026-02-08",155.40),
-    ("24 B · River & Falls Retreat","2026-07-11","2026-07-14","2026-02-07",643.11),
-    ("24 B · River & Falls Retreat","2026-04-08","2026-04-10","2026-02-06",179.45),
-    ("24 B · River & Falls Retreat","2026-02-08","2026-02-14","2026-02-06",428.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-03","2026-02-05","2026-02-03",77.00),
-    ("22 B · Riverstone Retreat","2026-02-07","2026-06-06","2026-02-02",11291.77),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-02-27","2026-03-02","2026-02-02",310.40),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-02-02","2026-02-06","2026-02-02",159.65),
-    ("24 B · River & Falls Retreat","2026-04-02","2026-04-05","2026-02-01",259.96),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-02-16","2026-02-19","2026-02-01",186.25),
-    ("24 B · River & Falls Retreat","2026-08-13","2026-08-17","2026-01-31",844.87),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-01-31","2026-02-02","2026-01-30",147.20),
-    ("22 B · Riverstone Retreat","2026-01-29","2026-02-06","2026-01-30",470.40),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-13","2026-02-15","2026-01-30",184.86),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-02-05","2026-02-08","2026-01-29",203.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-05","2026-02-08","2026-01-29",198.00),
-    ("22 B · Riverstone Retreat","2026-01-28","2026-01-29","2026-01-28",11.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-02-14","2026-02-16","2026-01-27",171.00),
-    ("26 B · The Gorge Getaway","2026-01-28","2026-02-08","2026-01-27",600.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-02-27","2026-03-02","2026-01-27",280.80),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-02-20","2026-02-24","2026-01-26",320.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-04-02","2026-04-06","2026-01-26",287.04),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-01-30","2026-02-02","2026-01-25",203.20),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-02-06","2026-02-11","2026-01-25",320.80),
-    ("24 B · River & Falls Retreat","2026-03-07","2026-03-10","2026-01-25",200.79),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-03-27","2026-03-30","2026-01-25",280.80),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-01-24","2026-01-31","2026-01-24",439.24),
-    ("24 B · River & Falls Retreat","2026-05-03","2026-05-07","2026-01-24",326.89),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-01-24","2026-02-05","2026-01-24",65.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-03-20","2026-03-23","2026-01-23",385.28),
-    ("24 B · River & Falls Retreat","2026-01-23","2026-01-27","2026-01-23",195.00),
-    ("24 B · River & Falls Retreat","2026-01-29","2026-02-08","2026-01-23",528.80),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-02-19","2026-02-23","2026-01-23",286.40),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-01-22","2026-01-24","2026-01-23",131.20),
-    ("24 B · River & Falls Retreat","2026-05-10","2026-05-12","2026-01-23",137.60),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2026-03-06","2026-03-09","2026-01-23",280.80),
-    ("26 B · The Gorge Getaway","2026-01-23","2026-01-25","2026-01-23",141.60),
-    ("24 B · River & Falls Retreat","2026-06-15","2026-06-19","2026-01-21",516.80),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-01-23","2026-01-27","2026-01-21",262.40),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2026-03-05","2026-03-13","2026-01-20",729.60),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-03-11","2026-03-15","2026-01-19",294.40),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2026-02-13","2026-02-16","2026-01-19",220.80),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2026-01-09","2026-02-13","2026-01-04",2683.74),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-12-31","2026-01-06","2025-12-31",417.20),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-12-31","2026-01-05","2025-12-30",402.24),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-12-20","2025-12-31","2025-12-20",715.94),
-    ("26 B · The Gorge Getaway","2025-12-20","2026-01-23","2025-12-18",2745.10),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-12-15","2025-12-19","2025-12-08",301.00),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-12-11","2025-12-15","2025-12-05",257.45),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-12-19","2025-12-22","2025-12-02",206.15),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-12-03","2025-12-09","2025-12-01",372.79),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2025-12-07","2025-12-22","2025-11-30",1022.38),
-    ("26 B · The Gorge Getaway","2025-12-01","2025-12-13","2025-11-30",820.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2025-11-26","2025-12-03","2025-11-26",451.75),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-11-27","2025-12-20","2025-11-25",1543.75),
-    ("26 B · The Gorge Getaway","2025-11-25","2025-11-30","2025-11-24",376.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-11-26","2026-01-09","2025-11-23",2915.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-11-23","2025-11-27","2025-11-23",245.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2025-11-22","2025-11-26","2025-11-22",256.08),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-11-26","2025-11-29","2025-11-21",206.40),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-11-21","2025-11-23","2025-11-21",120.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-11-21","2025-11-23","2025-11-21",124.00),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2025-11-15","2025-11-22","2025-11-15",466.57),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-11-14","2025-11-16","2025-11-13",133.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-11-16","2025-11-26","2025-11-10",654.55),
-    ("Unit 1 · Premium EaDo Apartment | Stadiums Downtown","2025-11-05","2025-11-09","2025-11-05",259.00),
-    ("26 B · The Gorge Getaway","2025-11-06","2025-11-20","2025-11-05",1020.44),
-    ("Unit 3 · Stylish EaDo Apt | Walk to Venues","2025-11-05","2025-11-09","2025-11-05",259.20),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-11-04","2025-11-10","2025-11-04",390.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-11-01","2025-11-03","2025-11-02",130.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-11-08","2025-11-10","2025-11-01",175.00),
-    ("26 B · The Gorge Getaway","2025-11-01","2025-11-03","2025-10-31",141.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-10-26","2025-11-01","2025-10-24",435.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-10-27","2025-11-02","2025-10-22",481.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-10-18","2025-10-25","2025-10-19",425.00),
-    ("Unit 2 · Modern EaDo Apartment Near Downtown","2025-10-16","2025-10-18","2025-10-17",110.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-10-17","2025-10-20","2025-10-15",171.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-10-23","2025-10-26","2025-10-15",200.00),
-    ("Unit 4 · EaDo Apt | Walk to Stadiums & Venues","2025-10-10","2025-10-12","2025-10-10",135.20),
-]
-
-def _listing_to_prop(listing_name):
-    """Map a listing name to a canonical prop_id."""
-    if not listing_name:
-        return None
-    return _infer_prop_from_listing(listing_name)
-
-@app.route("/api/admin/hard-reset", methods=["POST"])
-def admin_hard_reset():
-    """
-    Full hard reset: wipe all financial/booking/transaction data, keep credentials.
-    Then seed booking records from _SEED_BOOKINGS.
-    Body: {"confirm": "HARD_RESET"}
-    """
-    body = request.json or {}
-    if body.get("confirm") != "HARD_RESET":
-        return jsonify({"error": "Send {confirm: 'HARD_RESET'}"}), 400
-
-    store = load_store()
-
-    # ── 1. Wipe financial data, keep credentials/connections ──
-    keys_to_clear = [
-        "pl_bookings", "pl_monthly_revenue", "manual_income", "property_income",
-        "transactions", "tags", "rules", "tag_history",
-    ]
-    for k in keys_to_clear:
-        store.pop(k, None)
-    # Reset Plaid cursors so next sync pulls everything from scratch
-    for account in store.get("accounts", []):
-        account.pop("cursor", None)
-    save_store(store)
-    print("🗑️  Hard reset: cleared financial data, cursors reset")
-
-    # ── 2. Seed booking records ──
-    bookings = []
-    for (listing, ci, co, bd, rev) in _SEED_BOOKINGS:
-        prop_id = _listing_to_prop(listing)
-        nights_val = None
-        if ci and co:
-            import datetime as _dtt
-            try:
-                d1 = _dtt.date.fromisoformat(ci)
-                d2 = _dtt.date.fromisoformat(co)
-                nights_val = (d2 - d1).days
-            except Exception:
-                pass
-        bookings.append({
-            "listing_name":   listing,
-            "prop_id":        prop_id,
-            "check_in":       ci,
-            "check_out":      co,
-            "booked_date":    bd,
-            "nights":         nights_val,
-            "adr":            round(rev / nights_val, 2) if nights_val else None,
-            "rental_revenue": rev,
-            "status":         "confirmed",
-            "channel":        "Airbnb",
-            "conf_code":      f"SEED-{listing[:8].replace(' ','-')}-{ci}",
-        })
-
-    store2 = load_store()
-    store2["pl_bookings"] = bookings
-    save_store(store2)
-
-    # ── 3. Summary ──
-    from collections import defaultdict
-    by_prop = defaultdict(lambda: {"count": 0, "revenue": 0.0})
-    by_month = defaultdict(float)
-    for b in bookings:
-        pid = b["prop_id"] or "unmatched"
-        by_prop[pid]["count"]   += 1
-        by_prop[pid]["revenue"] += b["rental_revenue"] or 0
-        mo = b["check_in"][:7] if b.get("check_in") else "?"
-        by_month[mo] += b["rental_revenue"] or 0
-
-    # Print per-prop and per-month
-    print("📊 Seeded bookings:")
-    for pid, d in sorted(by_prop.items()):
-        print(f"   {pid}: {d['count']} reservations, ${d['revenue']:,.2f}")
-    print("📅 Monthly revenue:")
-    for mo in sorted(by_month):
-        print(f"   {mo}: ${by_month[mo]:,.2f}")
-
-    return jsonify({
-        "ok": True,
-        "seeded": len(bookings),
-        "by_prop": {k: {"count": v["count"], "revenue": round(v["revenue"], 2)}
-                    for k, v in by_prop.items()},
-        "by_month": {k: round(v, 2) for k, v in sorted(by_month.items())},
-        "message": "Hard reset complete. Run /api/transactions/historical to resync Plaid.",
-    })
-
-
-@app.route("/api/reset/transactions", methods=["POST"])
-def reset_transactions():
-    """Clear all Plaid transactions and tags, reset cursors so next sync re-pulls everything."""
-    store = load_store()
-    tx_count = len(store.get("transactions", {}))
-    store["transactions"] = {}
-    store["tags"] = {}
-    # Reset Plaid cursors so next sync re-pulls full history
-    for account in store.get("accounts", []):
-        account.pop("cursor", None)
-    save_store(store)
-    return jsonify({"ok": True, "cleared_transactions": tx_count})
-
-
-@app.route("/api/reset/revenue", methods=["POST"])
-def reset_revenue():
-    """Clear revenue-only keys: pl_bookings, pl_monthly_revenue, manual_income, property_income."""
-    body = request.json or {}
-    if body.get("confirm") != "RESET":
-        return jsonify({"error": "Send {confirm: 'RESET'}"}), 400
-    store = load_store()
-    for key in ["pl_bookings", "pl_monthly_revenue", "manual_income", "property_income"]:
-        store.pop(key, None)
-    save_store(store)
-    return jsonify({"ok": True, "cleared": ["pl_bookings", "pl_monthly_revenue", "manual_income", "property_income"]})
+_last_csv_debug = {}  # kept for CSV importer debug logging
 
 
 @app.route("/api/import/csv", methods=["POST"])
@@ -1558,11 +2222,16 @@ def import_csv_universal():
     raw_csv = body.get("csv", "")
     if not raw_csv:
         return jsonify({"error": "No CSV data provided"}), 400
+    # Phase 4: CSV size guards
+    if len(raw_csv) > 5 * 1024 * 1024:
+        return jsonify({"error": "CSV too large (max 5 MB)"}), 413
 
     reader = _csv.reader(_io.StringIO(raw_csv))
     rows   = list(reader)
     if len(rows) < 2:
         return jsonify({"error": "CSV has no data rows"}), 400
+    if len(rows) > 50000:
+        return jsonify({"error": "CSV too many rows (max 50,000)"}), 413
 
     # Auto-detect header row — Excel reports often have title/blank rows before headers.
     # Scan first 8 rows; pick the first that has 3+ non-empty cells and scores >= 2.
@@ -1603,9 +2272,9 @@ def import_csv_universal():
         "first_data_rows": [list(r) for r in data_rows[:5]],
         "raw_first_8_rows": [list(r) for r in rows[:8]],
     })
-    print(f"[CSV IMPORT] header_row_idx={header_row_idx}, detected={detected}")
-    print(f"[CSV IMPORT] headers={headers[:8]}")
-    print(f"[CSV IMPORT] first data row={data_rows[0][:5] if data_rows else 'EMPTY'}")
+    logger.info("[CSV IMPORT] header_row_idx=%s, detected=%s", header_row_idx, detected)
+    logger.info("[CSV IMPORT] headers=%s", headers[:8])
+    logger.info("[CSV IMPORT] first data row=%s", data_rows[0][:5] if data_rows else 'EMPTY')
 
     # ── PriceLabs Revenue on the Books (monthly summary) ────────
     if detected == 'pricelabs_revenue_monthly':
@@ -1636,7 +2305,7 @@ def import_csv_universal():
             if pm['prop_id'] not in seen_ids:
                 seen_ids.add(pm['prop_id'])
                 props_matched_dedup.append(pm)
-        print(f"📄 PriceLabs Revenue CSV: {len(rows_parsed)} monthly rows, months {months_hit[0]}–{months_hit[-1]}")
+        logger.info("PriceLabs Revenue CSV: %s monthly rows, months %s–%s", len(rows_parsed), months_hit[0], months_hit[-1])
         return jsonify({
             "detected_type":      "pricelabs_revenue_monthly",
             "imported":           len(rows_parsed),
@@ -1658,7 +2327,7 @@ def import_csv_universal():
         save_store(store)
         # Persist parse debug so /api/debug/csv-last shows it
         _last_csv_debug.update({"parse_debug": parse_dbg})
-        print(f"📄 PriceLabs CSV: {len(new_bk)} new bookings (skipped {len(bookings)-len(new_bk)} dupes)")
+        logger.warning("PriceLabs CSV: %s new bookings (skipped %s dupes)", len(new_bk), len(bookings)-len(new_bk))
         props_hit = list({b['prop_id'] for b in new_bk if b['prop_id']})
         unmatched_names = sorted({b['listing_name'] for b in new_bk if not b['prop_id']})
         # Build properties_matched: one entry per unique prop_id with sample listing_name
@@ -1687,7 +2356,7 @@ def import_csv_universal():
                 "skip_counts":   skips,
                 "missing_cols":  missing_cols,
                 "headers_found": parse_dbg.get("headers_raw", []),
-                "hint": "Check /api/debug/csv-last for full column map",
+                "hint": "Check server logs for full column map",
             }
             if missing_cols:
                 resp["summary"] = f"0 imported — columns not found: {', '.join(missing_cols)}. Headers seen: {parse_dbg.get('headers_raw',[])[:8]}"
@@ -1727,7 +2396,7 @@ def import_csv_universal():
             added += 1
         store["transactions"] = tx_store
         save_store(store)
-        print(f"📄 Chase CSV: {added} new transactions")
+        logger.info("Chase CSV: %s new transactions", added)
         return jsonify({
             "detected_type": "chase_transactions",
             "imported": added,
@@ -1763,7 +2432,7 @@ def import_csv_universal():
             "headers_found":  headers[:12],
             "header_row_idx": header_row_idx,
             "first_rows":     first_rows,
-            "error": "Could not identify CSV format. Check /api/debug/csv-last for raw content.",
+            "error": "Could not identify CSV format. Check server logs for raw content.",
         }), 422
 
 
@@ -1792,7 +2461,7 @@ def get_pl_bookings():
         bookings = fixed_bookings
         store["pl_bookings"] = bookings
         save_store(store)
-        print(f"[Bookings] Repaired prop_id for {repaired} bookings")
+        logger.info("[Bookings] Repaired prop_id for %s bookings", repaired)
 
     by_month       = {}
     by_prop_month  = {}
@@ -1872,6 +2541,13 @@ def get_pl_bookings():
 @app.route("/api/transactions/all")
 @app.route("/api/transactions")
 def get_all_transactions():
+    uid = getattr(g, 'user_id', None)
+    # Support server-side month filtering
+    month_filter = request.args.get("month", "")
+    cache_key = f"transactions:{month_filter}" if month_filter else "transactions"
+    cached = _get_cached_response(cache_key, uid, 30) if uid else None
+    if cached is not None:
+        return jsonify(cached)
     store = load_store()
     tx_store = store.get("transactions", {})
     tags = store.get("tags", {})
@@ -1882,32 +2558,56 @@ def get_all_transactions():
         tid = t.get("id", "")
         if tid in tags:
             t["property_tag"] = tags[tid]
+        # Server-side month filter
+        if month_filter and not (t.get("date", "") or "").startswith(month_filter):
+            continue
         txs.append(t)
-    return jsonify({"transactions": txs})
+    result = {"transactions": txs}
+    if uid:
+        _set_cached_response(cache_key, uid, result)
+    return jsonify(result)
 
 # ── Tags ──────────────────────────────────────────────────────
 @app.route("/api/props", methods=["GET"])
 def get_props():
+    uid = getattr(g, 'user_id', None)
+    cached = _get_cached_response("props", uid, 30) if uid else None
+    if cached is not None:
+        return jsonify(cached)
     store = load_store()
-    return jsonify({"props": store.get("custom_props", [])})
+    result = {"props": store.get("custom_props", [])}
+    if uid:
+        _set_cached_response("props", uid, result)
+    return jsonify(result)
 
 @app.route("/api/props", methods=["POST"])
 def save_props():
     store = load_store()
     store["custom_props"] = request.json.get("props", [])
     save_store(store)
+    _invalidate_cache("props", getattr(g, 'user_id', None))
     return jsonify({"ok": True})
 
 @app.route("/api/tags", methods=["GET"])
 def get_tags():
+    uid = getattr(g, 'user_id', None)
+    cached = _get_cached_response("tags", uid, 30) if uid else None
+    if cached is not None:
+        return jsonify(cached)
     store = load_store()
-    return jsonify({"tags": store.get("tags", {})})
+    result = {"tags": store.get("tags", {})}
+    if uid:
+        _set_cached_response("tags", uid, result)
+    return jsonify(result)
 
 @app.route("/api/tags", methods=["POST"])
 def save_tags():
     store = load_store()
     store["tags"] = request.json.get("tags", {})
     save_store(store)
+    uid = getattr(g, 'user_id', None)
+    _invalidate_cache("tags", uid)
+    _invalidate_cache("transactions", uid)  # tags affect transaction display
     return jsonify({"ok": True})
 
 # ── Manual Income ──────────────────────────────────────────────
@@ -1917,6 +2617,7 @@ def get_manual_income():
     return jsonify({"manual": store.get("manual_income", {})})
 
 @app.route("/api/manual-income", methods=["POST"])
+@app.route("/api/income/manual", methods=["POST"])
 def save_manual_income():
     store = load_store()
     store["manual_income"] = request.json.get("manual", {})
@@ -1940,10 +2641,86 @@ def save_manual_pierce():
 def inv_groups_api():
     store = load_store()
     if request.method == "POST":
-        store["inv_groups"] = request.json.get("groups", [])
+        body = request.get_json(force=True) or {}
+        # Support individual group creation: { name: "..." }
+        if "name" in body and "groups" not in body:
+            groups = store.get("inv_groups", [])
+            new_group = {
+                "id": "ig_" + secrets.token_hex(6),
+                "name": body["name"],
+                "linkType": body.get("linkType"),        # "city" | "property"
+                "propertyId": body.get("propertyId"),    # property ID when linkType=property
+                "city": body.get("city"),                # city string when linkType=city
+                "items": [],
+            }
+            groups.append(new_group)
+            store["inv_groups"] = groups
+            save_store(store)
+            return jsonify({"ok": True, "group": new_group})
+        # Legacy: full replacement
+        store["inv_groups"] = body.get("groups", [])
         save_store(store)
         return jsonify({"ok": True})
     return jsonify({"groups": store.get("inv_groups", [])})
+
+@app.route("/api/inv-groups/<group_id>", methods=["DELETE"])
+def inv_group_delete(group_id):
+    store = load_store()
+    groups = store.get("inv_groups", [])
+    store["inv_groups"] = [g for g in groups if g.get("id") != group_id]
+    save_store(store)
+    return jsonify({"ok": True})
+
+@app.route("/api/inv-groups/<group_id>/items", methods=["POST"])
+def inv_group_add_item(group_id):
+    store = load_store()
+    groups = store.get("inv_groups", [])
+    body = request.get_json(force=True) or {}
+    for g in groups:
+        if g.get("id") == group_id:
+            import datetime as _dt
+            item = {
+                "id": "ii_" + secrets.token_hex(6),
+                "name": body.get("name", "Item"),
+                "unit": body.get("unit", ""),
+                "initialQty": body.get("initialQty", 0),
+                "perStay": body.get("perStay", 0),
+                "threshold": body.get("threshold", 5),
+                "category": body.get("category"),            # catalog category key
+                "catalogName": body.get("catalogName"),       # original catalog item name
+                "isCleanerOnly": body.get("isCleanerOnly", False),
+                "createdAt": body.get("createdAt") or _dt.datetime.utcnow().isoformat() + "Z",
+                "restocks": [],
+            }
+            g.setdefault("items", []).append(item)
+            store["inv_groups"] = groups
+            save_store(store)
+            return jsonify({"ok": True, "item": item})
+    return jsonify({"error": "Group not found"}), 404
+
+@app.route("/api/inventory/update", methods=["POST"])
+def inventory_update_qty():
+    store = load_store()
+    body = request.get_json(force=True) or {}
+    item_id = body.get("itemId", "")
+    new_qty = body.get("quantity", 0)
+    groups = store.get("inv_groups", [])
+    for g in groups:
+        for item in g.get("items", []):
+            if item.get("id") == item_id:
+                added = new_qty - item.get("initialQty", 0)
+                restocks = item.get("restocks", [])
+                # Record as a restock
+                restocks.append({
+                    "qty": max(0, added),
+                    "date": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+                })
+                item["restocks"] = restocks
+                item["initialQty"] = new_qty
+                store["inv_groups"] = groups
+                save_store(store)
+                return jsonify({"ok": True})
+    return jsonify({"error": "Item not found"}), 404
 
 # ── Investment amounts ─────────────────────────────────────────
 @app.route("/api/invest", methods=["GET","POST"])
@@ -1987,7 +2764,7 @@ def balances():
                     "currency":  a["balances"].get("iso_currency_code", "USD"),
                 })
         except Exception as e:
-            print(f"Balance error for {account.get('name')}: {e}")
+            logger.error("Balance error for %s: %s", account.get('name'), e)
     return jsonify({"accounts": all_accounts})
 
 @app.route("/api/rules", methods=["GET"])
@@ -2014,670 +2791,6 @@ def save_settings():
     save_store(store)
     return jsonify({"ok": True})
 
-# ══════════════════════════════════════════════════════════════
-# GMAIL OAUTH + INVENTORY
-# ══════════════════════════════════════════════════════════════
-
-def _gmail_flow():
-    """Build an OAuth2 flow from env-var credentials."""
-    client_config = {"web": {
-        "client_id":     GMAIL_CLIENT_ID,
-        "client_secret": GMAIL_CLIENT_SECRET,
-        "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-        "token_uri":     "https://oauth2.googleapis.com/token",
-        "redirect_uris": [GMAIL_REDIRECT_URI],
-    }}
-    return Flow.from_client_config(client_config, scopes=GMAIL_SCOPES,
-                                   redirect_uri=GMAIL_REDIRECT_URI)
-
-
-def _get_gmail_credentials():
-    """Load stored credentials, refresh the access token only when actually expired."""
-    from datetime import datetime, timezone
-    store = load_store()
-    cd    = store.get("gmail_credentials")
-    # Fallback: GMAIL_CREDENTIALS_JSON env var survives redeploys even on ephemeral filesystems
-    if not cd:
-        raw = os.environ.get("GMAIL_CREDENTIALS_JSON", "").strip()
-        if raw:
-            try:
-                cd = json.loads(raw)
-                print("📧 Loaded Gmail credentials from GMAIL_CREDENTIALS_JSON env var")
-            except Exception as e:
-                print(f"⚠️ GMAIL_CREDENTIALS_JSON parse error: {e}")
-    if not cd:
-        return None
-    # Reconstruct expiry so creds.expired is accurate (None expiry = always-expired bug)
-    expiry = None
-    if cd.get("expiry"):
-        try:
-            # google-auth compares expiry against utcnow() which is naive UTC —
-            # keep it naive too, otherwise we get offset-naive vs offset-aware error
-            expiry = datetime.fromisoformat(cd["expiry"])
-            if expiry.tzinfo is not None:
-                expiry = expiry.replace(tzinfo=None)
-        except Exception:
-            pass
-    creds = Credentials(
-        token         = cd.get("token"),
-        refresh_token = cd.get("refresh_token"),
-        token_uri     = cd.get("token_uri", "https://oauth2.googleapis.com/token"),
-        client_id     = GMAIL_CLIENT_ID,
-        client_secret = GMAIL_CLIENT_SECRET,
-        scopes        = GMAIL_SCOPES,
-        expiry        = expiry,
-    )
-    if creds.expired and creds.refresh_token:
-        print("🔄 Gmail token expired/unknown — refreshing…")
-        try:
-            creds.refresh(GoogleAuthRequest())
-            store["gmail_credentials"]["token"]  = creds.token
-            exp = creds.expiry
-            store["gmail_credentials"]["expiry"] = exp.replace(tzinfo=None).isoformat() if exp else None
-            save_store(store)
-            print(f"✅ Gmail token refreshed — new expiry: {creds.expiry}")
-        except Exception as refresh_err:
-            print(f"⚠️ Token refresh failed ({refresh_err}) — trying existing token as-is")
-            # The existing token might still be valid; let the API call tell us if not
-    return creds
-
-
-# ── GET /api/gmail/auth ──────────────────────────────────────
-@app.route("/api/gmail/auth")
-def gmail_auth():
-    if not GMAIL_CLIENT_ID or not GMAIL_CLIENT_SECRET:
-        return jsonify({"error": "GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET not set"}), 500
-    if not GMAIL_REDIRECT_URI:
-        return jsonify({"error": "GMAIL_REDIRECT_URI not set"}), 500
-    try:
-        flow = _gmail_flow()
-        auth_url, state = flow.authorization_url(
-            access_type="offline", include_granted_scopes="true", prompt="consent"
-        )
-        # Store state in persistent store so all gunicorn workers can validate it
-        store = load_store()
-        oauth_states = store.get("oauth_states", {})
-        oauth_states[state] = True
-        store["oauth_states"] = oauth_states
-        save_store(store)
-        return redirect(auth_url)
-    except Exception as e:
-        print(f"❌ gmail_auth error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ── GET /api/gmail/callback ──────────────────────────────────
-@app.route("/api/gmail/callback")
-def gmail_callback():
-    error = request.args.get("error", "")
-    if error:
-        print(f"❌ OAuth denied by user: {error}")
-        return f"""<html><body style="font-family:sans-serif;text-align:center;padding:60px">
-<h2>❌ Gmail connection denied</h2><p>{error}</p><p>You can close this tab.</p></body></html>"""
-    state = request.args.get("state", "")
-    code  = request.args.get("code",  "")
-    # Validate state from persistent store (works across gunicorn workers)
-    store = load_store()
-    oauth_states = store.get("oauth_states", {})
-    if state not in oauth_states:
-        print(f"❌ Invalid OAuth state: {state!r}")
-        return jsonify({"error": "Invalid OAuth state — possible CSRF"}), 400
-    del oauth_states[state]
-    store["oauth_states"] = oauth_states
-    try:
-        flow = _gmail_flow()
-        flow.fetch_token(code=code)
-        creds = flow.credentials
-        store["gmail_credentials"] = {
-            "token":         creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri":     creds.token_uri,
-            # Store expiry as naive UTC — google-auth compares against naive utcnow()
-            "expiry": creds.expiry.replace(tzinfo=None).isoformat() if creds.expiry else None,
-        }
-        save_store(store)
-        creds_json = json.dumps(store["gmail_credentials"])
-        print(f"✅ Gmail OAuth connected — token expires: {creds.expiry}")
-        print(f"📋 Set this in Render env vars to survive redeploys:")
-        print(f"   GMAIL_CREDENTIALS_JSON={creds_json}")
-    except Exception as e:
-        print(f"❌ gmail_callback fetch_token error: {e}")
-        return f"""<html><body style="font-family:sans-serif;text-align:center;padding:60px">
-<h2>❌ Gmail connection failed</h2><p>{e}</p><p>Close this tab and try again.</p></body></html>""", 500
-
-    # Kick off an immediate sync — non-daemon so it isn't killed if the
-    # response is returned before the thread finishes
-    threading.Thread(target=run_gmail_sync, daemon=False).start()
-
-    return f"""<html><body style="font-family:sans-serif;padding:40px;max-width:640px;margin:auto">
-<h2>✅ Gmail connected!</h2>
-<p>Importing your Amazon orders now — check the Inventory tab in a moment.</p>
-<hr style="margin:24px 0">
-<p style="font-size:13px;color:#555"><strong>To make this permanent across server restarts:</strong><br>
-Copy the value below and add it as a Render environment variable named
-<code>GMAIL_CREDENTIALS_JSON</code>.</p>
-<textarea readonly style="width:100%;height:80px;font-size:11px;font-family:monospace;padding:8px;box-sizing:border-box">{creds_json}</textarea>
-<p style="font-size:12px;color:#888">You only need to do this once. After setting the env var, credentials survive redeploys automatically.</p>
-</body></html>"""
-
-
-# ── Email helpers ─────────────────────────────────────────────
-
-# Ordered from most-specific to least-specific.
-# Each entry: (regex_to_match_in_title, canonical_display_name)
-_PRODUCT_PATTERNS = [
-    # Bedding / pillows
-    (r'pillow\s*case|pillowcase',                      'Pillowcases'),
-    (r'bed\s*sheet|fitted\s*sheet|sheet\s*set',        'Bed Sheets'),
-    (r'duvet\s*cover',                                 'Duvet Cover'),
-    (r'duvet|comforter',                               'Comforter'),
-    (r'mattress\s*protector',                          'Mattress Protector'),
-    (r'mattress\s*pad|mattress\s*cover|mattress\s*topper', 'Mattress Pad'),
-    (r'bed\s*pillow|pillow',                           'Bed Pillows'),
-    # Bath linens
-    (r'bath\s*towel',                                  'Bath Towels'),
-    (r'hand\s*towel',                                  'Hand Towels'),
-    (r'washcloth|wash\s*cloth',                        'Washcloths'),
-    (r'bath\s*mat|bath\s*rug',                         'Bath Mat'),
-    (r'shower\s*curtain',                              'Shower Curtain'),
-    (r'bath\s*robe|bathrobe',                          'Bathrobes'),
-    # Paper goods
-    (r'toilet\s*paper|bath\s*tissue',                  'Toilet Paper'),
-    (r'paper\s*towel',                                 'Paper Towels'),
-    (r'facial\s*tissue|tissue\s*box|kleenex',          'Facial Tissue'),
-    (r'napkin',                                        'Napkins'),
-    (r'paper\s*plate',                                 'Paper Plates'),
-    (r'paper\s*cup',                                   'Paper Cups'),
-    # Trash bags
-    (r'trash\s*bag|garbage\s*bag|bin\s*liner|waste\s*bag|kitchen\s*bag', 'Trash Bags'),
-    (r'recycling\s*bag',                               'Recycling Bags'),
-    # Personal care — hair
-    (r'shampoo',                                       'Shampoo'),
-    (r'conditioner',                                   'Conditioner'),
-    (r'body\s*wash|bodywash|shower\s*gel',             'Body Wash'),
-    # Soap
-    (r'hand\s*soap|liquid\s*soap|foaming\s*soap',      'Hand Soap'),
-    (r'bar\s*soap|soap\s*bar',                         'Bar Soap'),
-    (r'dish\s*soap|dish\s*detergent|dishwashing\s+(?:soap|liquid)', 'Dish Soap'),
-    # Dental
-    (r'toothbrush',                                    'Toothbrushes'),
-    (r'toothpaste',                                    'Toothpaste'),
-    (r'dental\s*floss|floss\s*pick',                   'Dental Floss'),
-    (r'mouthwash',                                     'Mouthwash'),
-    # Skincare
-    (r'lotion|moisturizer',                            'Lotion'),
-    (r'deodorant|antiperspirant',                      'Deodorant'),
-    (r'razor',                                         'Razors'),
-    (r'cotton\s*ball',                                 'Cotton Balls'),
-    (r'cotton\s*swab|q.tip',                           'Cotton Swabs'),
-    # Laundry
-    (r'laundry\s*pod|detergent\s*pod|tide\s*pod',      'Laundry Pods'),
-    (r'laundry\s*detergent|washing\s*detergent',       'Laundry Detergent'),
-    (r'dryer\s*sheet',                                 'Dryer Sheets'),
-    (r'fabric\s*softener',                             'Fabric Softener'),
-    # Cleaning
-    (r'disinfect(?:ant|ing)\s*wipe|antibacterial\s*wipe|lysol\s*wipe', 'Disinfecting Wipes'),
-    (r'dishwasher\s*pod|dishwasher\s*tab|dish(?:washer)?\s*tab', 'Dishwasher Pods'),
-    (r'bathroom\s*cleaner|toilet\s*bowl\s*cleaner|toilet\s*cleaner', 'Bathroom Cleaner'),
-    (r'all.purpose\s*cleaner|multi.surface\s*cleaner|cleaning\s*spray', 'All-Purpose Cleaner'),
-    (r'glass\s*cleaner|window\s*cleaner',              'Glass Cleaner'),
-    (r'bleach',                                        'Bleach'),
-    (r'sponge|scrub\s*pad',                            'Sponges'),
-    (r'mop\s*pad|mop\s*head',                          'Mop Pads'),
-    (r'air\s*freshener|room\s*spray|plug.in',          'Air Freshener'),
-    (r'odor\s*elim|odor\s*remov|odor\s*absorb',        'Odor Eliminator'),
-    (r'wipe',                                          'Wipes'),
-    # Coffee / kitchen
-    (r'coffee\s*pod|k.?cup|kcup',                      'Coffee Pods'),
-    (r'coffee\s*filter',                               'Coffee Filters'),
-    (r'coffee',                                        'Coffee'),
-    (r'tea\s*bag',                                     'Tea Bags'),
-    (r'plastic\s*wrap|cling\s*wrap|saran\s*wrap',      'Plastic Wrap'),
-    (r'aluminum\s*foil|tin\s*foil',                    'Aluminum Foil'),
-    (r'zip.?lock|storage\s*bag|sandwich\s*bag|freezer\s*bag|gallon\s*bag', 'Storage Bags'),
-    (r'plastic\s*utensil|plastic\s*fork|plastic\s*knife|plastic\s*spoon', 'Plastic Utensils'),
-    (r'plastic\s*cup',                                 'Plastic Cups'),
-    # Guest toiletry sizes (small bottles)
-    (r'mini\s*shampoo|travel\s*shampoo',               'Mini Shampoo'),
-    (r'mini\s*conditioner|travel\s*conditioner',       'Mini Conditioner'),
-    (r'mini\s*body\s*wash|travel\s*body\s*wash',       'Mini Body Wash'),
-    (r'amenity|toiletry\s*set|guest\s*amenity',        'Guest Amenities'),
-    # Miscellaneous
-    (r'hand\s*sanitizer',                              'Hand Sanitizer'),
-    (r'bandage|band.aid',                              'Bandages'),
-    (r'ibuprofen|tylenol|acetaminophen|advil',         'Pain Reliever'),
-]
-
-# Product nouns used to anchor fallback name extraction when no pattern matches.
-# These are kept (not filtered) and used as pivot words.
-_PRODUCT_NOUNS = {
-    'pillow','pillows','pillowcase','pillowcases',
-    'sheet','sheets','duvet','comforter','blanket','quilt',
-    'towel','towels','washcloth','washcloths','bathrobe',
-    'mat','rug','curtain','curtains','liner','liners',
-    'tissue','napkin','napkins',
-    'soap','shampoo','conditioner','lotion','cream','gel','serum',
-    'brush','toothbrush','toothpaste','floss','razor','razors',
-    'detergent','softener','bleach','sponge','sponges',
-    'wipes','cleaner','spray','disinfectant',
-    'coffee','wrap','foil','sanitizer','bandage','bandages',
-    'cover','protector','pads','pad','insert','inserts',
-}
-
-# Stop words for fallback name extraction
-_NAME_STOP = {
-    'and','the','for','with','of','in','by','to','from','a','an','or','on','at',
-    'as','is','it','its','into','via','per','pack','pcs','pieces','piece','count',
-    'ct','bulk','premium','quality','hotel','disposable','ultra','extra','super',
-    'soft','strong','fresh','clean','quick','easy','new','best','high','plus',
-    'size','big','small','large','mini','travel','value','family','mega','jumbo',
-    'regular','standard','comfortable','natural','organic','gentle','original',
-    'advanced','professional','multi','all','purpose','use','set','lot','box',
-    'case','bag','roll','pack','bottle','gallon','oz','lb','inch','inches',
-    'double','triple','single','twin','full','queen','king','thread',
-    'alternatives','alternative','grade','certified','approved','free','non',
-    'down','white','black','blue','green','gray','grey','beige','brown',
-}
-
-def _extract_canonical_name(raw_title):
-    """
-    Given a raw product title (after stripping Amazon prefix boilerplate),
-    return a short canonical product name.
-
-    Strategy:
-    1. Try keyword matching against _PRODUCT_PATTERNS → return canonical label
-    2. Fall back: strip brand words, numbers, fluff, return first 3 useful words
-    """
-    t = raw_title.lower()
-
-    # 1. Keyword match
-    for pattern, canonical in _PRODUCT_PATTERNS:
-        if re.search(pattern, t, re.I):
-            return canonical
-
-    # 2. Fallback: anchor on a known product noun, or skip leading brand word
-    words = re.sub(r'\b\d+\b', '', raw_title)        # strip bare numbers
-    words = re.sub(r'[,.()\[\]"\'!?]+', ' ', words)  # strip punctuation
-    all_tokens = [w for w in words.split() if len(w) > 1]
-
-    # 2a. Look for a product noun anywhere in the title; build name around it
-    for i, w in enumerate(all_tokens):
-        if w.lower() in _PRODUCT_NOUNS:
-            # Take 0-2 meaningful descriptor words before the noun + noun itself
-            window = all_tokens[max(0, i - 2):i + 2]
-            clean = [t for t in window if t.lower() not in _NAME_STOP]
-            if clean:
-                return " ".join(clean[:3]).title()
-
-    # 2b. No product noun found — skip the first word if it looks like a brand
-    # (starts with uppercase and isn't a stop word), then take 3 content words
-    skip = 1 if all_tokens and all_tokens[0][0].isupper() else 0
-    tokens = [w for w in all_tokens[skip:] if w.lower() not in _NAME_STOP]
-    if tokens:
-        return " ".join(tokens[:3]).title()
-
-    # Last resort — take first 3 non-stop words from the full title
-    tokens = [w for w in all_tokens if w.lower() not in _NAME_STOP]
-    if tokens:
-        return " ".join(tokens[:3]).title()
-    return raw_title.strip()
-
-
-_LIQUID_RE = re.compile(
-    r'soap|shampoo|conditioner|body\s*wash|sanitizer|sanitiser|lotion|dish\s*liquid|'
-    r'water|detergent|bleach|cleaner|spray|softener|rinse|mouthwash|'
-    r'fabric\s*softener|laundry\s*liquid|dish\s*soap',
-    re.I)
-
-def _extract_volume_oz(text):
-    """
-    Parse fluid ounces from a product title string.
-    Returns integer oz, or None if not found / not a liquid.
-    """
-    t = (text or "").lower()
-    # Gallons: "1 gallon", "1.25 gal", "5-gallon"
-    m = re.search(r'(\d+\.?\d*)\s*-?\s*gal(?:lon)?s?\b', t)
-    if m:
-        return round(float(m.group(1)) * 128)
-    # Fluid oz: "64 fl oz", "64oz", "32 fluid ounces", "32-oz"
-    m = re.search(r'(\d+\.?\d*)\s*-?\s*(?:fl\.?\s*oz|fluid\s*oz(?:s|ounce)?|oz\.?)\b', t)
-    if m:
-        val = round(float(m.group(1)))
-        if 1 < val <= 2560:   # sanity: 1 oz – 20 gallons
-            return val
-    return None
-
-
-def _clean_item_name(subject):
-    """
-    Strip Amazon boilerplate from a subject line, then extract a short
-    canonical product name (e.g. "Bed Pillows", "Toilet Paper").
-    """
-    s = subject.strip().strip('"').strip("'")
-    # Prefixes — order matters: strip "Delivered: 4 " before "Delivered: "
-    prefixes = [
-        r"your amazon\.com order of\s+",
-        r"your order of\s+",
-        r"delivered:\s+\d+\s+",
-        r"delivered:\s+",
-        r"ordered:\s+\d+\s+",
-        r"ordered:\s+",
-        r"order confirmation:\s+",
-        r"you ordered\s+",
-        r"shipped:\s+\d+\s+",
-        r"shipped:\s+",
-        r"your shipment of\s+",
-    ]
-    for p in prefixes:
-        s = re.sub(p, "", s, flags=re.I)
-    # Strip suffixes
-    s = re.sub(r'\s+(?:has shipped|have shipped|has been shipped|and \d+ more item[s]?).*$', '', s, flags=re.I)
-    s = re.sub(r'\s*\(order #[\w-]+\).*$', '', s, flags=re.I)
-    s = s.strip('"').strip("'").strip()
-    if not s:
-        return subject
-    return _extract_canonical_name(s)
-
-
-def _extract_unit_count(text):
-    """
-    Parse a product name/description for a pack/quantity indicator.
-    Returns the integer unit count, or 1 if nothing found.
-    """
-    patterns = [
-        r'(\d+)\s*-\s*(?:pack|pk|ct|count)',   # 12-pack, 6-pk, 100-ct
-        r'(\d+)\s*(?:pack|pk)',                  # 6 pack
-        r'pack\s+of\s+(\d+)',                    # pack of 100
-        r'set\s+of\s+(\d+)',                     # set of 4
-        r'(\d+)\s*(?:count|ct)\.?',              # 100 count / 100ct
-        r'(\d+)\s*pc\.?s?',                      # 20 pcs / 20pc
-        r'(\d+)\s*piece',                        # 4 piece
-        r'(\d+)\s*rolls?',                       # 6 rolls
-        r'(\d+)\s*sheets?',                      # 200 sheets
-        r'(\d+)\s*bags?',                        # 50 bags
-        r'qty[:\s]+(\d+)',                       # qty: 6
-        r'quantity[:\s]+(\d+)',                  # quantity: 4
-        r'x\s*(\d+)\b',                          # x3
-    ]
-    for p in patterns:
-        m = re.search(p, text, re.I)
-        if m:
-            val = int(m.group(1))
-            if 1 < val <= 2000:   # sanity bounds
-                return val
-    return 1
-
-
-# ── Email parser ─────────────────────────────────────────────
-def _parse_amazon_email(msg_data):
-    """Extract order details from an Amazon order/ship-confirm Gmail message."""
-    headers  = {h["name"]: h["value"]
-                for h in msg_data.get("payload", {}).get("headers", [])}
-    subject  = headers.get("Subject", "")
-    date_str = headers.get("Date", "")
-
-    order_date = None
-    try:
-        order_date = parsedate_to_datetime(date_str).date().isoformat()
-    except Exception:
-        pass
-
-    # Decode plain-text body (walk MIME tree)
-    body = ""
-    def _walk(part):
-        nonlocal body
-        if part.get("mimeType") == "text/plain" and not body:
-            raw = part.get("body", {}).get("data", "")
-            if raw:
-                body = base64.urlsafe_b64decode(raw + "==").decode("utf-8", errors="replace")
-        for sub in part.get("parts", []):
-            _walk(sub)
-    _walk(msg_data.get("payload", {}))
-
-    # Extract canonical product name from email subject
-    item = _clean_item_name(subject)
-
-    # If body has a longer product description, check if it gives a better
-    # canonical name (e.g. "You ordered: Bounty Quick-Size Paper Towels 12 Rolls")
-    if body:
-        m2 = re.search(r'(?:You ordered|Item ordered|Ordered):\s*(.+)', body, re.I)
-        if m2:
-            body_item = m2.group(1).strip()[:200]
-            body_canonical = _clean_item_name(body_item)
-            # Prefer body result if subject canonical was a single-word (likely brand)
-            if body_canonical and len(body_canonical.split()) > len(item.split()):
-                item = body_canonical
-                # Also update raw title source for unit count extraction below
-                subject = body_item
-
-    # Order number  (###-#######-#######)
-    order_num = ""
-    m3 = re.search(r'(\d{3}-\d{7}-\d{7})', subject + " " + body)
-    if m3:
-        order_num = m3.group(1)
-
-    # Unit count — extract from original source text BEFORE canonicalization
-    unit_count = _extract_unit_count(subject)
-
-    # Volume (oz) — only for liquid products
-    volume_oz = None
-    if _LIQUID_RE.search(subject) or _LIQUID_RE.search(item):
-        volume_oz = _extract_volume_oz(subject)
-
-    # Order quantity — "Ordered: 4 'Product'" has qty before the product name
-    qty = 1
-    m_subj_qty = re.search(r'^(?:ordered|delivered|shipped):\s+(\d+)\s+["\']', subject.strip(), re.I)
-    if m_subj_qty:
-        qty = int(m_subj_qty.group(1))
-    else:
-        m4 = re.search(r'(?:Qty|Quantity|qty):\s*(\d+)', body, re.I)
-        if m4:
-            qty = int(m4.group(1))
-
-    # Price — first dollar amount in body
-    price = None
-    prices = re.findall(r'\$\s*(\d+\.\d{2})', body)
-    if prices:
-        price = float(prices[0])
-
-    return {
-        "id":            msg_data["id"],
-        "subject":       subject,
-        "item":          item or subject,
-        "order_num":     order_num,
-        "price":         price,
-        "quantity":      qty,
-        "unit_count":    unit_count,
-        "volume_oz":     volume_oz,  # oz per bottle/container; None = count-based
-        "date":          order_date,
-        "prop_tag":      None,
-        "excluded":      False,
-        "source":        "amazon",
-        "classified":    None,   # None | "inventory" | "not_inventory"
-        "city_tag":      None,   # None | "houston" | "niagara"
-        "inventory_key": None,   # normalized name for grouping duplicate orders
-    }
-
-
-def _reclean_inventory_store(store):
-    """
-    Retroactively clean all stored inventory items:
-    - Re-apply _clean_item_name to the stored subject → canonical product name
-    - Re-extract unit_count from ORIGINAL text (not the canonical name)
-    - Auto-exclude untagged delivery notifications
-    """
-    inventory = store.get("inventory", {})
-    for it in inventory.values():
-        # Use the raw email subject for canonical extraction (has full product title)
-        subject = it.get("subject") or ""
-        # Ensure new classification fields exist
-        it.setdefault("classified",    None)
-        it.setdefault("city_tag",      None)
-        it.setdefault("inventory_key", None)
-        # Freeze classified items: once classified, protect name/key from reclean
-        if it.get("classified") is not None:
-            it.setdefault("name_locked", True)
-            it.setdefault("inventory_key_locked", True)
-        # Auto-exclude delivery notifications only if user hasn't classified them yet
-        if it["classified"] is None and re.match(r'^delivered:', subject.strip(), re.I):
-            it["excluded"] = True
-        if subject:
-            # Skip auto-name if the user has manually locked the name
-            if not it.get("name_locked"):
-                it["item"] = _clean_item_name(subject)
-            # Skip auto-unit_count if the user has manually locked it
-            if not it.get("unit_count_locked"):
-                it["unit_count"] = _extract_unit_count(subject)
-            # Auto-extract volume_oz for liquids if not user-locked
-            if not it.get("volume_oz_locked"):
-                item_name = it.get("item") or ""
-                if _LIQUID_RE.search(subject) or _LIQUID_RE.search(item_name):
-                    vol = _extract_volume_oz(subject)
-                    if vol:
-                        it["volume_oz"] = vol
-            # Re-extract order quantity from "Ordered: 4 'Product'" pattern
-            m = re.search(r'^(?:ordered|delivered|shipped):\s+(\d+)\s+["\']', subject.strip(), re.I)
-            if m and it.get("quantity", 1) == 1:
-                it["quantity"] = int(m.group(1))
-        # Regenerate inventory_key for classified items UNLESS user manually linked it
-        if it.get("classified") == "inventory" and it.get("item") and not it.get("inventory_key_locked"):
-            name  = it["item"]
-            stop  = {"the","a","an","of","for","with","and","or","in","by","to","from"}
-            words = re.sub(r"[^a-z0-9\s]", "", name.lower()).split()
-            it["inventory_key"] = " ".join(w for w in words if len(w) > 2 and w not in stop)[:60]
-    store["inventory"] = inventory
-    return store
-
-
-def run_gmail_sync():
-    """Fetch Amazon ship-confirm emails from Gmail, parse, store in inventory."""
-    print("📧 run_gmail_sync starting…")
-    creds = _get_gmail_credentials()
-    if not creds:
-        print("📧 Gmail sync skipped — no credentials stored (visit /api/gmail/auth)")
-        return {"synced": 0, "total": 0}
-
-    print(f"📧 Credentials loaded — expired={creds.expired}, has_refresh={bool(creds.refresh_token)}")
-    service   = google_build("gmail", "v1", credentials=creds)
-    store     = load_store()
-    inventory = store.get("inventory", {})
-    already   = len(inventory)
-
-    # Only order + ship confirmations — exclude delivery/tracking notifications
-    q = ("(from:ship-confirm@amazon.com OR from:auto-confirm@amazon.com)"
-         " -subject:delivered -subject:\"out for delivery\""
-         " -subject:\"delivery attempt\" -subject:\"arriving today\"")
-    print(f"📧 Querying Gmail: {q}")
-    try:
-        results = service.users().messages().list(userId="me", q=q, maxResults=500).execute()
-    except Exception as api_err:
-        print(f"❌ Gmail API list failed: {api_err}")
-        raise RuntimeError(f"Gmail API error: {api_err}") from api_err
-    messages = results.get("messages", [])
-    new_msgs = [m for m in messages if m["id"] not in inventory]
-    print(f"📧 {len(messages)} messages matched query, {len(new_msgs)} are new (not yet in inventory)")
-
-    new_count = 0
-    errors    = 0
-    for ref in new_msgs:
-        mid = ref["id"]
-        try:
-            msg_data = service.users().messages().get(
-                userId="me", id=mid, format="full"
-            ).execute()
-            parsed = _parse_amazon_email(msg_data)
-            inventory[mid] = parsed
-            new_count += 1
-            print(f"  ✅ Parsed: {parsed.get('item','?')[:60]} | {parsed.get('date')} | ${parsed.get('price')}")
-        except Exception as e:
-            errors += 1
-            print(f"  ⚠️  Skipping message {mid}: {e}")
-
-    from datetime import datetime, timezone
-    now_iso = datetime.now(timezone.utc).isoformat()
-    store["inventory"]           = inventory
-    store["gmail_last_sync"]     = now_iso
-    store["gmail_message_count"] = len(messages)
-    # Retroactively clean all items (names, unit counts, exclude delivery notifications)
-    store = _reclean_inventory_store(store)
-    save_store(store)
-    print(f"✅ Gmail sync done: {new_count} new, {errors} errors, "
-          f"{len(inventory)} total (was {already}) | {len(messages)} matched query")
-    return {"synced": new_count, "total": len(inventory),
-            "message_count": len(messages), "last_sync": now_iso, "errors": errors}
-
-
-# Tracks whether a sync is in progress so we don't stack concurrent syncs
-_gmail_sync_running = False
-
-# ── GET /api/gmail/sync ──────────────────────────────────────
-# Fires sync in a background thread and returns immediately — no HTTP timeout risk
-@app.route("/api/gmail/sync")
-def gmail_sync_route():
-    global _gmail_sync_running
-    if _gmail_sync_running:
-        store = load_store()
-        return jsonify({"ok": True, "status": "running",
-                        "message": "Sync already in progress — check back in a moment",
-                        "total": len(store.get("inventory", {}))})
-
-    def _bg():
-        global _gmail_sync_running
-        _gmail_sync_running = True
-        try:
-            run_gmail_sync()
-        except Exception as e:
-            print(f"❌ Background Gmail sync error: {e}")
-        finally:
-            _gmail_sync_running = False
-
-    threading.Thread(target=_bg, daemon=False).start()
-    store = load_store()
-    return jsonify({"ok": True, "status": "started",
-                    "last_sync": store.get("gmail_last_sync"),
-                    "total": len(store.get("inventory", {}))})
-
-
-# ── GET /api/gmail/status ─────────────────────────────────────
-@app.route("/api/gmail/status")
-def gmail_status():
-    store = load_store()
-    return jsonify({
-        "connected":       bool(store.get("gmail_credentials")),
-        "last_sync":       store.get("gmail_last_sync"),
-        "inventory_count": len(store.get("inventory", {})),
-        "message_count":   store.get("gmail_message_count", 0),
-    })
-
-
-# ── GET /api/gmail/debug ──────────────────────────────────────
-# Proves the stored credentials are live and the query actually hits Gmail
-@app.route("/api/gmail/debug")
-def gmail_debug():
-    creds = _get_gmail_credentials()
-    if not creds:
-        return jsonify({"connected": False, "error": "No credentials stored — visit /api/gmail/auth"})
-    try:
-        service = google_build("gmail", "v1", credentials=creds)
-        profile = service.users().getProfile(userId="me").execute()
-        results = service.users().messages().list(
-            userId="me",
-            q="from:ship-confirm@amazon.com OR from:auto-confirm@amazon.com OR from:order-update@amazon.com",
-            maxResults=5
-        ).execute()
-        store = load_store()
-        return jsonify({
-            "connected":           True,
-            "email":               profile.get("emailAddress"),
-            "gmail_total_msgs":    profile.get("messagesTotal"),
-            "amazon_msgs_found":   len(results.get("messages", [])),
-            "inventory_stored":    len(store.get("inventory", {})),
-            "last_sync":           store.get("gmail_last_sync"),
-        })
-    except Exception as e:
-        print(f"❌ Gmail debug error: {e}")
-        return jsonify({"connected": False, "error": str(e)}), 500
-
 
 # ── GET /api/inventory ───────────────────────────────────────
 @app.route("/api/inventory")
@@ -2696,8 +2809,12 @@ def update_inventory():
     inventory = store.get("inventory", {})
     item      = request.json or {}
     iid       = item.get("id") or f"manual-{int(_time.time()*1000)}"
+    _INV_UPDATE_FIELDS = {"item", "quantity", "unit_count", "user_unit_count", "volume_oz",
+        "user_volume_oz", "volume_oz_locked", "unit_count_locked", "price", "date",
+        "order_num", "prop_tag", "excluded", "classified", "city_tag", "group",
+        "manual_stock", "manual_stock_date", "subject", "reorder_url"}
     if iid in inventory:
-        inventory[iid].update({k: v for k, v in item.items() if k != "id"})
+        inventory[iid].update({k: v for k, v in item.items() if k in _INV_UPDATE_FIELDS})
     else:
         name = item.get("item", "")
         classified = item.get("classified")  # "inventory" | None
@@ -2902,19 +3019,6 @@ def edit_inventory_items():
     return jsonify({"ok": True, "updated": updated})
 
 
-# ── POST /api/inventory/reclean ──────────────────────────────
-@app.route("/api/inventory/reclean", methods=["POST"])
-def reclean_inventory():
-    """Retroactively clean all stored inventory item names and auto-exclude delivery notifications."""
-    store = load_store()
-    before = {iid: (it.get("item"), it.get("excluded")) for iid, it in store.get("inventory", {}).items()}
-    store = _reclean_inventory_store(store)
-    save_store(store)
-    after = store.get("inventory", {})
-    cleaned  = sum(1 for iid, it in after.items() if it.get("item") != before.get(iid, (None,))[0])
-    excluded = sum(1 for iid, it in after.items() if it.get("excluded") and not before.get(iid, (None, False))[1])
-    return jsonify({"ok": True, "total": len(after), "cleaned": cleaned, "excluded": excluded})
-
 
 # ── GET /api/consumption-settings ────────────────────────────
 @app.route("/api/consumption-settings")
@@ -2992,7 +3096,7 @@ def _parse_ics(ics_text, prop_id, feed_key="", pl_id=None):
                     m_rate = re.search(r'\$\s*([\d.]+)\s*/\s*night', desc, re.I)
                 if m_rate:
                     try: nightly_rate = float(m_rate.group(1))
-                    except: pass
+                    except (ValueError, TypeError): pass
 
                 # Extract check-in / check-out times (from DESCRIPTION first)
                 checkin_time  = None
@@ -3023,7 +3127,7 @@ def _parse_ics(ics_text, prop_id, feed_key="", pl_id=None):
                 m_guests = re.search(r'(?:NUMBER OF GUESTS|TOTAL GUESTS|GUESTS|ADULTS):\s*(\d+)', desc, re.I)
                 if m_guests:
                     try: num_guests = int(m_guests.group(1))
-                    except: pass
+                    except (ValueError, TypeError): pass
 
                 # Extract booking source
                 booking_source = None
@@ -3076,10 +3180,20 @@ def _sync_ical(store):
     if isinstance(feeds, dict):
         feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
     all_events = []
+    ical_start = _time.time()
+    ICAL_WALL_CLOCK_LIMIT = 45  # seconds
     for feed in feeds:
+        # Phase 6: wall-clock cap to prevent starvation
+        if _time.time() - ical_start > ICAL_WALL_CLOCK_LIMIT:
+            logger.warning("iCal sync: %ss wall-clock limit reached, skipping remaining %s feeds",
+                  ICAL_WALL_CLOCK_LIMIT, len(feeds) - feeds.index(feed))
+            break
         prop_id = feed.get("propId", "")
         url = feed.get("url", "")
         if not url: continue
+        if not _is_safe_url(url):
+            logger.warning("iCal sync: blocked unsafe URL for %s", prop_id)
+            continue
         feed_key = _ical_feed_key(url)
         pl_id    = _airbnb_listing_id(url)
         try:
@@ -3087,14 +3201,17 @@ def _sync_ical(store):
                 ics = r.read().decode("utf-8", errors="replace")
             all_events.extend(_parse_ics(ics, prop_id, feed_key, pl_id))
         except Exception as e:
-            print(f"iCal sync failed for {prop_id} ({feed_key}): {e}")
+            logger.error("iCal sync failed for %s (%s): %s", prop_id, feed_key, e)
     return all_events
 
 @app.route("/api/ical/urls", methods=["GET","POST"])
 def ical_urls_route():
     store = load_store()
     if request.method == "POST":
-        store["ical_urls"] = request.json.get("feeds", [])
+        raw_feeds = request.json.get("feeds", [])
+        # Validate all URLs before saving
+        safe_feeds = [f for f in raw_feeds if _is_safe_url(f.get("url", ""))]
+        store["ical_urls"] = safe_feeds
         save_store(store); return jsonify({"ok": True})
     feeds = store.get("ical_urls", [])
     if isinstance(feeds, dict):
@@ -3110,7 +3227,13 @@ def ical_urls_route():
         enriched.append({**f, "feed_key": feed_key, "pl_id": pl_id, "canonical_name": canon})
     return jsonify({"feeds": enriched})
 
+# Alias: frontend calls /api/ical/feeds
+@app.route("/api/ical/feeds", methods=["GET", "POST"])
+def ical_feeds_alias():
+    return ical_urls_route()
+
 @app.route("/api/ical/sync", methods=["POST"])
+@rate_limit(5, 60)  # 5 per minute — expensive external fetch
 def ical_sync_route():
     store = load_store()
     new_events = _sync_ical(store)
@@ -3123,8 +3246,15 @@ def ical_sync_route():
 
 @app.route("/api/ical/events", methods=["GET"])
 def ical_events_route():
+    uid = getattr(g, 'user_id', None)
+    cached = _get_cached_response("ical_events", uid, 30) if uid else None
+    if cached is not None:
+        return jsonify(cached)
     store = load_store()
-    return jsonify({"events": store.get("ical_events", [])})
+    result = {"events": store.get("ical_events", [])}
+    if uid:
+        _set_cached_response("ical_events", uid, result)
+    return jsonify(result)
 
 # ══════════════════════════════════════════════════════════════
 # STR Analytics Engine
@@ -3333,7 +3463,7 @@ def _compute_portfolio_analytics(events, start_date_str, end_date_str):
 
 # ── PriceLabs API wrapper ─────────────────────────────────────────────────────
 # Docs: https://pricelabs.co/api-docs
-# Auth: X-API-Key header; key stored in env var PRICELABS_API_KEY
+# Auth: X-API-Key header; per-user key stored encrypted in user store
 
 PRICELABS_BASE = "https://api.pricelabs.co/v1"
 
@@ -3341,12 +3471,13 @@ PRICELABS_BASE = "https://api.pricelabs.co/v1"
 def _pricelabs_get(path, params=None):
     """GET request to PriceLabs API. Returns parsed JSON or raises RuntimeError."""
     import urllib.request, urllib.parse
-    api_key = os.environ.get("PRICELABS_API_KEY", "")
-    if not api_key:
-        # Fall back to user-saved key in store
-        api_key = load_store().get("pricelabs_api_key", "")
-    if not api_key:
+    raw_key = load_store().get("pricelabs_api_key", "")
+    if not raw_key:
         raise RuntimeError("PriceLabs API key not configured. Add it in Settings → PriceLabs.")
+    try:
+        api_key = _decrypt(raw_key)
+    except Exception:
+        api_key = raw_key  # backward compat: legacy plaintext keys
     url = PRICELABS_BASE + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -3427,19 +3558,30 @@ def analytics_listing(prop_id):
 @app.route("/api/analytics/portfolio")
 def analytics_portfolio():
     """Portfolio-wide: occupancy, total booked nights, best/worst listings."""
+    # Phase 6: per-user response cache (120s TTL)
+    uid = getattr(g, 'user_id', None)
+    range_param = request.args.get("start", "") + ":" + request.args.get("end", "")
+    cache_key = f"portfolio:{range_param}"
+    if uid:
+        cached = _get_cached_response(cache_key, uid, 120)
+        if cached is not None:
+            return jsonify(cached)
     store  = load_store()
     events = store.get("ical_events", [])
     start, end = _analytics_range(request)
-    return jsonify(_compute_portfolio_analytics(events, start, end))
+    result_data = _compute_portfolio_analytics(events, start, end)
+    if uid:
+        _set_cached_response(cache_key, uid, result_data)
+    return jsonify(result_data)
 
 
-@app.route("/api/analytics/pricelabs/config", methods=["POST"])
+@app.route("/api/pricelabs/config", methods=["POST"])
 def pricelabs_config():
     """Save PriceLabs API key and property→listing mapping from the Settings UI."""
     body    = request.json or {}
     store   = load_store()
     if body.get("api_key"):
-        store["pricelabs_api_key"] = body["api_key"].strip()
+        store["pricelabs_api_key"] = _encrypt(body["api_key"].strip())
     if body.get("mapping"):
         mapping = store.get("pricelabs_mapping", {})
         mapping.update(body["mapping"])
@@ -3854,9 +3996,9 @@ def _parse_pl_bookings_csv(header_row, data_rows):
                               'booking_id','code','ref','reference'),
     }
 
-    print(f"[CSV BOOKINGS] headers_raw={h_raw[:12]}")
-    print(f"[CSV BOOKINGS] headers_norm={h[:12]}")
-    print(f"[CSV BOOKINGS] col_map={col_map}")
+    logger.debug("[CSV BOOKINGS] headers_raw=%s", h_raw[:12])
+    logger.debug("[CSV BOOKINGS] headers_norm=%s", h[:12])
+    logger.debug("[CSV BOOKINGS] col_map=%s", col_map)
 
     skip_no_listing  = 0
     skip_no_checkin  = 0
@@ -3927,7 +4069,7 @@ def _parse_pl_bookings_csv(header_row, data_rows):
         'no_checkin':  skip_no_checkin,
         'cancelled':   skip_cancelled,
     }
-    print(f"[CSV BOOKINGS] Parsed {len(bookings)}, skipped={skip_counts}")
+    logger.warning("[CSV BOOKINGS] Parsed %s, skipped=%s", len(bookings), skip_counts)
     debug = {
         'col_map':      col_map,
         'headers_norm': h[:20],
@@ -4014,9 +4156,9 @@ def pricelabs_listings():
             return (r.get("prop_id",""), int(m.group()) if m else 999)
         result.sort(key=_sort_key)
 
-        print(f"[PriceLabs] {len(result)} listings loaded")
+        logger.info("[PriceLabs] %s listings loaded", len(result))
         for r in result:
-            print(f"  {r['id']} → \"{r['canonical_name']}\" ({r['city']}) → prop_id={r['prop_id']}")
+            logger.info("%s → \"%s\" (%s) → prop_id=%s", r['id'], r['canonical_name'], r['city'], r['prop_id'])
 
         # flat_names: {prop_id: "Lockwood 1, Lockwood 2, Lockwood 3, Lockwood 4"}
         flat_names   = {pid: ", ".join(sorted(names, key=lambda n: int(re.search(r'\d+',n).group()) if re.search(r'\d+',n) else 999))
@@ -4032,8 +4174,8 @@ def pricelabs_listings():
 
         return jsonify({"listings": result, "names": flat_names, "names_by_id": short_names})
     except Exception as e:
-        print(f"[PriceLabs] listings error: {e}")
-        return jsonify({"error": str(e), "listings": []})
+        msg, _ = _safe_error(e, "PriceLabs listings")
+        return jsonify({"error": msg, "listings": []})
 
 
 @app.route("/api/pricelabs/raw/reservation_data")
@@ -4104,7 +4246,13 @@ def pricelabs_raw_reservation_data():
 def pricelabs_config_get():
     """Return current PriceLabs config for settings page persistence."""
     store   = load_store()
-    api_key = os.environ.get("PRICELABS_API_KEY", "") or store.get("pricelabs_api_key", "")
+    raw_key = store.get("pricelabs_api_key", "")
+    api_key = ""
+    if raw_key:
+        try:
+            api_key = _decrypt(raw_key)
+        except Exception:
+            api_key = raw_key  # backward compat: legacy plaintext keys
     preview = ""
     if api_key:
         preview = api_key[:4] + "••••" + api_key[-4:] if len(api_key) > 8 else "••••"
@@ -4225,383 +4373,23 @@ def raw_pricelabs_listings():
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             raw = r.read().decode("utf-8")
-        print("=" * 60)
-        print("[RAW PRICELABS /v1/listings]")
-        print(raw)
-        print("=" * 60)
+        logger.debug("=" * 60)
+        logger.debug("RAW PRICELABS /v1/listings")
+        logger.debug("%s", raw)
+        logger.debug("=" * 60)
         return raw, 200, {"Content-Type": "application/json"}
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        print(f"[RAW PRICELABS ERROR] HTTP {e.code}: {body}")
+        logger.error("[RAW PRICELABS ERROR] HTTP %s: %s", e.code, body)
         return jsonify({"error": f"HTTP {e.code}", "body": body}), 502
     except Exception as ex:
-        print(f"[RAW PRICELABS ERROR] {ex}")
+        logger.error("[RAW PRICELABS ERROR] %s", ex)
         return jsonify({"error": str(ex)}), 502
 
 
-@app.route("/api/debug/pricelabs")
-def debug_pricelabs():
-    """
-    Debug: probe PriceLabs API variants in parallel (5s timeout each).
-    Returns raw responses for all endpoints tried.
-    """
-    import urllib.request, urllib.error
-
-    api_key = os.environ.get("PRICELABS_API_KEY", "")
-    if not api_key:
-        api_key = load_store().get("pricelabs_api_key", "")
-    if not api_key:
-        return jsonify({"error": "PRICELABS_API_KEY not set in environment or store"}), 400
-
-    key_preview = api_key[:6] + "***" + api_key[-3:]
-
-    def hit(url, use_query_param=False):
-        actual_url = url + ("?api_key=" + api_key if use_query_param else "")
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
-        if not use_query_param:
-            headers["X-API-Key"] = api_key
-        try:
-            req = urllib.request.Request(actual_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as r:
-                body = r.read().decode("utf-8")
-                try:
-                    data = json.loads(body)
-                except Exception:
-                    data = body[:2000]
-                print(f"[PL DEBUG] 200 OK: {url}")
-                print(json.dumps(data, indent=2, default=str)[:4000])
-                return {"ok": True, "status": 200, "data": data}
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            try:
-                err = json.loads(body)
-            except Exception:
-                err = body[:500]
-            print(f"[PL DEBUG] {e.code} {url}: {body[:200]}")
-            return {"ok": False, "status": e.code, "error": err}
-        except Exception as ex:
-            print(f"[PL DEBUG] FAIL {url}: {ex}")
-            return {"ok": False, "status": "error", "error": str(ex)}
-
-    # Run all probes in parallel so total time = max(5s) not sum
-    import concurrent.futures
-    probes = [
-        ("https://api.pricelabs.co/v1/listings",           False),
-        ("https://api.pricelabs.co/v1/listings",           True),   # query param variant
-        ("https://api.pricelabs.co/v1/get_pms_listing_data", False),
-        ("https://api.pricelabs.co/v2/listings",           False),
-        ("https://api.pricelabs.co/v1/properties",         False),
-    ]
-    results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(hit, url, qp): url + ("?api_key=..." if qp else "") for url, qp in probes}
-        for fut in concurrent.futures.as_completed(futures):
-            label = futures[fut]
-            results[label] = fut.result()
-
-    return jsonify({"api_key_preview": key_preview, "results": results})
-
-
-@app.route("/api/debug/pricelabs/booking-history")
-def debug_pricelabs_booking_history():
-    """
-    Diagnostic: probe PriceLabs booking history endpoints.
-    Prints the current endpoint in use, then tries all known booking-history variants.
-    Returns raw responses so we can identify the correct endpoint for past reservations.
-    """
-    import urllib.request, urllib.error, urllib.parse
-
-    api_key = os.environ.get("PRICELABS_API_KEY", "") or load_store().get("pricelabs_api_key", "")
-    if not api_key:
-        return jsonify({"error": "PRICELABS_API_KEY not set"}), 400
-
-    # Report what we currently call (no booking data)
-    current = f"GET {PRICELABS_BASE}/listings  (params: none — returns occupancy rates only, NO booking history)"
-    print("=" * 70)
-    print("[PL BOOKING DIAG] Currently calling:", current)
-    print("[PL BOOKING DIAG] Auth: X-API-Key header")
-    print("[PL BOOKING DIAG] Probing booking-history endpoints...")
-    print("=" * 70)
-
-    from_date = "2025-10-01"
-    to_date   = str(datetime.date.today())
-
-    candidates = [
-        ("https://api.pricelabs.co/v2/booking_history",
-         {"from_date": from_date, "to_date": to_date}),
-        ("https://api.pricelabs.co/v2/booking_history",
-         {"start_date": from_date, "end_date": to_date}),
-        ("https://api.pricelabs.co/v2/bookings",
-         {"from_date": from_date, "to_date": to_date}),
-        ("https://api.pricelabs.co/v1/booking_history",
-         {"from_date": from_date, "to_date": to_date}),
-        ("https://api.pricelabs.co/v1/reservations",
-         {"start_date": from_date, "end_date": to_date}),
-        ("https://api.pricelabs.co/v2/reservations",
-         {"start_date": from_date, "end_date": to_date}),
-    ]
-
-    results = {}
-    for base_url, params in candidates:
-        url = base_url + "?" + urllib.parse.urlencode(params)
-        label = base_url.replace("https://api.pricelabs.co", "")
-        print(f"[PL BOOKING DIAG] Trying: GET {url}")
-        try:
-            req = urllib.request.Request(url, headers={
-                "X-API-Key": api_key,
-                "Accept": "application/json",
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            })
-            with urllib.request.urlopen(req, timeout=10) as r:
-                raw = r.read().decode("utf-8")
-            parsed = json.loads(raw)
-            print(f"[PL BOOKING DIAG] {label} → 200 OK")
-            print(json.dumps(parsed, indent=2, default=str)[:3000])
-            results[label] = {"status": 200, "body": parsed}
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            print(f"[PL BOOKING DIAG] {label} → {e.code}: {body[:300]}")
-            results[label] = {"status": e.code, "error": body[:300]}
-        except Exception as ex:
-            print(f"[PL BOOKING DIAG] {label} → error: {ex}")
-            results[label] = {"error": str(ex)}
-
-    print("=" * 70)
-    return jsonify({
-        "current_endpoint": current,
-        "date_range_tested": f"{from_date} to {to_date}",
-        "booking_history_attempts": results,
-    })
 
 
 
-def _pl_audit_probe(label, url, api_key, extra_params=None):
-    """Module-level helper for PriceLabs audit probes."""
-    import urllib.request, urllib.error, urllib.parse
-    full_url = url
-    if extra_params:
-        full_url += "?" + urllib.parse.urlencode(extra_params)
-    key_preview = api_key[:4] + "****" + api_key[-4:]
-    print(f"\n{'='*60}")
-    print(f"[PL AUDIT] {label}")
-    print(f"[PL AUDIT] GET {full_url}")
-    print(f"[PL AUDIT] Auth: X-API-Key {key_preview}")
-    try:
-        req = urllib.request.Request(full_url, headers={
-            "X-API-Key":  api_key,
-            "Accept":     "application/json",
-            "User-Agent": "Mozilla/5.0",
-        })
-        with urllib.request.urlopen(req, timeout=12) as r:
-            raw  = r.read().decode("utf-8")
-            code = r.getcode()
-        print(f"[PL AUDIT] Status: {code}")
-        print(f"[PL AUDIT] Raw response:\n{raw[:5000]}")
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            parsed = raw
-        # Check for booking/revenue keys
-        text = json.dumps(parsed).lower() if not isinstance(parsed, str) else parsed.lower()
-        booking_keys = ["payout", "guest_name", "booked_date", "confirmation_code",
-                        "check_in", "check_out", "revenue", "earnings", "booking_id",
-                        "reservation", "total_payout", "booking_amount"]
-        found = [k for k in booking_keys if k in text]
-        has_booking_data = {"found_keys": found, "verdict": bool(found)}
-        return {"label": label, "url": full_url, "status": code, "body": parsed,
-                "has_booking_data": has_booking_data}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"[PL AUDIT] HTTP {e.code}: {body[:600]}")
-        return {"label": label, "url": full_url, "status": e.code, "error": body[:600]}
-    except Exception as ex:
-        print(f"[PL AUDIT] Error: {ex}")
-        return {"label": label, "url": full_url, "error": str(ex)}
-
-
-@app.route("/api/debug/pricelabs/reports")
-def debug_pricelabs_reports():
-    """
-    Probe per-listing reporting endpoints with real listing IDs.
-    The previous run showed /v1/listings/{id}/bookings|revenue|reservations return 400
-    (not 404), meaning they exist but needed a real ID.
-    """
-    from datetime import date as _d
-    import urllib.request, urllib.error, urllib.parse
-
-    api_key = os.environ.get("PRICELABS_API_KEY", "") or load_store().get("pricelabs_api_key", "")
-    if not api_key:
-        return jsonify({"error": "PRICELABS_API_KEY not set"}), 400
-
-    key_preview = api_key[:4] + "****" + api_key[-4:]
-    from_date = "2025-01-01"
-    to_date   = str(_d.today())
-
-    # Fetch listing IDs, capture any error
-    listings_fetch_error = None
-    listing_ids = []
-    try:
-        req = urllib.request.Request(
-            "https://api.pricelabs.co/v1/listings",
-            headers={"X-API-Key": api_key, "Accept": "application/json",
-                     "User-Agent": "Mozilla/5.0"}
-        )
-        with urllib.request.urlopen(req, timeout=15) as r:
-            raw = r.read().decode("utf-8")
-        parsed = json.loads(raw)
-        listing_ids = [l.get("id") for l in parsed.get("listings", []) if l.get("id")]
-    except Exception as ex:
-        listings_fetch_error = str(ex)
-
-    # Fallback: hardcode IDs seen in the previous full-audit
-    if not listing_ids:
-        listing_ids = [
-            "1523546771998151986",  # Unit 2 — lockwood
-            "1523560635012518611",  # Unit 4 — lockwood
-            "1540191077806734253",  # 26B — Gorge Getaway
-            "1544826815980232108",  # Unit 1 — lockwood
-            "1546750681335776815",  # Unit 3 — lockwood
-            "1596469950428197209",  # 24B — River & Falls Retreat
-            "1597959000664656537",  # 22B — Riverstone Retreat
-        ]
-
-    p_range  = {"start_date": from_date, "end_date": to_date}
-    p_range2 = {"from_date":  from_date, "to_date":  to_date}
-
-    # Focus: per-listing endpoints that returned 400 (not 404) last time — they exist
-    probes = []
-    for lid in listing_ids[:3]:  # test first 3 to keep response size manageable
-        probes += [
-            (f"{lid}/bookings",      f"https://api.pricelabs.co/v1/listings/{lid}/bookings",      p_range),
-            (f"{lid}/bookings2",     f"https://api.pricelabs.co/v1/listings/{lid}/bookings",      p_range2),
-            (f"{lid}/revenue",       f"https://api.pricelabs.co/v1/listings/{lid}/revenue",       p_range),
-            (f"{lid}/reservations",  f"https://api.pricelabs.co/v1/listings/{lid}/reservations",  p_range),
-            (f"{lid}/reservations2", f"https://api.pricelabs.co/v1/listings/{lid}/reservations",  p_range2),
-            # no date params — maybe they're not required
-            (f"{lid}/bookings (no dates)", f"https://api.pricelabs.co/v1/listings/{lid}/bookings", None),
-            (f"{lid}/revenue (no dates)",  f"https://api.pricelabs.co/v1/listings/{lid}/revenue",  None),
-        ]
-
-    # Also try listing_prices with real ID (confirmed working pattern from /v1/listings)
-    lid0 = listing_ids[0]
-    probes += [
-        (f"listing_prices/{lid0}",
-         "https://api.pricelabs.co/v1/listing_prices",
-         {"listing_id": lid0, "start_date": from_date, "end_date": to_date}),
-        # Try the booking pickup endpoint seen in listings response
-        ("booking_pickup",
-         "https://api.pricelabs.co/v1/booking_pickup",
-         {"start_date": from_date, "end_date": to_date}),
-        ("booking_pickup_listing",
-         f"https://api.pricelabs.co/v1/listings/{lid0}/booking_pickup",
-         p_range),
-    ]
-
-    results = [_pl_audit_probe(label, url, api_key, params) for label, url, params in probes]
-
-    hits  = [r for r in results if r.get("status") == 200]
-    auth  = [r for r in results if r.get("status") in (401, 403)]
-    bad   = [r for r in results if r.get("status") == 400]
-    miss  = [r for r in results if r.get("status") == 404]
-
-    return jsonify({
-        "key_preview":         key_preview,
-        "listing_ids_used":    listing_ids,
-        "listings_fetch_error": listings_fetch_error,
-        "date_range":          f"{from_date} to {to_date}",
-        "hits_200":            [r["label"] for r in hits],
-        "auth_errors_401_403": [f'{r["label"]} → {r["status"]}' for r in auth],
-        "bad_request_400":     [{"label": r["label"], "error": r.get("error","")} for r in bad],
-        "not_found_404":       [r["label"] for r in miss],
-        "results":             results,
-    })
-
-
-@app.route("/api/debug/pricelabs/full-audit")
-def debug_pricelabs_full_audit():
-    """
-    Comprehensive PriceLabs API audit.
-    Calls every known endpoint, returns full raw responses.
-    Hit this on Render to see exactly what PriceLabs gives us.
-    """
-    from datetime import date as _audit_date
-
-    api_key = os.environ.get("PRICELABS_API_KEY", "") or load_store().get("pricelabs_api_key", "")
-    if not api_key:
-        return jsonify({"error": "PRICELABS_API_KEY not set"}), 400
-
-    key_preview = api_key[:4] + "****" + api_key[-4:]
-    from_date   = "2025-10-01"
-    to_date     = str(_audit_date.today())
-
-    # Probe list: (label, base_url, params)
-    probes = [
-        # ── Currently used ────────────────────────────────────────────
-        ("CURRENT: /v1/listings (all listings, no date range)",
-         "https://api.pricelabs.co/v1/listings", None),
-
-        # ── Booking/reservation history candidates ────────────────────
-        ("BOOKING ATTEMPT: /v2/booking_history (from/to)",
-         "https://api.pricelabs.co/v2/booking_history",
-         {"from_date": from_date, "to_date": to_date}),
-
-        ("BOOKING ATTEMPT: /v2/booking_history (start/end)",
-         "https://api.pricelabs.co/v2/booking_history",
-         {"start_date": from_date, "end_date": to_date}),
-
-        ("BOOKING ATTEMPT: /v2/bookings",
-         "https://api.pricelabs.co/v2/bookings",
-         {"start_date": from_date, "end_date": to_date}),
-
-        ("BOOKING ATTEMPT: /v1/booking_history",
-         "https://api.pricelabs.co/v1/booking_history",
-         {"from_date": from_date, "to_date": to_date}),
-
-        ("BOOKING ATTEMPT: /v1/reservations",
-         "https://api.pricelabs.co/v1/reservations",
-         {"start_date": from_date, "end_date": to_date}),
-
-        ("BOOKING ATTEMPT: /v2/reservations",
-         "https://api.pricelabs.co/v2/reservations",
-         {"start_date": from_date, "end_date": to_date}),
-
-        # ── Calendar / pricing data ────────────────────────────────────
-        ("PRICING: /v1/listing_prices (no listing_id — expect 400)",
-         "https://api.pricelabs.co/v1/listing_prices", None),
-    ]
-
-    # Sequential calls — avoids ThreadPoolExecutor pickle issues with closures
-    results = [_pl_audit_probe(label, url, api_key, params) for label, url, params in probes]
-
-    # Build clear verdict
-    verdict_lines = []
-    for r in results:
-        st  = r.get("status", "ERR")
-        hb  = r.get("has_booking_data", {})
-        ok  = st == 200
-        has = hb.get("verdict") if isinstance(hb, dict) else False
-        tag = "✅ 200 + BOOKING DATA" if (ok and has) else \
-              "✅ 200 (no booking data)" if ok else \
-              f"❌ {st}"
-        verdict_lines.append(f"{tag}  →  {r.get('label','?')}")
-        if isinstance(hb, dict) and hb.get("found_keys"):
-            verdict_lines.append(f"       booking keys found: {hb['found_keys']}")
-
-    verdict = "\n".join(verdict_lines)
-    print("\n" + "="*60)
-    print("[PL AUDIT] VERDICT SUMMARY:")
-    print(verdict)
-    print("="*60)
-
-    return jsonify({
-        "api_key_preview": key_preview,
-        "date_range_tested": f"{from_date} to {to_date}",
-        "verdict_summary": verdict,
-        "results": results,
-    })
 
 
 @app.route("/api/analytics/pricelabs/map", methods=["POST"])
@@ -4812,216 +4600,6 @@ def upload_income_csv():
 # Revenue Analytics, Advanced Metrics & Cockpit Data Layer
 # Prompt 2 extensions
 # ══════════════════════════════════════════════════════════════
-
-_AIRBNB_PROP_IDS = ["airbnb", "lockwood", "everton", "bstreet"]
-_PIERCE_PROP_IDS = ["pierce"]
-
-
-# ── Airbnb reservation email parsing ─────────────────────────────────────────
-
-def _parse_airbnb_email(msg_data):
-    """
-    Parse an Airbnb reservation confirmation email.
-    Extracts: reservation_code, check_in/out, nights, nightly_rate,
-    cleaning_fee, service_fee, payout_total, booking_created, guest_name.
-    """
-    import base64
-    from email.utils import parsedate_to_datetime as _ptd
-
-    headers  = {h["name"]: h["value"]
-                for h in msg_data.get("payload", {}).get("headers", [])}
-    subject  = headers.get("Subject", "")
-    date_str = headers.get("Date",    "")
-    msg_id   = msg_data.get("id", "")
-
-    booking_created = None
-    try:
-        booking_created = _ptd(date_str).date().isoformat()
-    except Exception:
-        pass
-
-    # Decode body (walk MIME tree, prefer plain text)
-    body = ""
-    def _walk(part):
-        nonlocal body
-        if part.get("mimeType") == "text/plain" and not body:
-            raw = part.get("body", {}).get("data", "")
-            if raw:
-                body = base64.urlsafe_b64decode(raw + "==").decode("utf-8", errors="replace")
-        elif part.get("mimeType") == "text/html" and not body:
-            raw = part.get("body", {}).get("data", "")
-            if raw:
-                html = base64.urlsafe_b64decode(raw + "==").decode("utf-8", errors="replace")
-                body = re.sub(r"<[^>]+>", " ", html)
-                body = re.sub(r"&nbsp;", " ", body)
-                body = re.sub(r"&amp;",  "&", body)
-                body = re.sub(r"\s+",    " ", body).strip()
-        for sub in part.get("parts", []):
-            _walk(sub)
-    _walk(msg_data.get("payload", {}))
-
-    combined = subject + " " + body
-
-    # ── Reservation code ─────────────────────────────────────────────────────
-    reservation_code = None
-    m = re.search(r'(?:Reservation|Confirmation)\s*(?:code|#|ID)[:\s]+([A-Z0-9]{8,14})', combined, re.I)
-    if m:
-        reservation_code = m.group(1)
-
-    # ── Dates ─────────────────────────────────────────────────────────────────
-    from datetime import datetime as _dtt, date as _d
-    _DATE_FMTS = ["%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%m/%d/%Y", "%d %b %Y", "%d %B %Y"]
-
-    def _try_date(s):
-        s = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", s.strip())
-        for fmt in _DATE_FMTS:
-            try:
-                return _dtt.strptime(s, fmt).date().isoformat()
-            except ValueError:
-                pass
-        return None
-
-    check_in = check_out = None
-    m_ci = re.search(
-        r'Check.?in[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})',
-        body, re.I)
-    m_co = re.search(
-        r'Check.?out[:\s]+([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})',
-        body, re.I)
-    if m_ci: check_in  = _try_date(m_ci.group(1))
-    if m_co: check_out = _try_date(m_co.group(1))
-
-    # Fallback: subject range "Mar 15 – Mar 18, 2026"
-    if not check_in:
-        m_subj = re.search(
-            r'([A-Za-z]+ \d{1,2})\s*[–\-]\s*([A-Za-z]+ \d{1,2}),?\s*(\d{4})', subject)
-        if m_subj:
-            yr = m_subj.group(3)
-            check_in  = _try_date(f"{m_subj.group(1)}, {yr}")
-            check_out = _try_date(f"{m_subj.group(2)}, {yr}")
-
-    nights = None
-    if check_in and check_out:
-        try:
-            nights = (_d.fromisoformat(check_out) - _d.fromisoformat(check_in)).days
-        except Exception:
-            pass
-    if not nights:
-        m_n = re.search(r'(\d+)\s+night', body, re.I)
-        if m_n:
-            nights = int(m_n.group(1))
-
-    # ── Guest name ────────────────────────────────────────────────────────────
-    guest_name = None
-    m_g = re.search(r'(?:from|guest)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', body, re.I)
-    if m_g:
-        guest_name = m_g.group(1).strip()
-
-    # ── Listing name ──────────────────────────────────────────────────────────
-    listing_name = None
-    m_l = re.search(r'(?:listing|property|at)\s*[:\-]\s*([^\n\r]{5,80})', body, re.I)
-    if m_l:
-        listing_name = m_l.group(1).strip()
-
-    # ── Property ID detection (match known keywords) ──────────────────────────
-    property_id = None
-    _PROP_KEYWORDS = [
-        ("EVERTON STREET", "everton"),   # longer strings first to avoid partial match
-        ("B STREET",       "bstreet"),
-        ("LOCKWOOD",       "lockwood"),
-    ]
-    combined_upper = combined.upper()
-    for keyword, pid in _PROP_KEYWORDS:
-        if keyword in combined_upper:
-            property_id = pid
-            break
-
-    def _money(pattern, text):
-        m = re.search(pattern, text, re.I)
-        if m:
-            try:
-                return float(m.group(1).replace(",", ""))
-            except Exception:
-                pass
-        return None
-
-    nightly_rate = (_money(r'\$\s*([\d,]+(?:\.\d{2})?)\s*[×x\*]\s*\d+\s*night', body) or
-                    _money(r'Nightly rate[:\s]+\$?([\d,]+(?:\.\d{2})?)', body))
-    cleaning_fee = _money(r'Cleaning fee[:\s]+\$?([\d,]+(?:\.\d{2})?)', body)
-    service_fee  = _money(r'(?:Service|Airbnb)\s*fee[:\s]+\$?([\d,]+(?:\.\d{2})?)', body)
-    payout_total = (_money(r'(?:You earn|Your payout|Host payout|You get|Total payout)[:\s]+\$?([\d,]+(?:\.\d{2})?)', body) or
-                    _money(r'Payout[:\s]+\$?([\d,]+(?:\.\d{2})?)', body))
-
-    return {
-        "id":               msg_id,
-        "reservation_code": reservation_code,
-        "booking_created":  booking_created,
-        "listing_name":     listing_name,
-        "guest_name":       guest_name,
-        "check_in":         check_in,
-        "check_out":        check_out,
-        "nights":           nights,
-        "nightly_rate":     nightly_rate,
-        "cleaning_fee":     cleaning_fee,
-        "service_fee":      service_fee,
-        "payout_total":     payout_total,
-        "property_id":      property_id,
-        "source":           "airbnb_email",
-    }
-
-
-def run_airbnb_reservation_sync():
-    """
-    Sync Airbnb reservation confirmation emails from Gmail.
-    Stores results in store["airbnb_reservations"] = {msg_id: record}.
-    """
-    creds = _get_gmail_credentials()
-    if not creds:
-        return {"synced": 0, "total": 0, "error": "No Gmail credentials"}
-
-    service      = google_build("gmail", "v1", credentials=creds)
-    store        = load_store()
-    reservations = store.get("airbnb_reservations", {})
-    already      = len(reservations)
-
-    q = (
-        "(from:airbnb.com OR from:automated@airbnb.com OR from:noreply@airbnb.com) "
-        "(subject:\"reservation confirmed\" OR subject:\"new reservation\" "
-        " OR subject:\"booking confirmed\")"
-    )
-    try:
-        results = service.users().messages().list(userId="me", q=q, maxResults=500).execute()
-    except Exception as e:
-        return {"synced": 0, "total": already, "error": str(e)}
-
-    messages  = results.get("messages", [])
-    new_msgs  = [m for m in messages if m["id"] not in reservations]
-    new_count = 0
-    for ref in new_msgs:
-        mid = ref["id"]
-        try:
-            msg_data     = service.users().messages().get(userId="me", id=mid, format="full").execute()
-            parsed       = _parse_airbnb_email(msg_data)
-            reservations[mid] = parsed
-            new_count += 1
-            # Auto-assign revenue to property_income if property and payout are known
-            if parsed.get("property_id") and parsed.get("payout_total") and parsed.get("check_in"):
-                month_key  = parsed["check_in"][:7]
-                pi         = store.setdefault("property_income", {})
-                prop_months = pi.setdefault(parsed["property_id"], {})
-                entry      = prop_months.get(month_key, {"revenue": 0.0, "source": "airbnb_email", "count": 0})
-                entry["revenue"] = round((entry.get("revenue") or 0.0) + parsed["payout_total"], 2)
-                entry["count"]   = entry.get("count", 0) + 1
-                entry["source"]  = "airbnb_email"
-                prop_months[month_key] = entry
-                print(f"  ✅ Auto-assigned ${parsed['payout_total']} → {parsed['property_id']} {month_key}")
-        except Exception as e:
-            print(f"  ⚠️  Airbnb reservation parse error {mid}: {e}")
-
-    store["airbnb_reservations"] = reservations
-    save_store(store)
-    return {"synced": new_count, "total": len(reservations)}
-
 
 # ── Reservation–iCal event matching ──────────────────────────────────────────
 
@@ -5251,7 +4829,7 @@ def _compute_extended_analytics(events, store, prop_id, start_date_str, end_date
                 expected_adr = round(sum(res_pl_rates) / len(res_pl_rates), 2)
 
         except Exception as pl_err:
-            print(f"PriceLabs extended analytics error for {prop_id}: {pl_err}")
+            logger.error("PriceLabs extended analytics error for %s: %s", prop_id, pl_err)
 
     insight_cards = _generate_insight_cards(
         base, booked_adr, expected_adr, pricing_mismatches, prop_id)
@@ -5357,20 +4935,6 @@ def _generate_insight_cards(base, booked_adr, expected_adr, pricing_mismatches, 
 
 # ── Extended analytics routes ─────────────────────────────────────────────────
 
-@app.route("/api/reservations/sync", methods=["POST"])
-def reservations_sync_route():
-    """Sync Airbnb reservation confirmation emails from Gmail."""
-    return jsonify(run_airbnb_reservation_sync())
-
-
-@app.route("/api/reservations", methods=["GET"])
-def get_reservations():
-    """Return all synced Airbnb reservation records."""
-    store = load_store()
-    rsvs  = store.get("airbnb_reservations", {})
-    return jsonify({"reservations": list(rsvs.values()), "total": len(rsvs)})
-
-
 @app.route("/api/analytics/listing/<prop_id>/extended")
 def analytics_listing_extended(prop_id):
     """Extended per-listing analytics: revenue, PriceLabs comparison, insight cards."""
@@ -5442,6 +5006,15 @@ def cockpit_data():
     Verified monthly financial summary with full traceability.
     ?month=YYYY-MM  (defaults to current month)
     """
+    # Phase 6: per-user response cache (60s TTL)
+    uid = getattr(g, 'user_id', None)
+    month_param = request.args.get("month", "")
+    cache_key = f"cockpit:{month_param}"
+    if uid:
+        cached = _get_cached_response(cache_key, uid, 60)
+        if cached is not None:
+            return jsonify(cached)
+
     from datetime import date as _d, timedelta as _td
 
     today     = _d.today()
@@ -5461,11 +5034,13 @@ def cockpit_data():
     manual   = store.get("manual_income",  {})
     prop_inc = store.get("property_income",{})
 
+    # Dynamic property IDs from user's store (no more hardcoded lists)
+    user_props = store.get("properties", [])
+    all_prop_ids = set(p.get("id") or p.get("name") for p in user_props if p.get("id") or p.get("name"))
+
     def _month_financials(month_key):
-        airbnb_rev     = 0.0
-        airbnb_tx_ids  = []
-        pierce_rev     = 0.0
-        pierce_tx_ids  = []
+        total_rev      = 0.0
+        revenue_tx_ids = []
         expenses       = 0.0
         expense_tx_ids = []
         expense_by_prop= {}
@@ -5483,30 +5058,23 @@ def cockpit_data():
             tx_type = tx.get("type", "out")
 
             if tx_type == "in":
-                if prop_id in _AIRBNB_PROP_IDS:
-                    # Only include Plaid if no manual override for this month
-                    if month_key not in manual:
-                        airbnb_rev    += amount
-                        airbnb_tx_ids.append(tx_id)
-                        revenue_by_prop[prop_id] = revenue_by_prop.get(prop_id, 0.0) + amount
-                elif prop_id in _PIERCE_PROP_IDS:
-                    pierce_rev    += amount
-                    pierce_tx_ids.append(tx_id)
+                # Only include Plaid revenue if no manual override for this month
+                if month_key not in manual:
+                    total_rev += amount
+                    revenue_tx_ids.append(tx_id)
                     revenue_by_prop[prop_id] = revenue_by_prop.get(prop_id, 0.0) + amount
             else:
                 expenses += amount
                 expense_tx_ids.append(tx_id)
                 expense_by_prop[prop_id] = expense_by_prop.get(prop_id, 0.0) + amount
 
-        # Manual income overrides Plaid Airbnb revenue for this month
+        # Manual income overrides Plaid revenue for this month
         is_manual = False
         if month_key in manual and manual[month_key]:
-            airbnb_rev    = float(manual[month_key])
-            airbnb_tx_ids = []
-            is_manual     = True
-            # Clear Plaid-sourced revenue for Airbnb properties (manual replaces them)
-            for apid in _AIRBNB_PROP_IDS:
-                revenue_by_prop.pop(apid, None)
+            total_rev      = float(manual[month_key])
+            revenue_tx_ids = []
+            is_manual      = True
+            revenue_by_prop.clear()
 
         # Per-property income supplements if no manual_income entry
         if month_key not in manual:
@@ -5514,27 +5082,24 @@ def cockpit_data():
                 if month_key in months:
                     pi = months[month_key]
                     payout = float(pi.get("payout_total") or 0)
-                    if pid in _AIRBNB_PROP_IDS:
-                        airbnb_rev += payout
-                    elif pid in _PIERCE_PROP_IDS:
-                        pierce_rev += payout
+                    total_rev += payout
                     if payout:
                         revenue_by_prop[pid] = revenue_by_prop.get(pid, 0.0) + payout
 
-        total_rev = round(airbnb_rev + pierce_rev, 2)
-        total_exp = round(expenses, 2)
+        total_rev_r = round(total_rev, 2)
+        total_exp   = round(expenses, 2)
         return {
-            "total_revenue":  total_rev,
+            "total_revenue":  total_rev_r,
             "total_expenses": total_exp,
-            "net_income":     round(total_rev - total_exp, 2),
+            "net_income":     round(total_rev_r - total_exp, 2),
             "airbnb": {
-                "revenue":   round(airbnb_rev, 2),
-                "tx_ids":    airbnb_tx_ids,
+                "revenue":   total_rev_r,
+                "tx_ids":    revenue_tx_ids,
                 "is_manual": is_manual,
             },
             "pierce": {
-                "revenue":   round(pierce_rev, 2),
-                "tx_ids":    pierce_tx_ids,
+                "revenue":   0.0,
+                "tx_ids":    [],
             },
             "expenses": {
                 "total":       total_exp,
@@ -5557,7 +5122,7 @@ def cockpit_data():
 
     has_prior = prev["total_revenue"] > 0 or prev["total_expenses"] > 0
 
-    return jsonify({
+    result_data = {
         "month":      month_str,
         "prev_month": prev_str,
         "has_prior_data": has_prior,
@@ -5575,7 +5140,11 @@ def cockpit_data():
             "Revenue uses manual_income override when set. "
             "tx_ids arrays are the source of truth for each number."
         ),
-    })
+    }
+    # Phase 6: cache result
+    if uid:
+        _set_cached_response(cache_key, uid, result_data)
+    return jsonify(result_data)
 
 
 # ── Property configuration ────────────────────────────────────────────────────
@@ -5643,7 +5212,7 @@ def push_register():
     if uid not in pt:
         pt[uid] = {"tokens": [], "preferences": {
             "cleaning": True, "checkin": True, "inventory": True,
-            "financial": True, "milestones": True
+            "financial": True, "milestones": True, "messages": True
         }}
     if token not in pt[uid]["tokens"]:
         pt[uid]["tokens"].append(token)
@@ -5710,17 +5279,18 @@ def follow_code():
     if not uid:
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
     users = load_users()
-    for email, u in users.items():
-        if u["id"] == uid:
-            code = u.get("follow_code", "")
-            if not code:
-                code = "PPG-" + secrets.token_hex(3).upper()
-                u["follow_code"] = code
-                save_users(users)
-            return jsonify({"follow_code": code})
-    return jsonify({"ok": False, "error": "User not found"}), 404
+    email, u = _find_user_by_id(users, uid)
+    if not u:
+        return jsonify({"ok": False, "error": "User not found"}), 404
+    code = u.get("follow_code", "")
+    if not code:
+        code = "PPG-" + secrets.token_hex(3).upper()
+        u["follow_code"] = code
+        save_users(users)
+    return jsonify({"follow_code": code})
 
 @app.route("/api/follow/request", methods=["POST"])
+@rate_limit(20, 60)  # 20 per minute — follow requests
 def follow_request():
     uid = getattr(g, 'user_id', None)
     if not uid:
@@ -5738,7 +5308,7 @@ def follow_request():
             target_id = u["id"]
             target_role = u.get("role", "owner")
             break
-        if username and u.get("username", "").lower() == username:
+        if username and (u.get("username", "").lower() == username or email.split("@")[0].lower() == username):
             target_id = u["id"]
             target_role = u.get("role", "owner")
             break
@@ -5755,20 +5325,25 @@ def follow_request():
             return jsonify({"ok": False, "error": "Already following or pending", "status": f["status"]}), 409
 
     # Determine follow type
-    follower_role = "owner"
-    for email, u in users.items():
-        if u["id"] == uid:
-            follower_role = u.get("role", "owner")
-            break
+    _, follower_u = _find_user_by_id(users, uid)
+    follower_role = follower_u.get("role", "owner") if follower_u else "owner"
 
     follow_type = "cleaner" if follower_role == "cleaner" else "investor"
+
+    # Check if target account is private → pending, otherwise auto-approve
+    target_private = False
+    for email, u in users.items():
+        if u["id"] == target_id:
+            target_private = u.get("is_private", False)
+            break
+    follow_status = "pending" if target_private else "approved"
 
     follow_id = "f_" + secrets.token_hex(6)
     follows[follow_id] = {
         "follower_id": uid,
         "following_id": target_id,
         "type": follow_type,
-        "status": "approved",  # auto-approve for now
+        "status": follow_status,
         "requested_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         "selected_properties": [],
     }
@@ -5781,10 +5356,15 @@ def follow_request():
         if u["id"] == uid:
             follower_name = u.get("username", email)
             break
-    _send_push(tokens, "New Follower", f"{follower_name} started following you")
-    _store_notification(target_id, "follow", "New Follower", f"{follower_name} started following you")
+    follow_data = {"sender_id": uid, "sender_name": follower_name}
+    if follow_status == "pending":
+        _send_push(tokens, "Follow Request", f"{follower_name} wants to follow you")
+        _store_notification(target_id, "follow_request", "Follow Request", f"{follower_name} wants to follow you", follow_data)
+    else:
+        _send_push(tokens, "New Follower", f"{follower_name} started following you")
+        _store_notification(target_id, "follow", "New Follower", f"{follower_name} started following you", follow_data)
 
-    return jsonify({"ok": True, "follow_id": follow_id, "status": "approved"})
+    return jsonify({"ok": True, "follow_id": follow_id, "status": follow_status})
 
 @app.route("/api/follow/pending", methods=["GET"])
 def follow_pending():
@@ -5848,13 +5428,15 @@ def follow_following():
                     try:
                         s = _load_store_for_user(f["following_id"])
                         prop_count = len(s.get("properties", []))
-                    except:
-                        pass
+                    except Exception:
+                        logger.warning("Failed to load store for user %s", f.get("following_id"))
                     break
+            p_score = _compute_portfolio_score(f["following_id"]) if role != "cleaner" else None
             result.append({
                 "id": fid, "user_id": f["following_id"], "username": name, "role": role,
                 "type": f["type"], "property_count": prop_count,
                 "selected_properties": f.get("selected_properties", []),
+                "portfolio_score": p_score,
             })
     return jsonify({"following": result})
 
@@ -5913,43 +5495,403 @@ def follow_remove():
     _save_json_file(FOLLOWS_FILE, follows)
     return jsonify({"ok": True})
 
-# ── User search + profile endpoints ──────────────────────────
-@app.route("/api/users/search", methods=["GET"])
-def users_search():
+@app.route("/api/profile/privacy", methods=["POST"])
+def profile_privacy():
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    is_private = bool(body.get("is_private", False))
+    users = load_users()
+    for email, u in users.items():
+        if u["id"] == uid:
+            u["is_private"] = is_private
+            save_users(users)
+            return jsonify({"ok": True, "is_private": is_private})
+    return jsonify({"error": "User not found"}), 404
+
+@app.route("/api/follow/approve", methods=["POST"])
+def follow_approve():
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    follow_id = body.get("follow_id", "")
+    follows = _load_json_file(FOLLOWS_FILE)
+    f = follows.get(follow_id)
+    if not f or f["following_id"] != uid:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    f["status"] = "approved"
+    follows[follow_id] = f
+    _save_json_file(FOLLOWS_FILE, follows)
+    # Notify the follower
+    tokens = _get_user_push_tokens(f["follower_id"])
+    users = load_users()
+    owner_name = ""
+    for email, u in users.items():
+        if u["id"] == uid:
+            owner_name = u.get("username", email)
+            break
+    _send_push(tokens, "Follow Approved", f"{owner_name} accepted your follow request")
+    _store_notification(f["follower_id"], "follow", "Follow Approved", f"{owner_name} accepted your follow request",
+                        {"sender_id": uid, "sender_name": owner_name})
+    return jsonify({"ok": True})
+
+@app.route("/api/follow/reject", methods=["POST"])
+def follow_reject():
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    follow_id = body.get("follow_id", "")
+    follows = _load_json_file(FOLLOWS_FILE)
+    f = follows.get(follow_id)
+    if not f or f["following_id"] != uid:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    del follows[follow_id]
+    _save_json_file(FOLLOWS_FILE, follows)
+    return jsonify({"ok": True})
+
+# ── US Cities (loaded from JSON — ~30,000 city/state pairs across all 50 states) ──
+import os as _os
+_cities_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "us_cities.json")
+try:
+    with open(_cities_path, "r") as _cf:
+        _raw_cities = json.load(_cf)
+    # Support both formats: [{c, s}] (new) or ["city"] (old)
+    if _raw_cities and isinstance(_raw_cities[0], dict):
+        US_CITIES = [f"{e['c']}, {e['s']}" for e in _raw_cities]
+    else:
+        US_CITIES = _raw_cities
+except Exception:
+    US_CITIES = []
+    logger.warning("Failed to load us_cities.json")
+
+
+@app.route("/api/cities", methods=["GET"])
+def cities_search():
     q = (request.args.get("q", "") or "").strip().lower()
     if len(q) < 2:
+        return jsonify({"cities": []})
+    seen = set()
+    matches = []
+    # Prioritize cities that START with the query, then contains
+    starts = []
+    contains = []
+    for c in US_CITIES:
+        cl = c.lower()
+        if cl in seen:
+            continue
+        if cl.startswith(q):
+            seen.add(cl)
+            starts.append(c)
+        elif q in cl:
+            seen.add(cl)
+            contains.append(c)
+        if len(starts) + len(contains) >= 20:
+            break
+    matches = starts + contains
+    return jsonify({"cities": matches[:20]})
+
+# ── User search + profile endpoints ──────────────────────────
+@app.route("/api/users/search", methods=["GET"])
+@rate_limit(30, 60)  # 30 requests per minute per IP
+def users_search():
+    q = (request.args.get("q", "") or "").strip().lower()
+    market = (request.args.get("market", "") or "").strip().lower()
+
+    if len(q) < 2 and not market:
         return jsonify({"users": []})
+
     users = load_users()
     results = []
+
     for email, u in users.items():
         uname = u.get("username", "").lower()
-        if q in uname or q in email.lower():
-            results.append({
+        if not uname:
+            continue
+
+        if market and not q:
+            # Market-based discovery: find owners with Airbnb properties in this market
+            role = u.get("role", "owner")
+            if role != "owner":
+                continue
+            uid = u.get("id")
+            if not uid:
+                continue
+            try:
+                s = _load_store_for_user(uid)
+                props = s.get("custom_props", [])
+                has_market = any(
+                    p.get("isAirbnb") and (p.get("market") or "").lower() == market
+                    for p in props
+                )
+                if not has_market:
+                    continue
+            except Exception:
+                continue
+            entry = {
+                "user_id": uid,
+                "username": uname,
+                "role": role,
+                "is_private": u.get("is_private", False),
+                "market": market,
+            }
+            if role != "cleaner":
+                entry["portfolio_score"] = _compute_portfolio_score(uid, s)
+            results.append(entry)
+        else:
+            # Username substring search
+            if q not in uname:
+                continue
+            role = u.get("role", "owner")
+            entry = {
                 "user_id": u["id"],
-                "username": u.get("username", email.split("@")[0]),
-                "role": u.get("role", "owner"),
-            })
+                "username": uname,
+                "role": role,
+                "is_private": u.get("is_private", False),
+            }
+            if role != "cleaner":
+                entry["portfolio_score"] = _compute_portfolio_score(u["id"])
+            results.append(entry)
+
     return jsonify({"users": results[:20]})
+
+def _compute_portfolio_score(user_id, user_data=None):
+    """Compute a portfolio score (0-100) for a non-cleaner user.
+    Factors: data completeness, Plaid integration, financial health, portfolio depth."""
+    try:
+        s = _load_store_for_user(user_id) if user_data is None else user_data
+        users = load_users()
+        _email, u = _find_user_by_id(users, user_id)
+        if not u:
+            return None
+
+        score = 0.0
+
+        # ── 1. Data Completeness (20 pts) ──
+        props = s.get("custom_props", s.get("properties", []))
+        prop_count = len(props)
+
+        # No properties = no portfolio to score
+        if prop_count == 0:
+            return 0
+
+        if prop_count >= 3:
+            score += 8
+        elif prop_count >= 2:
+            score += 5
+        elif prop_count >= 1:
+            score += 3
+
+        ical_feeds = s.get("ical_feeds", s.get("ical_urls", []))
+        if len(ical_feeds) > 0:
+            score += 4
+
+        if u.get("username"):
+            score += 3
+
+        manual = s.get("manual_income", {})
+        prop_inc = s.get("property_income", {})
+        has_manual = any(
+            isinstance(v, dict) and any(v.values()) for v in manual.values()
+        ) if isinstance(manual, dict) else bool(manual)
+        has_prop_inc = any(
+            isinstance(v, dict) and any(v.values()) for v in prop_inc.values()
+        ) if isinstance(prop_inc, dict) else bool(prop_inc)
+        if has_manual or has_prop_inc:
+            score += 5
+
+        # ── 2. Plaid Integration (20 pts) ──
+        accounts = s.get("accounts", [])
+        plaid_linked = len(accounts) > 0
+        if plaid_linked:
+            score += 8
+        tx_store = s.get("transactions", {})
+        plaid_total = sum(abs(float(t.get("amount", 0))) for t in tx_store.values())
+        manual_total = 0.0
+        if isinstance(manual, dict):
+            for _k, months in manual.items():
+                if isinstance(months, dict):
+                    for _m, val in months.items():
+                        manual_total += abs(float(val)) if val else 0
+                elif months:
+                    manual_total += abs(float(months))
+        data_total = plaid_total + manual_total
+        if data_total > 0:
+            plaid_pct = plaid_total / data_total
+            score += round(plaid_pct * 12, 1)
+        elif plaid_linked:
+            score += 12
+
+        # ── 3. Financial Health (35 pts) ──
+        tags = s.get("tags", {})
+        # Collect monthly revenue/expense data
+        monthly_rev = {}
+        monthly_exp = {}
+        for tx_id, tx in tx_store.items():
+            month_key = (tx.get("date") or "")[:7]
+            if not month_key or tx.get("pending"):
+                continue
+            prop_id = tags.get(tx_id)
+            if not prop_id or prop_id in ("deleted", "transfer"):
+                continue
+            amount = abs(tx.get("amount", 0))
+            tx_type = tx.get("type", "out")
+            if tx_type == "in":
+                monthly_rev[month_key] = monthly_rev.get(month_key, 0) + amount
+            else:
+                monthly_exp[month_key] = monthly_exp.get(month_key, 0) + amount
+
+        # Add manual income months
+        if isinstance(manual, dict):
+            for month_key, val in manual.items():
+                if val and isinstance(val, (int, float, str)):
+                    try:
+                        monthly_rev[month_key] = monthly_rev.get(month_key, 0) + abs(float(val))
+                    except (ValueError, TypeError):
+                        pass
+
+        total_rev = sum(monthly_rev.values())
+        total_exp = sum(monthly_exp.values())
+
+        # Has any revenue (5 pts)
+        if total_rev > 0:
+            score += 5
+
+        # Positive net income margin (0-10 pts)
+        if total_rev > 0:
+            net_margin = (total_rev - total_exp) / total_rev
+            if net_margin > 0:
+                score += min(10, round(net_margin * 20, 1))
+
+        # Revenue consistency — months with data (0-10 pts)
+        months_with_data = len(monthly_rev)
+        if months_with_data >= 6:
+            score += 10
+        elif months_with_data >= 3:
+            score += 7
+        elif months_with_data >= 1:
+            score += 3
+
+        # Expense tracking active (0-5 pts)
+        tagged_expenses = sum(1 for tid in tags if tags[tid] not in ("deleted", "transfer") and tx_store.get(tid, {}).get("type", "out") != "in")
+        if tagged_expenses >= 10:
+            score += 5
+        elif tagged_expenses >= 3:
+            score += 3
+        elif tagged_expenses >= 1:
+            score += 1
+
+        # Revenue trend (0-5 pts) — compare recent vs older months
+        sorted_months = sorted(monthly_rev.keys())
+        if len(sorted_months) >= 2:
+            mid = len(sorted_months) // 2
+            older_avg = sum(monthly_rev[m] for m in sorted_months[:mid]) / mid
+            newer_avg = sum(monthly_rev[m] for m in sorted_months[mid:]) / (len(sorted_months) - mid)
+            if older_avg > 0:
+                growth = (newer_avg - older_avg) / older_avg
+                if growth >= 0:
+                    score += min(5, round(growth * 10, 1))
+                else:
+                    score += max(0, 2 + round(growth * 5, 1))
+
+        # ── 4. Portfolio Depth (25 pts) ──
+        total_units = sum(p.get("units", 0) for p in props)
+        if total_units >= 10:
+            score += 10
+        elif total_units >= 5:
+            score += 6
+        elif total_units >= 1:
+            score += 3
+
+        settings = s.get("settings", {})
+        units_per_year = settings.get("unitsPerYear") or u.get("unitsPerYear", 0)
+        if units_per_year and int(units_per_year) > 0:
+            score += 5
+
+        total_investment = settings.get("totalInvestment") or u.get("totalInvestment", 0)
+        if total_investment and float(total_investment) > 0:
+            score += 5
+
+        proj_style = settings.get("projectionStyle") or u.get("projectionStyle")
+        if proj_style:
+            score += 5
+
+        return min(100, max(0, round(score)))
+    except Exception:
+        logger.warning("Failed to compute portfolio score for %s", user_id)
+        return None
+
+
+@app.route("/api/portfolio-score", methods=["GET"])
+def get_portfolio_score():
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    score = _compute_portfolio_score(uid)
+    return jsonify({"score": score})
+
 
 @app.route("/api/users/profile/<user_id>", methods=["GET"])
 def users_profile(user_id):
     users = load_users()
-    for email, u in users.items():
-        if u["id"] == user_id:
-            prop_count = 0
-            try:
-                s = _load_store_for_user(user_id)
-                prop_count = len(s.get("properties", []))
-            except:
-                pass
-            return jsonify({
-                "user_id": u["id"],
-                "username": u.get("username", email.split("@")[0]),
-                "role": u.get("role", "owner"),
-                "property_count": prop_count,
-                "follow_code": u.get("follow_code", ""),
-            })
-    return jsonify({"ok": False, "error": "User not found"}), 404
+    email, u = _find_user_by_id(users, user_id)
+    if not u:
+        return jsonify({"ok": False, "error": "User not found"}), 404
+    prop_count = 0
+    plaid_verified_pct = None
+    portfolio_score = None
+    try:
+        s = _load_store_for_user(user_id)
+        props = s.get("custom_props", s.get("properties", []))
+        prop_count = len(props)
+        # Compute Plaid verification percentage
+        plaid_linked = len(s.get("accounts", [])) > 0
+        tx_store = s.get("transactions", {})
+        plaid_total = sum(abs(float(t.get("amount", 0))) for t in tx_store.values())
+        manual = s.get("manual_income", {})
+        manual_total = 0.0
+        for _prop_id, months in manual.items():
+            if isinstance(months, dict):
+                for _month, val in months.items():
+                    manual_total += abs(float(val)) if val else 0
+        total = plaid_total + manual_total
+        if total > 0:
+            plaid_verified_pct = round(plaid_total / total * 100)
+        elif plaid_linked:
+            plaid_verified_pct = 100  # Has Plaid but no transactions yet
+        # Portfolio score for non-cleaner users
+        if u.get("role", "owner") != "cleaner":
+            portfolio_score = _compute_portfolio_score(user_id, s)
+    except Exception:
+        logger.warning("Failed to load store for user %s", user_id)
+    # Cleaner rating
+    avg_rating = None
+    rating_count = 0
+    try:
+        ratings = _load_ratings()
+        reviews = ratings.get(user_id, {}).get("reviews", [])
+        if reviews:
+            avg_rating = round(sum(r["rating"] for r in reviews) / len(reviews), 1)
+            rating_count = len(reviews)
+    except Exception:
+        pass
+    result = {
+        "user_id": u["id"],
+        "username": u.get("username", (email or "").split("@")[0]),
+        "role": u.get("role", "owner"),
+        "property_count": prop_count,
+        "is_private": u.get("is_private", False),
+        "plaid_verified_pct": plaid_verified_pct,
+        "portfolio_score": portfolio_score,
+        "avg_rating": avg_rating,
+        "rating_count": rating_count,
+    }
+    # Only show follow_code to the profile owner
+    if getattr(g, 'user_id', None) == user_id:
+        result["follow_code"] = u.get("follow_code", "")
+    return jsonify(result)
 
 # ── Feed endpoint ────────────────────────────────────────────
 @app.route("/api/feed", methods=["GET"])
@@ -5968,12 +5910,16 @@ def get_feed():
 
     feed = []
     for fuid in following_ids:
-        # Get username
+        # Get username + role
         uname = ""
+        urole = "owner"
         for email, u in users.items():
             if u["id"] == fuid:
                 uname = u.get("username", email.split("@")[0])
+                urole = u.get("role", "owner")
                 break
+
+        p_score = _compute_portfolio_score(fuid) if urole != "cleaner" else None
 
         # Get their notifications (milestones, financial)
         notifs = _load_json_file(NOTIFICATIONS_FILE)
@@ -5984,6 +5930,8 @@ def get_feed():
                     "id": n["id"],
                     "user_id": fuid,
                     "username": uname,
+                    "role": urole,
+                    "portfolio_score": p_score,
                     "type": n["type"],
                     "title": n["title"],
                     "body": n["body"],
@@ -6026,10 +5974,15 @@ def cleaner_schedule():
             owner_props = owner_store.get("properties", [])
             prop_labels = {p.get("id", ""): p.get("label", p.get("id", "")) for p in owner_props}
 
+            short_names = owner_store.get("pricelabs_short_names", {})
+
             for ev in owner_events:
                 prop_id = ev.get("prop_id", "")
                 if selected_props and prop_id not in selected_props:
                     continue
+                feed_key = ev.get("feed_key", "")
+                pl_id = ev.get("pl_id", "")
+                unit_name = short_names.get(pl_id, "") if pl_id else ""
                 events.append({
                     "check_in": ev.get("check_in") or ev.get("start", ""),
                     "check_out": ev.get("check_out") or ev.get("end", ""),
@@ -6038,9 +5991,12 @@ def cleaner_schedule():
                     "owner": owner_name,
                     "owner_id": owner_id,
                     "uid": ev.get("uid", ""),
+                    "feed_key": feed_key,
+                    "unit_name": unit_name,
+                    "guest_name": ev.get("guest_name", ev.get("summary", "")),
                 })
         except Exception as e:
-            print(f"Error loading schedule for owner {owner_id}: {e}")
+            logger.error("Error loading schedule for owner %s: %s", owner_id, e)
 
     events.sort(key=lambda x: x.get("check_out", ""))
     return jsonify({"events": events})
@@ -6062,19 +6018,73 @@ def cleaner_owner_properties(owner_id):
     try:
         owner_store = _load_store_for_user(owner_id)
         props = owner_store.get("properties", [])
-        return jsonify({"properties": [{"id": p.get("id",""), "label": p.get("label", p.get("id",""))} for p in props]})
-    except:
+        feeds = owner_store.get("ical_urls", [])
+        if isinstance(feeds, dict):
+            feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
+        feed_prop_ids = set(f.get("propId", "") for f in feeds)
+        # Only return properties with at least one iCal feed
+        result = [{"id": p.get("id",""), "label": p.get("label", p.get("id",""))}
+                  for p in props if p.get("id","") in feed_prop_ids]
+        return jsonify({"properties": result})
+    except Exception:
+        logger.warning("Failed to load owner store for %s", owner_id)
+        return jsonify({"properties": []})
+
+@app.route("/api/cleaner/owner-units/<owner_id>", methods=["GET"])
+def cleaner_owner_units(owner_id):
+    """Returns properties with per-unit breakdown (one unit per iCal feed URL)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    follows = _load_json_file(FOLLOWS_FILE)
+    has_follow = False
+    for fid, f in follows.items():
+        if f["follower_id"] == uid and f["following_id"] == owner_id and f["status"] == "approved":
+            has_follow = True
+            break
+    if not has_follow:
+        return jsonify({"ok": False, "error": "Not following this owner"}), 403
+    try:
+        owner_store = _load_store_for_user(owner_id)
+        props = owner_store.get("properties", [])
+        feeds = owner_store.get("ical_urls", [])
+        if isinstance(feeds, dict):
+            feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
+        short_names = owner_store.get("pricelabs_short_names", {})
+
+        result = []
+        for p in props:
+            pid = p.get("id", "")
+            plabel = p.get("label", p.get("id", ""))
+            # Find all iCal feeds for this property
+            prop_feeds = [f for f in feeds if f.get("propId", "") == pid]
+            units = []
+            for f in prop_feeds:
+                url = f.get("url", "")
+                fk = _ical_feed_key(url) if url else ""
+                pl_id = _airbnb_listing_id(url) if url else None
+                uname = short_names.get(pl_id, f.get("listingName", "")) if pl_id else f.get("listingName", "")
+                if not uname:
+                    uname = plabel
+                units.append({"feed_key": fk, "unit_name": uname})
+            # If no feeds, still include the property with an empty unit
+            if not units:
+                units.append({"feed_key": "", "unit_name": plabel})
+            result.append({"prop_id": pid, "prop_label": plabel, "units": units})
+        return jsonify({"properties": result})
+    except Exception as e:
+        logger.warning("Failed to load owner units for %s: %s", owner_id, e)
         return jsonify({"properties": []})
 
 
 # ── Daily sync scheduler ──────────────────────────────────────
 def scheduled_sync():
-    print("⏰ Scheduled daily sync starting...")
+    logger.info("Scheduled daily sync starting...")
     try:
         result = run_sync()
-        print(f"✅ Scheduled sync complete — {result.get('total_stored', 0)} transactions stored")
+        logger.info("Scheduled sync complete — %s transactions stored", result.get('total_stored', 0))
     except Exception as e:
-        print(f"❌ Scheduled sync failed: {e}")
+        logger.error("Scheduled sync failed: %s", e)
 
 scheduler = BackgroundScheduler(daemon=True)
 # Plaid fallback sync every 6 hours
@@ -6087,11 +6097,19 @@ def _bg_ical_sync():
         existing[e["uid"]] = e
     store["ical_events"] = list(existing.values())
     save_store(store)
-    print(f"iCal bg sync done — {len(store['ical_events'])} total events stored")
+    # Invalidate caches after iCal sync
+    _invalidate_cache("portfolio")
+    _invalidate_cache("ical_events")
+    logger.info("iCal bg sync done — %s total events stored", len(store['ical_events']))
 
 scheduler.add_job(_bg_ical_sync, IntervalTrigger(hours=6), id='ical_sync', replace_existing=True)
+# Phase 3: periodic rate limit cleanup
+scheduler.add_job(_cleanup_rate_buckets, IntervalTrigger(minutes=30), id='rate_limit_cleanup', replace_existing=True)
 scheduler.start()
-print("⏰ Scheduler started: Plaid + Gmail syncs every 6 hours")
+logger.info("Scheduler started: Plaid + iCal syncs every 6 hours")
+
+# Phase 1: warm token cache on startup
+_warm_token_cache()
 
 # ── Startup sync ──────────────────────────────────────────────────────────
 
@@ -6101,18 +6119,18 @@ def startup_sync():
     accounts = store.get("accounts", [])
     tx_count = len(store.get("transactions", {}))
     if not accounts:
-        print("🚀 Startup: no accounts linked — skipping sync")
+        logger.info("Startup: no accounts linked — skipping sync")
         return
-    print(f"🚀 Startup: {len(accounts)} account(s) linked, {tx_count} transactions cached — syncing…")
+    logger.info("Startup: %s account(s) linked, %s transactions cached — syncing…", len(accounts), tx_count)
     try:
         result = run_sync()
-        print(f"✅ Startup sync done: {result.get('total', 0)} new, "
-              f"{result.get('total_stored', 0)} total stored")
+        logger.info("Startup sync done: %s new, %s total stored",
+              result.get('total', 0), result.get('total_stored', 0))
     except Exception as e:
-        print(f"❌ Startup sync failed: {e}")
+        logger.error("Startup sync failed: %s", e)
 
 threading.Thread(target=startup_sync, daemon=True).start()
-print("🚀 Startup sync scheduled (runs in background after 4s)")
+logger.info("Startup sync scheduled (runs in background after 4s)")
 
 
 def startup_pl_ical():
@@ -6169,11 +6187,11 @@ def startup_pl_ical():
             store["pricelabs_short_names"]         = name_by_plid
             store["pricelabs_listings_raw"]        = result
             save_store(store)
-            print(f"🏷️  Startup PriceLabs refresh: {len(result)} listings, canonical names stored")
+            logger.info("Startup PriceLabs refresh: %s listings, canonical names stored", len(result))
         except Exception as e:
-            print(f"⚠️  Startup PriceLabs refresh failed (non-fatal): {e}")
+            logger.error("Startup PriceLabs refresh failed (non-fatal): %s", e)
     else:
-        print("ℹ️  No PriceLabs API key — skipping startup PL refresh")
+        logger.info("ℹ No PriceLabs API key — skipping startup PL refresh")
 
     # Always re-sync iCal so events get tagged with feed_key
     try:
@@ -6184,36 +6202,30 @@ def startup_pl_ical():
             existing[e["uid"]] = e
         store["ical_events"] = list(existing.values())
         save_store(store)
-        print(f"📅 Startup iCal re-sync: {len(store['ical_events'])} total events (feed_key tagged)")
+        logger.info("Startup iCal re-sync: %s total events (feed_key tagged)", len(store['ical_events']))
     except Exception as e:
-        print(f"⚠️  Startup iCal sync failed: {e}")
+        logger.error("Startup iCal sync failed: %s", e)
 
 
 threading.Thread(target=startup_pl_ical, daemon=True).start()
-print("🔄 Startup PriceLabs+iCal refresh scheduled (8s)")
+logger.info("Startup PriceLabs+iCal refresh scheduled (8s)")
 
 # ── /cleaner — Public turnover page for cleaning crew ─────────────────────────
 
-_CLEANER_FEEDS = [
-    {"name": "Lockwood 1", "url": "https://www.airbnb.com/calendar/ical/1544826815980232108.ics?t=7f3a5a6f869048e985e7b1a5a6f84ee0&locale=en"},
-    {"name": "Lockwood 2", "url": "https://www.airbnb.com/calendar/ical/1523546771998151986.ics?t=72b2cf50c3cc42aeb1a5ecdb783604a6&locale=en"},
-    {"name": "Lockwood 3", "url": "https://www.airbnb.com/calendar/ical/1546750681335776815.ics?t=40fde5a666ed4ab8a0a9cc40b2d73caa&locale=en"},
-    {"name": "Lockwood 4", "url": "https://www.airbnb.com/calendar/ical/1523560635012518611.ics?t=0d9e5ac5e6fd4099ba53e1dc6bc18e8a&locale=en"},
-]
 _CLEANER_CACHE = {"data": None, "ts": 0}
 _CLEANER_LOCK  = threading.Lock()
 _CLEANER_TTL   = 1800  # 30 minutes
 
 
 def _get_cleaner_feeds():
-    """Return active feeds from store, falling back to hardcoded defaults."""
+    """Return active feeds from store, or empty list if none configured."""
     try:
         stored = load_store().get("cleaner_feeds")
         if stored and isinstance(stored, list) and len(stored) > 0:
             return stored
     except Exception:
         pass
-    return _CLEANER_FEEDS   # first-run default
+    return []
 
 
 def _fetch_cleaner_data():
@@ -6224,9 +6236,12 @@ def _fetch_cleaner_data():
     today_d = date.today()
     cutoff  = today_d + timedelta(days=60)
     for feed in _get_cleaner_feeds():
+        if not _is_safe_url(feed.get("url", "")):
+            logger.warning("Cleaner: blocked unsafe URL for %s", feed.get('name'))
+            continue
         try:
             req = urllib.request.Request(
-                feed["url"], headers={"User-Agent": "PropertyPigeon/1.0"})
+                feed["url"], headers={"User-Agent": "PortfolioPigeon/1.0"})
             with urllib.request.urlopen(req, timeout=15) as r:
                 ics_text = r.read().decode("utf-8", errors="replace")
             bookings = _parse_ics(ics_text, prop_id="cleaner", feed_key="")
@@ -6257,7 +6272,7 @@ def _fetch_cleaner_data():
                         "nights": nights, "time": "3:00 PM",
                     })
         except Exception as e:
-            print(f"⚠️  Cleaner iCal fetch failed for {feed['name']}: {e}")
+            logger.error("Cleaner iCal fetch failed for %s: %s", feed['name'], e)
     return events_out
 
 
@@ -6295,8 +6310,17 @@ def cleaner_feeds_post():
     for f in feeds:
         name = str(f.get("name", "")).strip()
         url  = str(f.get("url",  "")).strip()
-        if name and url:
-            clean.append({"name": name, "url": url})
+        if not name:
+            continue
+        entry = {"name": name, "url": url if url and _is_safe_url(url) else ""}
+        # Store optional user search fields
+        if f.get("user_id"):
+            entry["user_id"] = str(f["user_id"])
+        if f.get("username"):
+            entry["username"] = str(f["username"])
+        if f.get("propId"):
+            entry["propId"] = str(f["propId"])
+        clean.append(entry)
     store = load_store()
     store["cleaner_feeds"] = clean
     save_store(store)
@@ -6322,12 +6346,12 @@ def _save_ratings(data):
         with open(RATINGS_FILE, "w") as f:
             json.dump(data, f)
     except Exception as e:
-        print(f"Failed to save ratings: {e}")
+        logger.error("Failed to save ratings: %s", e)
 
 
 @app.route("/api/cleaner/rate", methods=["POST"])
 def rate_cleaner():
-    """Host rates a cleaner 1-5. Requires >= 10 cleanings with that cleaner."""
+    """Host rates a cleaner 1-5. Rolling: allowed every 10 new cleanings."""
     uid = getattr(g, "user_id", None)
     if not uid:
         return jsonify({"error": "Authentication required"}), 401
@@ -6338,34 +6362,46 @@ def rate_cleaner():
         return jsonify({"error": "cleaner_id and rating (1-5) required"}), 400
     rating = round(rating)
 
-    # Check minimum cleanings threshold (10)
+    now_str = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
     store = load_store()
     schedule = store.get("cleaner_schedule", [])
-    cleaning_count = sum(
-        1 for ev in schedule
-        if ev.get("cleaner_id") == cleaner_id
-        and ev.get("check_out", "") <= _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
-    )
-    if cleaning_count < 10:
-        return jsonify({
-            "error": f"You need at least 10 completed cleanings to rate this cleaner ({cleaning_count}/10)",
-            "cleaning_count": cleaning_count,
-        }), 403
 
-    # Store rating anonymously
+    # Find last rating timestamp from this host for this cleaner
     ratings = _load_ratings()
     if cleaner_id not in ratings:
         ratings[cleaner_id] = {"reviews": [], "pending_notifications": []}
-    # Prevent duplicate ratings from same host
     existing = next((r for r in ratings[cleaner_id]["reviews"] if r.get("host_id") == uid), None)
+    last_rated_at = None
+    if existing:
+        last_rated_at = existing.get("updated_at") or existing.get("created_at")
+
+    # Count cleanings completed after last rating (or all if no prior rating)
+    cleaning_count = 0
+    for ev in schedule:
+        if ev.get("cleaner_id") != cleaner_id:
+            continue
+        co = ev.get("check_out", "")
+        if co > now_str:
+            continue  # Not yet completed
+        if last_rated_at and co <= last_rated_at:
+            continue  # Before last rating
+        cleaning_count += 1
+
+    if cleaning_count < 10:
+        return jsonify({
+            "error": f"You need 10 new cleanings since your last rating to rate again ({cleaning_count}/10)",
+            "cleaning_count": cleaning_count,
+        }), 403
+
+    # Store/update rating
     if existing:
         existing["rating"] = rating
-        existing["updated_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        existing["updated_at"] = now_str
     else:
         ratings[cleaner_id]["reviews"].append({
             "host_id": uid,
             "rating": rating,
-            "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            "created_at": now_str,
         })
     # Schedule delayed notification (24-48 hour random delay)
     import random
@@ -6410,6 +6446,214 @@ def cleaner_rating_notifications():
         ratings[uid] = entry
         _save_ratings(ratings)
     return jsonify({"new_ratings": len(matured)})
+
+# ── Cleaner invoice CRUD ─────────────────────────────────────
+_INV_DIR = os.path.join("/data" if os.path.isdir("/data") else ".", "invoices")
+os.makedirs(_INV_DIR, exist_ok=True)
+
+def _inv_file(user_id):
+    return os.path.join(_INV_DIR, f"invoices_{user_id}.json")
+
+def _load_invoices(user_id):
+    try:
+        with open(_inv_file(user_id), "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _save_invoices(user_id, invoices):
+    with open(_inv_file(user_id), "w") as f:
+        json.dump(invoices, f)
+
+@app.route("/api/cleaner/invoices", methods=["GET"])
+def cleaner_invoices_get():
+    uid = g.user_id
+    return jsonify({"invoices": _load_invoices(uid)})
+
+@app.route("/api/cleaner/invoiced-uids", methods=["GET"])
+def cleaner_invoiced_uids():
+    """Returns all event UIDs across all invoices for this cleaner."""
+    uid = g.user_id
+    invoices = _load_invoices(uid)
+    uids = []
+    for inv in invoices:
+        uids.extend(inv.get("event_uids", []))
+    return jsonify({"uids": list(set(uids))})
+
+@app.route("/api/cleaner/invoices", methods=["POST"])
+def cleaner_invoices_create():
+    uid = g.user_id
+    body = request.get_json(force=True) or {}
+    event_uids = body.get("event_uids", [])
+
+    # Validate no double-invoicing: check submitted UIDs against existing invoices
+    if event_uids:
+        existing_invoices = _load_invoices(uid)
+        existing_uids = set()
+        for inv in existing_invoices:
+            for u in inv.get("event_uids", []):
+                existing_uids.add(u)
+        overlap = set(event_uids) & existing_uids
+        if overlap:
+            return jsonify({"error": "Some cleanings have already been invoiced", "overlapping_uids": list(overlap)}), 409
+
+    invoice = {
+        "id": "inv_" + secrets.token_hex(6),
+        "hostId": body.get("hostId", ""),
+        "hostName": body.get("hostName", ""),
+        "period": body.get("period", ""),
+        "lineItems": body.get("lineItems", []),
+        "total": body.get("total", 0),
+        "status": body.get("status", "draft"),
+        "createdAt": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "cleanerId": uid,
+        "event_uids": event_uids,
+    }
+    invoices = _load_invoices(uid)
+    invoices.insert(0, invoice)
+    _save_invoices(uid, invoices)
+    return jsonify({"invoice": invoice})
+
+@app.route("/api/cleaner/invoices/update", methods=["PUT"])
+def cleaner_invoices_update():
+    uid = g.user_id
+    body = request.get_json(force=True) or {}
+    invoice_id = body.get("invoice_id", "")
+    invoices = _load_invoices(uid)
+    for inv in invoices:
+        if inv["id"] == invoice_id and inv.get("status") == "draft":
+            inv["lineItems"] = body.get("line_items", inv["lineItems"])
+            inv["total"] = body.get("total", inv["total"])
+            _save_invoices(uid, invoices)
+            return jsonify({"ok": True, "invoice": inv})
+    return jsonify({"error": "Invoice not found or not editable"}), 404
+
+@app.route("/api/cleaner/invoices/delete", methods=["DELETE"])
+def cleaner_invoices_delete():
+    uid = g.user_id
+    body = request.get_json(force=True) or {}
+    invoice_id = body.get("invoice_id", "")
+    invoices = _load_invoices(uid)
+    original_len = len(invoices)
+    invoices = [inv for inv in invoices if inv["id"] != invoice_id]
+    if len(invoices) == original_len:
+        return jsonify({"error": "Invoice not found"}), 404
+    _save_invoices(uid, invoices)
+    return jsonify({"ok": True})
+
+def _received_inv_file(user_id):
+    return os.path.join(_INV_DIR, f"received_invoices_{user_id}.json")
+
+def _load_received_invoices(user_id):
+    try:
+        with open(_received_inv_file(user_id), "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _save_received_invoices(user_id, invoices):
+    with open(_received_inv_file(user_id), "w") as f:
+        json.dump(invoices, f)
+
+@app.route("/api/cleaner/invoices/send", methods=["POST"])
+def cleaner_invoices_send():
+    uid = g.user_id
+    body = request.get_json(force=True) or {}
+    invoice_id = body.get("invoice_id", "")
+    invoices = _load_invoices(uid)
+    for inv in invoices:
+        if inv["id"] == invoice_id and inv.get("status") == "draft":
+            inv["status"] = "sent"
+            inv["sentAt"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+            _save_invoices(uid, invoices)
+
+            # Copy invoice to host's received invoices
+            host_id = inv.get("hostId")
+            if host_id:
+                users = load_users()
+                cleaner_name = ""
+                for email, u in users.items():
+                    if u["id"] == uid:
+                        cleaner_name = u.get("username") or email.split("@")[0]
+                        break
+
+                # Save copy to host's received_invoices store
+                host_copy = {**inv, "cleanerName": cleaner_name, "cleanerId": uid}
+                received = _load_received_invoices(host_id)
+                received.insert(0, host_copy)
+                _save_received_invoices(host_id, received)
+
+                # Notify host (in-app + push)
+                _store_notification(host_id, "invoice",
+                    "Invoice Received",
+                    f"{cleaner_name} sent you an invoice for {inv.get('period', 'recent cleanings')}: ${inv.get('total', 0):.2f}")
+                tokens = _get_user_push_tokens(host_id)
+                if tokens:
+                    _send_push(tokens, "Invoice Received",
+                        f"{cleaner_name} sent you an invoice for ${inv.get('total', 0):.2f}")
+            return jsonify({"ok": True})
+    return jsonify({"error": "Invoice not found or already sent"}), 404
+
+# ── Host invoice endpoints ───────────────────────────────────
+
+@app.route("/api/host/invoices", methods=["GET"])
+def host_invoices_get():
+    """Returns invoices received by the authenticated host user."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+    return jsonify({"invoices": _load_received_invoices(uid)})
+
+@app.route("/api/host/invoices/mark-paid", methods=["POST"])
+def host_invoices_mark_paid():
+    """Host marks an invoice as paid."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+    body = request.get_json(force=True) or {}
+    invoice_id = body.get("invoice_id", "")
+    received = _load_received_invoices(uid)
+    found = False
+    for inv in received:
+        if inv["id"] == invoice_id:
+            inv["status"] = "paid"
+            inv["paidAt"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+            found = True
+            break
+    if not found:
+        return jsonify({"error": "Invoice not found"}), 404
+    _save_received_invoices(uid, received)
+
+    # Also update the cleaner's copy
+    cleaner_id = None
+    for inv in received:
+        if inv["id"] == invoice_id:
+            cleaner_id = inv.get("cleanerId")
+            break
+    if cleaner_id:
+        cleaner_invoices = _load_invoices(cleaner_id)
+        for inv in cleaner_invoices:
+            if inv["id"] == invoice_id:
+                inv["status"] = "paid"
+                inv["paidAt"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+                break
+        _save_invoices(cleaner_id, cleaner_invoices)
+        # Notify cleaner
+        users = load_users()
+        host_name = ""
+        for email, u in users.items():
+            if u["id"] == uid:
+                host_name = u.get("username") or email.split("@")[0]
+                break
+        _store_notification(cleaner_id, "invoice",
+            "Invoice Paid",
+            f"{host_name} marked your invoice as paid")
+        tokens = _get_user_push_tokens(cleaner_id)
+        if tokens:
+            _send_push(tokens, "Invoice Paid",
+                f"{host_name} marked your invoice as paid")
+
+    return jsonify({"ok": True})
 
 
 _CLEANER_HTML = r"""<!DOCTYPE html>
@@ -6723,6 +6967,1155 @@ def cleaner_page():
     resp.headers["Content-Type"]  = "text/html; charset=utf-8"
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
+
+
+
+# ────────────────────────────────────────────────────────────
+#  MESSAGING
+# ────────────────────────────────────────────────────────────
+
+import uuid as _uuid
+from datetime import datetime as _dt_msg
+
+MESSAGES_DIR = os.path.join("/data" if os.path.isdir("/data") else ".", "messages")
+os.makedirs(MESSAGES_DIR, exist_ok=True)
+
+MESSAGE_FILES_DIR = os.path.join("/data" if os.path.isdir("/data") else ".", "message_files")
+os.makedirs(MESSAGE_FILES_DIR, exist_ok=True)
+ALLOWED_MEDIA_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.heic', '.webp',
+                            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.zip'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+def _conv_id(uid1, uid2):
+    """Deterministic conversation ID from two user IDs."""
+    return "_".join(sorted([uid1, uid2]))
+
+def _conv_path(conv_id):
+    return os.path.join(MESSAGES_DIR, f"{conv_id}.json")
+
+def _load_conv(conv_id):
+    path = _conv_path(conv_id)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return None
+
+def _save_conv(conv_id, data):
+    path = _conv_path(conv_id)
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+def _get_username(user_id):
+    """Look up username for a user_id."""
+    # Check auth users first (canonical source of usernames)
+    try:
+        users = load_users()
+        for email, u in users.items():
+            if u.get("id") == user_id:
+                uname = u.get("username")
+                if uname:
+                    return uname
+                return email.split("@")[0]
+    except Exception:
+        pass
+    # Fallback to store profile
+    try:
+        store = _load_store_for_user(user_id)
+        return store.get("profile", {}).get("username", user_id[:8])
+    except Exception:
+        return user_id[:8]
+
+def _get_linked_properties(uid, other_id):
+    """Get property names linked between two users via cleaner follow."""
+    try:
+        follows = _load_json_file(FOLLOWS_FILE)
+        for fid, f in follows.items():
+            if f.get("type") != "cleaner" or f.get("status") != "approved":
+                continue
+            # Check both directions
+            if (f["follower_id"] == other_id and f["following_id"] == uid) or \
+               (f["follower_id"] == uid and f["following_id"] == other_id):
+                owner_id = f["following_id"]
+                selected = f.get("selected_properties", [])
+                if not selected:
+                    return []
+                owner_store = _load_store_for_user(owner_id)
+                props = owner_store.get("properties", [])
+                return [p.get("label", p.get("id", "")) for p in props
+                        if p.get("id") in selected]
+    except Exception:
+        pass
+    return []
+
+
+@app.route("/api/messages/cleanings/<other_user_id>", methods=["GET"])
+def messages_cleanings(other_user_id):
+    """Get upcoming cleanings for properties linked between current user and other user."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    follows = _load_json_file(FOLLOWS_FILE)
+    users = load_users()
+    from datetime import datetime as _dt_clean
+    today = _dt_clean.utcnow().strftime("%Y-%m-%d")
+    events = []
+    for fid, f in follows.items():
+        if f.get("type") != "cleaner" or f.get("status") != "approved":
+            continue
+        # Match: one is follower (cleaner), other is following (owner)
+        if not ((f["follower_id"] == uid and f["following_id"] == other_user_id) or
+                (f["follower_id"] == other_user_id and f["following_id"] == uid)):
+            continue
+        owner_id = f["following_id"]
+        selected_props = f.get("selected_properties", [])
+        owner_name = ""
+        for email, u in users.items():
+            if u["id"] == owner_id:
+                owner_name = u.get("username", email.split("@")[0])
+                break
+        try:
+            owner_store = _load_store_for_user(owner_id)
+            owner_events = owner_store.get("ical_events", [])
+            owner_props = owner_store.get("properties", [])
+            prop_labels = {p.get("id", ""): p.get("label", p.get("id", "")) for p in owner_props}
+            short_names = owner_store.get("pricelabs_short_names", {})
+            for ev in owner_events:
+                prop_id = ev.get("prop_id", "")
+                if selected_props and prop_id not in selected_props:
+                    continue
+                check_out = ev.get("check_out") or ev.get("end", "")
+                if check_out < today:
+                    continue
+                pl_id = ev.get("pl_id", "")
+                unit_name = short_names.get(pl_id, "") if pl_id else ""
+                events.append({
+                    "check_in": ev.get("check_in") or ev.get("start", ""),
+                    "check_out": check_out,
+                    "prop_id": prop_id,
+                    "prop_name": prop_labels.get(prop_id, prop_id),
+                    "unit_name": unit_name,
+                    "guest_name": ev.get("guest_name", ev.get("summary", "")),
+                })
+        except Exception:
+            pass
+    events.sort(key=lambda x: x.get("check_out", ""))
+    return jsonify({"events": events})
+
+
+@app.route("/api/messages/upload", methods=["POST"])
+def messages_upload():
+    """Upload a file for messaging."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({"error": "No filename"}), 400
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in ALLOWED_MEDIA_EXTENSIONS:
+        return jsonify({"error": f"File type {ext} not allowed"}), 400
+    # Check size
+    f.seek(0, 2)
+    size = f.tell()
+    f.seek(0)
+    if size > MAX_FILE_SIZE:
+        return jsonify({"error": "File too large (max 10MB)"}), 400
+    file_id = str(_uuid.uuid4())
+    saved_name = file_id + ext
+    save_path = os.path.join(MESSAGE_FILES_DIR, saved_name)
+    f.save(save_path)
+    import mimetypes
+    mime = mimetypes.guess_type(f.filename)[0] or "application/octet-stream"
+    is_image = mime.startswith("image/")
+    return jsonify({
+        "file_id": file_id,
+        "filename": f.filename,
+        "file_url": f"/api/messages/files/{saved_name}",
+        "mime_type": mime,
+        "size": size,
+        "is_image": is_image,
+    })
+
+
+@app.route("/api/messages/files/<filename>", methods=["GET"])
+def messages_file_serve(filename):
+    """Serve uploaded message files."""
+    safe = os.path.basename(filename)
+    path = os.path.join(MESSAGE_FILES_DIR, safe)
+    if not os.path.exists(path):
+        return jsonify({"error": "File not found"}), 404
+    return send_file(path)
+
+
+@app.route("/api/messages/conversations", methods=["GET"])
+def messages_conversations():
+    """List all conversations for the current user."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    convos = []
+    users = load_users()
+    if os.path.exists(MESSAGES_DIR):
+        for fname in os.listdir(MESSAGES_DIR):
+            if not fname.endswith(".json"):
+                continue
+            conv_id = fname[:-5]
+            data = _load_conv(conv_id)
+            if not data or not data.get("messages"):
+                continue
+            participants = data.get("participants", [])
+            if uid not in participants:
+                continue
+            msgs = data["messages"]
+            last_msg = msgs[-1]
+            is_group = data.get("is_group", False)
+
+            if is_group:
+                # Group conversation
+                unread = sum(1 for m in msgs if m["sender_id"] != uid and uid not in m.get("read_by", []))
+                last_msg_out = {
+                    "text": last_msg["text"],
+                    "timestamp": last_msg["timestamp"],
+                    "sender_id": last_msg["sender_id"],
+                    "sender_name": last_msg.get("sender_name", ""),
+                    "has_attachments": bool(last_msg.get("attachments")),
+                }
+                convos.append({
+                    "id": conv_id,
+                    "is_group": True,
+                    "group_name": data.get("group_name", "Group Chat"),
+                    "participant_count": len(participants),
+                    "last_message": last_msg_out,
+                    "unread_count": unread,
+                    "updated_at": last_msg["timestamp"],
+                })
+            else:
+                # 1:1 conversation — use participants array (not conv_id split)
+                others = [p for p in participants if p != uid]
+                other_id = others[0] if others else conv_id.replace(uid, "").strip("_")
+                unread = sum(1 for m in msgs if m["sender_id"] != uid and not m.get("read", False))
+                other_role = "owner"
+                for _e, _u in users.items():
+                    if _u.get("id") == other_id:
+                        other_role = _u.get("role", "owner")
+                        break
+                other_score = None
+                if other_role != "cleaner":
+                    other_score = _compute_portfolio_score(other_id)
+                convos.append({
+                    "id": conv_id,
+                    "is_group": False,
+                    "other_user": {
+                        "id": other_id,
+                        "username": _get_username(other_id),
+                        "role": other_role,
+                        "portfolio_score": other_score,
+                    },
+                    "last_message": {
+                        "text": last_msg["text"],
+                        "timestamp": last_msg["timestamp"],
+                        "sender_id": last_msg["sender_id"],
+                        "has_attachments": bool(last_msg.get("attachments")),
+                    },
+                    "unread_count": unread,
+                    "updated_at": last_msg["timestamp"],
+                })
+    convos.sort(key=lambda c: c["updated_at"], reverse=True)
+    return jsonify({"conversations": convos})
+
+@app.route("/api/messages/<other_user_id>", methods=["GET"])
+def messages_get(other_user_id):
+    """Get messages between current user and another user."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    conv_id = _conv_id(uid, other_user_id)
+    data = _load_conv(conv_id)
+    messages = data["messages"] if data else []
+    limit = request.args.get("limit", 50, type=int)
+    messages = messages[-limit:]
+    # Look up other user's role
+    other_role = "owner"
+    users = load_users()
+    for _e, _u in users.items():
+        if _u.get("id") == other_user_id:
+            other_role = _u.get("role", "owner")
+            break
+    linked_props = _get_linked_properties(uid, other_user_id)
+    return jsonify({
+        "messages": messages,
+        "other_user": {"id": other_user_id, "username": _get_username(other_user_id), "role": other_role},
+        "linked_properties": linked_props,
+        "current_user_id": uid,
+    })
+
+@app.route("/api/messages/send", methods=["POST"])
+@rate_limit(30, 60)  # 30 per minute — messaging
+def messages_send():
+    """Send a message to a user or group conversation."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    text = body.get("text", "").strip()
+    attachments = body.get("attachments", [])
+
+    # Validate attachments
+    if attachments:
+        if len(attachments) > 5:
+            return jsonify({"error": "Max 5 attachments per message"}), 400
+        for att in attachments:
+            if not att.get("file_id") or not att.get("file_url"):
+                return jsonify({"error": "Each attachment requires file_id and file_url"}), 400
+
+    if not text and not attachments:
+        return jsonify({"error": "text or attachments required"}), 400
+
+    conv_id_param = body.get("conv_id", "").strip()
+    to_user_id = body.get("to_user_id", "").strip()
+
+    sender_name = _get_username(uid)
+    # Notification text fallback for attachment-only messages
+    notif_text = text[:100] if text else ("Sent a photo" if any(a.get("is_image") for a in attachments) else "Sent a file")
+
+    if conv_id_param and conv_id_param.startswith("grp_"):
+        # ── Group message ──
+        data = _load_conv(conv_id_param)
+        if not data or not data.get("is_group"):
+            return jsonify({"error": "Group not found"}), 404
+        if uid not in data.get("participants", []):
+            return jsonify({"error": "Not a participant"}), 403
+        msg = {
+            "id": str(_uuid.uuid4()),
+            "sender_id": uid,
+            "sender_name": sender_name,
+            "text": text,
+            "timestamp": _dt_msg.utcnow().isoformat() + "Z",
+            "read_by": [uid],
+        }
+        if attachments:
+            msg["attachments"] = attachments
+        data["messages"].append(msg)
+        _save_conv(conv_id_param, data)
+
+        # Notify all other participants
+        for pid in data["participants"]:
+            if pid == uid:
+                continue
+            _store_notification(pid, "message",
+                f"{sender_name} in {data.get('group_name', 'Group Chat')}",
+                notif_text,
+                {"sender_id": uid, "sender_name": sender_name, "conv_id": conv_id_param})
+            pt = _load_json_file(PUSH_TOKENS_FILE)
+            prefs = pt.get(pid, {}).get("preferences", {})
+            if prefs.get("messages", True):
+                tokens = _get_user_push_tokens(pid)
+                if tokens:
+                    _send_push(tokens,
+                        f"{sender_name} in {data.get('group_name', 'Group Chat')}",
+                        notif_text,
+                        {"type": "message", "conv_id": conv_id_param, "sender_id": uid})
+
+        return jsonify({"message": msg})
+
+    # ── 1:1 message ──
+    if not to_user_id:
+        return jsonify({"error": "to_user_id or conv_id required"}), 400
+    if to_user_id == uid:
+        return jsonify({"error": "Cannot message yourself"}), 400
+    conv_id = _conv_id(uid, to_user_id)
+    data = _load_conv(conv_id)
+    if not data:
+        data = {"participants": sorted([uid, to_user_id]), "messages": []}
+    msg = {
+        "id": str(_uuid.uuid4()),
+        "sender_id": uid,
+        "text": text,
+        "timestamp": _dt_msg.utcnow().isoformat() + "Z",
+        "read": False,
+    }
+    if attachments:
+        msg["attachments"] = attachments
+    data["messages"].append(msg)
+    _save_conv(conv_id, data)
+
+    # Push + in-app notification to recipient
+    _store_notification(to_user_id, "message",
+        f"Message from {sender_name}",
+        notif_text,
+        {"sender_id": uid, "sender_name": sender_name, "conv_id": conv_id})
+    pt = _load_json_file(PUSH_TOKENS_FILE)
+    prefs = pt.get(to_user_id, {}).get("preferences", {})
+    if prefs.get("messages", True):
+        tokens = _get_user_push_tokens(to_user_id)
+        if tokens:
+            _send_push(tokens,
+                f"Message from {sender_name}",
+                notif_text,
+                {"type": "message", "conv_id": conv_id, "sender_id": uid})
+
+    return jsonify({"message": msg})
+
+@app.route("/api/messages/group/create", methods=["POST"])
+def messages_group_create():
+    """Create a group conversation."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    participant_ids = body.get("participant_ids", [])
+    group_name = body.get("group_name", "").strip() or "Group Chat"
+    # Auto-include creator
+    if uid not in participant_ids:
+        participant_ids.insert(0, uid)
+    if len(participant_ids) < 3:
+        return jsonify({"error": "Group requires at least 3 participants"}), 400
+    conv_id = "grp_" + str(_uuid.uuid4())
+    # Resolve participant names
+    participant_names = {}
+    for pid in participant_ids:
+        participant_names[pid] = _get_username(pid)
+    data = {
+        "participants": participant_ids,
+        "is_group": True,
+        "group_name": group_name,
+        "created_by": uid,
+        "created_at": _dt_msg.utcnow().isoformat() + "Z",
+        "participant_names": participant_names,
+        "messages": [],
+    }
+    _save_conv(conv_id, data)
+    return jsonify({"ok": True, "conv_id": conv_id, "group_name": group_name})
+
+@app.route("/api/messages/conv/<conv_id>", methods=["GET"])
+def messages_conv_get(conv_id):
+    """Get messages for a specific conversation (1:1 or group)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = _load_conv(conv_id)
+    if not data:
+        return jsonify({"error": "Conversation not found"}), 404
+    if uid not in data.get("participants", []):
+        return jsonify({"error": "Not a participant"}), 403
+    limit = request.args.get("limit", 50, type=int)
+    messages = data.get("messages", [])[-limit:]
+    is_group = data.get("is_group", False)
+    result = {
+        "messages": messages,
+        "participants": data.get("participants", []),
+        "is_group": is_group,
+        "current_user_id": uid,
+    }
+    if is_group:
+        result["group_name"] = data.get("group_name", "Group Chat")
+        result["participant_names"] = data.get("participant_names", {})
+    else:
+        others = [p for p in data.get("participants", []) if p != uid]
+        other_id = others[0] if others else None
+        if other_id:
+            other_role = "owner"
+            users = load_users()
+            for _e, _u in users.items():
+                if _u.get("id") == other_id:
+                    other_role = _u.get("role", "owner")
+                    break
+            result["other_user"] = {"id": other_id, "username": _get_username(other_id), "role": other_role}
+            result["linked_properties"] = _get_linked_properties(uid, other_id)
+    return jsonify(result)
+
+@app.route("/api/messages/read/<target_id>", methods=["POST"])
+def messages_read(target_id):
+    """Mark messages as read. target_id = grp_xxx for groups, user_id for 1:1."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    if target_id.startswith("grp_"):
+        # Group read — add user to read_by arrays
+        data = _load_conv(target_id)
+        if not data:
+            return jsonify({"ok": True})
+        if uid not in data.get("participants", []):
+            return jsonify({"ok": True})
+        changed = False
+        for msg in data["messages"]:
+            if msg["sender_id"] != uid:
+                read_by = msg.get("read_by", [])
+                if uid not in read_by:
+                    read_by.append(uid)
+                    msg["read_by"] = read_by
+                    changed = True
+        if changed:
+            _save_conv(target_id, data)
+    else:
+        # 1:1 read
+        conv_id = _conv_id(uid, target_id)
+        data = _load_conv(conv_id)
+        if not data:
+            return jsonify({"ok": True})
+        changed = False
+        for msg in data["messages"]:
+            if msg["sender_id"] != uid and not msg.get("read", False):
+                msg["read"] = True
+                changed = True
+        if changed:
+            _save_conv(conv_id, data)
+    return jsonify({"ok": True})
+
+@app.route("/api/messages/unread-count", methods=["GET"])
+def messages_unread_count():
+    """Get total unread message count for current user."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    total = 0
+    if os.path.exists(MESSAGES_DIR):
+        for fname in os.listdir(MESSAGES_DIR):
+            if not fname.endswith(".json"):
+                continue
+            conv_id = fname[:-5]
+            data = _load_conv(conv_id)
+            if not data:
+                continue
+            participants = data.get("participants", [])
+            if uid not in participants:
+                continue
+            is_group = data.get("is_group", False)
+            for m in data["messages"]:
+                if m["sender_id"] == uid:
+                    continue
+                if is_group:
+                    if uid not in m.get("read_by", []):
+                        total += 1
+                else:
+                    if not m.get("read", False):
+                        total += 1
+    return jsonify({"unread_count": total})
+
+
+@app.route("/api/messages/conversations/<conv_id>", methods=["DELETE"])
+def messages_delete_conversation(conv_id):
+    """Remove user from a conversation (soft-delete for that user)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = _load_conv(conv_id)
+    if not data:
+        return jsonify({"ok": False, "error": "Conversation not found"}), 404
+    participants = data.get("participants", [])
+    if uid not in participants:
+        return jsonify({"ok": False, "error": "Not in this conversation"}), 403
+    # Remove user from participants
+    data["participants"] = [p for p in participants if p != uid]
+    # If no participants left, delete the file entirely
+    conv_path = os.path.join(MESSAGES_DIR, f"{conv_id}.json")
+    if not data["participants"]:
+        try:
+            os.remove(conv_path)
+        except OSError:
+            pass
+    else:
+        _save_conv(conv_id, data)
+    return jsonify({"ok": True})
+
+
+# ── Tag rules ─────────────────────────────────────────────────
+@app.route("/api/tags/rule", methods=["POST"])
+def add_tag_rule():
+    body = request.get_json(force=True) or {}
+    payee = body.get("payee")
+    prop_id = body.get("prop_id")
+    if not payee or not prop_id:
+        return jsonify({"ok": False, "error": "payee and prop_id required"}), 400
+    store = load_store()
+    if "rules" not in store:
+        store["rules"] = {}
+    store["rules"][payee] = prop_id
+    save_store(store)
+    return jsonify({"ok": True})
+
+@app.route("/api/tags/rule", methods=["DELETE"])
+def delete_tag_rule():
+    body = request.get_json(force=True) or {}
+    payee = body.get("payee")
+    if not payee:
+        return jsonify({"ok": False, "error": "payee required"}), 400
+    store = load_store()
+    rules = store.get("rules", {})
+    rules.pop(payee, None)
+    store["rules"] = rules
+    save_store(store)
+    return jsonify({"ok": True})
+
+# ── Inventory update ──────────────────────────────────────────
+@app.route("/api/inventory/update", methods=["POST"])
+def inventory_update():
+    body = request.get_json(force=True) or {}
+    item_id = body.get("itemId")
+    quantity = body.get("quantity")
+    if item_id is None or quantity is None:
+        return jsonify({"ok": False, "error": "itemId and quantity required"}), 400
+    store = load_store()
+    groups = store.get("inv_groups", [])
+    found = False
+    for group in groups:
+        for item in group.get("items", []):
+            if item.get("id") == item_id:
+                # Calculate current qty: initialQty + sum(restocks) - threshold losses
+                initial = item.get("initialQty", 0)
+                restocks = item.get("restocks", [])
+                current = initial + sum(r.get("qty", 0) for r in restocks)
+                diff = quantity - current
+                if diff != 0:
+                    restocks.append({"qty": diff, "ts": _time.time()})
+                    item["restocks"] = restocks
+                found = True
+                break
+        if found:
+            break
+    if not found:
+        return jsonify({"ok": False, "error": "Item not found"}), 404
+    store["inv_groups"] = groups
+    save_store(store)
+    return jsonify({"ok": True})
+
+# ── Combined sync (iCal + transactions) ──────────────────────
+@app.route("/api/sync", methods=["POST"])
+def combined_sync():
+    results = {}
+    # iCal sync
+    try:
+        store = load_store()
+        new_events = _sync_ical(store)
+        existing = {e["uid"]: e for e in store.get("ical_events", [])}
+        for e in new_events:
+            existing[e["uid"]] = e
+        merged = list(existing.values())
+        store["ical_events"] = merged
+        save_store(store)
+        results["ical"] = {"ok": True, "count": len(merged)}
+    except Exception as e:
+        msg, _ = _safe_error(e, "iCal sync")
+        results["ical"] = {"ok": False, "error": msg}
+    # Transactions sync
+    try:
+        tx_result = run_sync()
+        results["transactions"] = tx_result
+    except Exception as e:
+        msg, _ = _safe_error(e, "Transaction sync")
+        results["transactions"] = {"ok": False, "error": msg}
+    return jsonify(results)
+
+
+# ═══════════════════════════════════════════════════
+# ──  IN-APP PURCHASE / APPLE ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+APPLE_VERIFY_RECEIPT_PROD = "https://buy.itunes.apple.com/verifyReceipt"
+APPLE_VERIFY_RECEIPT_SANDBOX = "https://sandbox.itunes.apple.com/verifyReceipt"
+
+@app.route("/api/iap/apple-notifications", methods=["POST"])
+def apple_server_notifications():
+    """
+    Receives App Store Server Notifications (v2).
+    Apple sends these when subscription events occur:
+    renewal, cancellation, refund, grace period, etc.
+    """
+    try:
+        payload = request.get_json(force=True) or {}
+        signed_payload = payload.get("signedPayload", "")
+
+        if not signed_payload:
+            return jsonify({"error": "Missing signedPayload"}), 400
+
+        # Decode the JWS payload (JWT without full verification for now)
+        # In production, verify with Apple's certificate chain
+        parts = signed_payload.split(".")
+        if len(parts) != 3:
+            return jsonify({"error": "Invalid JWS format"}), 400
+
+        # Decode payload (base64url)
+        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        decoded = base64.urlsafe_b64decode(padded)
+        notification = json.loads(decoded)
+
+        notification_type = notification.get("notificationType", "")
+        subtype = notification.get("subtype", "")
+
+        # Extract transaction info if available
+        data = notification.get("data", {})
+        signed_transaction = data.get("signedTransactionInfo", "")
+        signed_renewal = data.get("signedRenewalInfo", "")
+
+        # Decode transaction info
+        transaction_info = {}
+        if signed_transaction:
+            try:
+                tx_parts = signed_transaction.split(".")
+                if len(tx_parts) == 3:
+                    tx_padded = tx_parts[1] + "=" * (4 - len(tx_parts[1]) % 4)
+                    transaction_info = json.loads(base64.urlsafe_b64decode(tx_padded))
+            except Exception:
+                pass
+
+        app_account_token = transaction_info.get("appAccountToken", "")
+        product_id = transaction_info.get("productId", "")
+        original_transaction_id = transaction_info.get("originalTransactionId", "")
+
+        # Log the notification
+        app.logger.info(
+            f"Apple Notification: type={notification_type} subtype={subtype} "
+            f"product={product_id} txn={original_transaction_id} "
+            f"user={app_account_token}"
+        )
+
+        # Handle specific notification types
+        if notification_type in ("DID_RENEW", "SUBSCRIBED", "OFFER_REDEEMED"):
+            # Subscription active — update user if we can identify them
+            if app_account_token:
+                _update_iap_status(app_account_token, product_id, "active")
+        elif notification_type in ("EXPIRED", "REVOKE"):
+            if app_account_token:
+                _update_iap_status(app_account_token, product_id, "expired")
+        elif notification_type == "DID_FAIL_TO_RENEW":
+            if app_account_token:
+                _update_iap_status(app_account_token, product_id, "past_due")
+        elif notification_type == "REFUND":
+            if app_account_token:
+                _update_iap_status(app_account_token, product_id, "refunded")
+        elif notification_type == "GRACE_PERIOD_EXPIRED":
+            if app_account_token:
+                _update_iap_status(app_account_token, product_id, "expired")
+
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        app.logger.error(f"Apple notification error: {e}")
+        return jsonify({"status": "ok"}), 200  # Always return 200 to Apple
+
+
+def _update_iap_status(user_identifier, product_id, status):
+    """Update a user's IAP subscription status in the users JSON store."""
+    try:
+        users = load_users()
+        # app_account_token is the user's email
+        if user_identifier not in users:
+            return
+        users[user_identifier]["iap_status"] = {
+            "product_id": product_id,
+            "status": status,
+            "updated_at": _time.time(),
+        }
+        save_users(users)
+    except Exception as e:
+        app.logger.error(f"IAP status update error: {e}")
+
+
+@app.route("/api/iap/verify-receipt", methods=["POST"])
+def verify_apple_receipt():
+    """
+    Validates an Apple App Store receipt.
+    The client sends the receipt data, we verify it with Apple's servers,
+    and return the subscription status.
+    """
+    user_id = g.user_id
+    data = request.get_json(force=True) or {}
+    receipt_data = data.get("receipt_data", "")
+
+    if not receipt_data:
+        return jsonify({"error": "Missing receipt_data"}), 400
+
+    # Verify with Apple — try production first, fall back to sandbox
+    verify_payload = {
+        "receipt-data": receipt_data,
+        "exclude-old-transactions": True,
+    }
+
+    try:
+        # Try production first
+        resp = requests.post(APPLE_VERIFY_RECEIPT_PROD, json=verify_payload, timeout=15)
+        result = resp.json()
+
+        # Status 21007 means sandbox receipt sent to production — retry with sandbox
+        if result.get("status") == 21007:
+            resp = requests.post(APPLE_VERIFY_RECEIPT_SANDBOX, json=verify_payload, timeout=15)
+            result = resp.json()
+
+        status = result.get("status", -1)
+
+        if status != 0:
+            return jsonify({
+                "valid": False,
+                "is_active": False,
+                "error": f"Receipt validation failed (status {status})",
+            }), 200
+
+        # Parse latest receipt info
+        latest_receipt_info = result.get("latest_receipt_info", [])
+        pending_renewal = result.get("pending_renewal_info", [])
+
+        # Check for active subscription
+        is_active = False
+        product_id = None
+        expires_date = None
+
+        for receipt in latest_receipt_info:
+            exp_ms = int(receipt.get("expires_date_ms", "0"))
+            if exp_ms > int(_time.time() * 1000):
+                is_active = True
+                product_id = receipt.get("product_id")
+                expires_date = exp_ms / 1000
+                break
+
+        # Check if in billing retry / grace period
+        in_grace_period = False
+        for renewal in pending_renewal:
+            if renewal.get("is_in_billing_retry_period") == "1":
+                in_grace_period = True
+                is_active = True  # Grant access during grace period
+                break
+
+        return jsonify({
+            "valid": True,
+            "is_active": is_active,
+            "product_id": product_id,
+            "expires_date": expires_date,
+            "in_grace_period": in_grace_period,
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Receipt verification error: {e}")
+        return jsonify({
+            "valid": False,
+            "is_active": False,
+            "error": "Could not verify receipt",
+        }), 500
+
+
+# ── Property Link Requests (request/invite) ──────────────────
+
+def _load_property_requests():
+    return _load_json_file(PROPERTY_REQUESTS_FILE)
+
+def _save_property_requests(data):
+    _save_json_file(PROPERTY_REQUESTS_FILE, data)
+
+def _inject_system_message(user_a, user_b, system_data):
+    """Insert a system message into the 1:1 conversation between two users."""
+    cid = _conv_id(user_a, user_b)
+    conv = _load_conv(cid)
+    if conv is None:
+        conv = {"participants": sorted([user_a, user_b]), "messages": []}
+    msg = {
+        "id": str(_uuid.uuid4()),
+        "sender_id": "__system__",
+        "text": "",
+        "timestamp": _dt_msg.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "system": True,
+        "system_data": system_data,
+    }
+    conv["messages"].append(msg)
+    _save_conv(cid, conv)
+    return msg["id"]
+
+def _update_system_message(user_a, user_b, message_id, updates):
+    """Update system_data fields on an existing system message."""
+    cid = _conv_id(user_a, user_b)
+    conv = _load_conv(cid)
+    if not conv:
+        return
+    for m in conv["messages"]:
+        if m.get("id") == message_id and m.get("system"):
+            m["system_data"] = {**m.get("system_data", {}), **updates}
+            break
+    _save_conv(cid, conv)
+
+@app.route("/api/host/ical-properties", methods=["GET"])
+def host_ical_properties():
+    """Returns the host's own iCal-linked properties with per-unit breakdown."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    store = _load_store_for_user(uid)
+    props = store.get("properties", [])
+    feeds = store.get("ical_urls", [])
+    if isinstance(feeds, dict):
+        feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
+    short_names = store.get("pricelabs_short_names", {})
+    result = []
+    for p in props:
+        pid = p.get("id", "")
+        plabel = p.get("label", pid)
+        prop_feeds = [f for f in feeds if f.get("propId", "") == pid]
+        if not prop_feeds:
+            continue  # skip properties without iCal feeds
+        units = []
+        for f in prop_feeds:
+            url = f.get("url", "")
+            fk = _ical_feed_key(url) if url else ""
+            pl_id = _airbnb_listing_id(url) if url else None
+            uname = short_names.get(pl_id, f.get("listingName", "")) if pl_id else f.get("listingName", "")
+            if not uname:
+                uname = plabel
+            units.append({"feed_key": fk, "unit_name": uname})
+        result.append({"id": pid, "label": plabel, "units": units})
+    return jsonify({"properties": result})
+
+@app.route("/api/property-request/create", methods=["POST"])
+def property_request_create():
+    """Create a property link request (cleaner→host) or invite (host→cleaner)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    target_user_id = body.get("target_user_id", "")
+    property_ids = body.get("property_ids", [])
+    feed_keys = body.get("feed_keys", [])  # optional unit-level selection
+    req_type = body.get("type", "request")  # "request" or "invite"
+
+    if not target_user_id or not property_ids:
+        return jsonify({"error": "target_user_id and property_ids required"}), 400
+    if req_type not in ("request", "invite"):
+        return jsonify({"error": "type must be 'request' or 'invite'"}), 400
+
+    # Determine host_id and cleaner_id
+    if req_type == "request":
+        cleaner_id = uid
+        host_id = target_user_id
+    else:
+        host_id = uid
+        cleaner_id = target_user_id
+
+    # Validate properties belong to host and have iCal feeds
+    host_store = _load_store_for_user(host_id)
+    host_props = host_store.get("properties", [])
+    feeds = host_store.get("ical_urls", [])
+    if isinstance(feeds, dict):
+        feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
+    feed_prop_ids = set(f.get("propId", "") for f in feeds)
+    host_prop_ids = set(p.get("id", "") for p in host_props)
+
+    valid_ids = []
+    valid_labels = []
+    for pid in property_ids:
+        if pid in host_prop_ids and pid in feed_prop_ids:
+            valid_ids.append(pid)
+            label = next((p.get("label", pid) for p in host_props if p.get("id") == pid), pid)
+            valid_labels.append(label)
+
+    if not valid_ids:
+        return jsonify({"error": "No valid iCal-linked properties found"}), 400
+
+    # Build unit labels for display if feed_keys provided
+    unit_labels = []
+    if feed_keys:
+        short_names = host_store.get("pricelabs_short_names", {})
+        for fk in feed_keys:
+            matched = False
+            for f in feeds:
+                url = f.get("url", "")
+                if _ical_feed_key(url) == fk:
+                    pl_id = _airbnb_listing_id(url)
+                    uname = short_names.get(pl_id, f.get("listingName", "")) if pl_id else f.get("listingName", "")
+                    if not uname:
+                        pid = f.get("propId", "")
+                        uname = next((p.get("label", pid) for p in host_props if p.get("id") == pid), fk[:8])
+                    unit_labels.append(uname)
+                    matched = True
+                    break
+            if not matched:
+                unit_labels.append(fk[:8])
+
+    display_labels = unit_labels if unit_labels else valid_labels
+
+    # Check for duplicate pending requests
+    requests = _load_property_requests()
+    for rid, r in requests.items():
+        if (r.get("status") == "pending" and
+            r.get("cleaner_id") == cleaner_id and
+            r.get("host_id") == host_id and
+            set(r.get("property_ids", [])) == set(valid_ids)):
+            return jsonify({"error": "A pending request for these properties already exists"}), 409
+
+    # Create record
+    request_id = "pr_" + secrets.token_hex(8)
+    users = load_users()
+    requester_name = ""
+    for email, u in users.items():
+        if u.get("id") == uid:
+            requester_name = u.get("username") or email.split("@")[0]
+            break
+
+    # Inject system message into chat
+    if req_type == "request":
+        sys_type = "property_request"
+        description = f"{requester_name} requested access to: {', '.join(display_labels)}"
+    else:
+        sys_type = "property_invite"
+        description = f"{requester_name} invited you to: {', '.join(display_labels)}"
+
+    sys_data = {
+        "type": sys_type,
+        "request_id": request_id,
+        "target_id": target_user_id,
+        "property_labels": display_labels,
+        "requester_name": requester_name,
+        "status": "pending",
+    }
+    message_id = _inject_system_message(uid, target_user_id, sys_data)
+
+    record = {
+        "id": request_id,
+        "type": req_type,
+        "requester_id": uid,
+        "target_id": target_user_id,
+        "host_id": host_id,
+        "cleaner_id": cleaner_id,
+        "property_ids": valid_ids,
+        "property_labels": valid_labels,
+        "feed_keys": feed_keys,
+        "unit_labels": unit_labels,
+        "status": "pending",
+        "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "resolved_at": None,
+        "message_id": message_id,
+    }
+    requests[request_id] = record
+    _save_property_requests(requests)
+
+    # Notify target
+    notif_title = "Property Request" if req_type == "request" else "Property Invite"
+    _store_notification(target_user_id, "property_request", notif_title, description,
+                        {"request_id": request_id, "from_user_id": uid})
+    tokens = _get_user_push_tokens(target_user_id)
+    if tokens:
+        pt = _load_json_file(PUSH_TOKENS_FILE)
+        prefs = pt.get(target_user_id, {}).get("preferences", {})
+        if prefs.get("messages", True):
+            _send_push(tokens, notif_title, description,
+                       {"type": "property_request", "request_id": request_id})
+
+    return jsonify({"ok": True, "request": record})
+
+@app.route("/api/property-request/respond", methods=["POST"])
+def property_request_respond():
+    """Approve or deny a property link request/invite."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    body = request.get_json(force=True) or {}
+    request_id = body.get("request_id", "")
+    action = body.get("action", "")
+
+    if action not in ("approve", "deny"):
+        return jsonify({"error": "action must be 'approve' or 'deny'"}), 400
+
+    requests = _load_property_requests()
+    rec = requests.get(request_id)
+    if not rec:
+        return jsonify({"error": "Request not found"}), 404
+    if rec["target_id"] != uid:
+        return jsonify({"error": "Only the target can respond"}), 403
+    if rec["status"] != "pending":
+        return jsonify({"error": "Request already resolved"}), 400
+
+    rec["status"] = "approved" if action == "approve" else "denied"
+    rec["resolved_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+    requests[request_id] = rec
+    _save_property_requests(requests)
+
+    # Update the system message in chat
+    _update_system_message(rec["requester_id"], rec["target_id"],
+                           rec.get("message_id", ""),
+                           {"status": rec["status"]})
+
+    if action == "approve":
+        # Merge property_ids into follow's selected_properties
+        follows = _load_json_file(FOLLOWS_FILE)
+        host_id = rec["host_id"]
+        cleaner_id = rec["cleaner_id"]
+
+        # Find existing follow or auto-create
+        follow_found = None
+        for fid, f in follows.items():
+            if (f.get("follower_id") == cleaner_id and
+                f.get("following_id") == host_id and
+                f.get("status") == "approved"):
+                follow_found = (fid, f)
+                break
+
+        if follow_found:
+            fid, f = follow_found
+            existing = set(f.get("selected_properties", []))
+            existing.update(rec["property_ids"])
+            f["selected_properties"] = list(existing)
+            follows[fid] = f
+        else:
+            # Auto-create approved follow for host invites
+            new_fid = "f_" + secrets.token_hex(8)
+            follows[new_fid] = {
+                "follower_id": cleaner_id,
+                "following_id": host_id,
+                "type": "cleaner",
+                "status": "approved",
+                "requested_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+                "selected_properties": rec["property_ids"],
+            }
+        _save_json_file(FOLLOWS_FILE, follows)
+
+    # Notify the requester
+    users = load_users()
+    responder_name = ""
+    for email, u in users.items():
+        if u.get("id") == uid:
+            responder_name = u.get("username") or email.split("@")[0]
+            break
+
+    status_label = "approved" if action == "approve" else "denied"
+    notif_body = f"{responder_name} {status_label} the property {'request' if rec['type'] == 'request' else 'invite'}"
+    _store_notification(rec["requester_id"], "property_request_response",
+                        f"Request {status_label.title()}", notif_body,
+                        {"request_id": request_id, "status": rec["status"]})
+    tokens = _get_user_push_tokens(rec["requester_id"])
+    if tokens:
+        _send_push(tokens, f"Request {status_label.title()}", notif_body,
+                   {"type": "property_request_response", "request_id": request_id})
+
+    return jsonify({"ok": True, "status": rec["status"]})
+
+@app.route("/api/invoices/between/<other_user_id>", methods=["GET"])
+def invoices_between(other_user_id):
+    """Returns all invoices between authenticated user and other_user_id (both directions)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    result = []
+
+    # Invoices sent by uid to other_user_id
+    my_invoices = _load_invoices(uid)
+    for inv in my_invoices:
+        if inv.get("hostId") == other_user_id:
+            result.append({**inv, "direction": "sent"})
+
+    # Invoices received by uid from other_user_id
+    received = _load_received_invoices(uid)
+    for inv in received:
+        if inv.get("cleanerId") == other_user_id:
+            result.append({**inv, "direction": "received"})
+
+    # Also check: invoices sent by other to uid (from other's cleaner invoices)
+    other_invoices = _load_invoices(other_user_id)
+    for inv in other_invoices:
+        if inv.get("hostId") == uid and inv.get("status") in ("sent", "paid"):
+            # Avoid duplicates (already in received)
+            if not any(r.get("id") == inv["id"] for r in result):
+                result.append({**inv, "direction": "received"})
+
+    result.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
+    return jsonify({"invoices": result})
 
 
 if __name__ == "__main__":
