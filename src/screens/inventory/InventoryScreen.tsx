@@ -476,6 +476,9 @@ export function InventoryScreen() {
   }, [fetchInvGroups]);
 
   useEffect(() => { load(); }, []);
+
+  const dataVersion = useDataStore(s => s.dataVersion);
+  useEffect(() => { if (dataVersion > 0) load(true); }, [dataVersion]);
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   const toggleGroup = (id: string) => {

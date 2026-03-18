@@ -1122,6 +1122,9 @@ export function SettingsScreen() {
         try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch {}
         invalidateAll();
       } catch {}
+    } else {
+      // No iCal feeds — still invalidate all data for property change propagation
+      invalidateAll();
     }
     // Auto-upgrade portfolioType when mixing property types
     const currentType = portfolioType;

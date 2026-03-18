@@ -2604,6 +2604,19 @@ def get_all_transactions():
     tx_store = store.get("transactions", {})
     tags = store.get("tags", {})
     cat_tags = store.get("category_tags", {})
+
+    # Clean orphaned tags: remove tags pointing to properties that no longer exist
+    valid_props = set(_get_str_properties())
+    if valid_props:
+        orphan_tag_ids = [tid for tid, pid in tags.items()
+                          if pid and not pid.startswith("__") and pid not in valid_props]
+        if orphan_tag_ids:
+            for tid in orphan_tag_ids:
+                del tags[tid]
+            store["tags"] = tags
+            save_store(store)
+            logger.info("Auto-cleaned %d orphaned property tags", len(orphan_tag_ids))
+
     # Merge property_tag and category_tag into each transaction so mobile has it
     txs = []
     for tx in tx_store.values():
@@ -2739,6 +2752,51 @@ def delete_ical_feed(feed_key):
     _invalidate_cache("ical_feeds", uid)
 
     return jsonify({"ok": True, "events_removed": events_removed})
+
+
+@app.route("/api/ical/cleanup-orphans", methods=["POST"])
+def cleanup_orphan_ical():
+    """Remove iCal feeds and events that belong to properties no longer in the user's list."""
+    store = load_store()
+    uid = getattr(g, 'user_id', None)
+
+    # Get valid property IDs
+    props = store.get("custom_props", [])
+    # Also check user's properties stored under "properties" key
+    user_props = store.get("properties", [])
+    valid_ids = set()
+    for p in props + user_props:
+        pid = p.get("id") or p.get("prop_id") or p.get("name")
+        if pid:
+            valid_ids.add(pid)
+
+    # Find orphaned feeds (propId not in any valid property)
+    ical_urls = store.get("ical_urls", [])
+    orphan_feed_keys = set()
+    kept_feeds = []
+    for feed in ical_urls:
+        prop_id = feed.get("propId")
+        if prop_id and prop_id not in valid_ids:
+            fk = feed.get("feed_key") or feed.get("key")
+            if fk:
+                orphan_feed_keys.add(fk)
+        else:
+            kept_feeds.append(feed)
+
+    feeds_removed = len(ical_urls) - len(kept_feeds)
+    store["ical_urls"] = kept_feeds
+
+    # Remove events from orphaned feeds
+    events = store.get("ical_events", [])
+    store["ical_events"] = [e for e in events if e.get("feed_key") not in orphan_feed_keys]
+    events_removed = len(events) - len(store["ical_events"])
+
+    save_store(store)
+    _invalidate_cache("ical_events", uid)
+    _invalidate_cache("ical_feeds", uid)
+
+    logger.info("Orphan cleanup: removed %d feeds, %d events", feeds_removed, events_removed)
+    return jsonify({"ok": True, "feeds_removed": feeds_removed, "events_removed": events_removed})
 
 
 @app.route("/api/tags", methods=["GET"])
@@ -3453,7 +3511,33 @@ def ical_events_route():
     if cached is not None:
         return jsonify(cached)
     store = load_store()
-    result = {"events": store.get("ical_events", [])}
+    # Only return events whose feed belongs to a property that still exists
+    valid_prop_ids = set(_get_str_properties())
+    valid_feed_keys = set()
+    orphan_feed_keys = set()
+    for feed in store.get("ical_urls", []):
+        fk = feed.get("feed_key") or feed.get("key")
+        prop_id = feed.get("propId")
+        if fk and prop_id and prop_id in valid_prop_ids:
+            valid_feed_keys.add(fk)
+        elif fk:
+            orphan_feed_keys.add(fk)
+
+    # Auto-delete orphaned feeds and their events from the store
+    if orphan_feed_keys:
+        store["ical_urls"] = [f for f in store.get("ical_urls", [])
+                              if (f.get("feed_key") or f.get("key")) not in orphan_feed_keys]
+        store["ical_events"] = [e for e in store.get("ical_events", [])
+                                if e.get("feed_key") not in orphan_feed_keys]
+        save_store(store)
+        logger.info("Auto-purged %d orphaned feeds", len(orphan_feed_keys))
+
+    all_events = store.get("ical_events", [])
+    if valid_feed_keys:
+        events = [e for e in all_events if e.get("feed_key") in valid_feed_keys]
+    else:
+        events = []  # No valid feeds = no events
+    result = {"events": events}
     if uid:
         _set_cached_response("ical_events", uid, result)
     return jsonify(result)
@@ -3463,8 +3547,14 @@ def ical_events_route():
 # Data sources: iCal events, per-property income, PriceLabs API
 # ══════════════════════════════════════════════════════════════
 
-# Canonical STR property IDs — must match propId values in iCal feeds
-STR_PROPERTIES = ["lockwood", "everton", "bstreet", "pierce"]
+# Dynamic STR property IDs — loaded from user store, no more hardcoded lists
+def _get_str_properties():
+    """Return property IDs from the user's store, not a hardcoded list."""
+    store = load_store()
+    props = store.get("custom_props", []) + store.get("properties", [])
+    return [p.get("id") or p.get("name") for p in props if p.get("id") or p.get("name")]
+
+STR_PROPERTIES = []  # Legacy — use _get_str_properties() instead
 
 
 def _is_block_event(ev):

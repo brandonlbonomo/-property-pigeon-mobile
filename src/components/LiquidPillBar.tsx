@@ -77,8 +77,11 @@ export function LiquidPillBar({ tabs, activeIndex, scrollOffset, onPressTab }: P
     }).start();
   }, [activeIndex]);
 
-  // Guard: interpolation requires at least 2 data points
-  if (tabs.length < 2) {
+  const pills = layoutReady ? pillLayoutsRef.current : estimated;
+  const indices = tabs.map((_, i) => i);
+
+  // Guard: interpolation requires at least 2 data points in both arrays
+  if (tabs.length < 2 || indices.length < 2 || pills.length < 2) {
     return <View style={styles.container}><View style={[styles.row, { justifyContent: 'center' }]}>
       {tabs.map((tab, i) => (
         <TouchableOpacity activeOpacity={0.7} key={tab.key} onPress={() => onPressTab(i)}>
@@ -87,9 +90,6 @@ export function LiquidPillBar({ tabs, activeIndex, scrollOffset, onPressTab }: P
       ))}
     </View></View>;
   }
-
-  const pills = layoutReady ? pillLayoutsRef.current : estimated;
-  const indices = tabs.map((_, i) => i);
 
   /* ── Row centering ── */
   const rowTranslateX = (scrollOffset as any).interpolate({

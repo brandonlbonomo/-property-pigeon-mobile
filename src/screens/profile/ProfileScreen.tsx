@@ -96,6 +96,8 @@ export function ProfileScreen() {
   const [txTagStep, setTxTagStep] = useState<'idle' | 'property' | 'category'>('idle');
   const [txTagSaving, setTxTagSaving] = useState(false);
   const [txShowAll, setTxShowAll] = useState(false);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
   const [customCategories, setCustomCategories] = useState<any[]>([]);
   const [selectedProperty, setSelectedProperty] = useState<UserProperty | null>(null);
   const [viewerPhotos, setViewerPhotos] = useState<string[]>([]);
@@ -148,6 +150,9 @@ export function ProfileScreen() {
   }, [fetchCockpit, fetchIcalEvents, fetchInvGroups, fetchTransactions, fetchCategoryTags, fetchCustomCategories, isSTR]);
 
   useEffect(() => { load(); }, []);
+
+  const dataVersion = useDataStore(s => s.dataVersion);
+  useEffect(() => { if (dataVersion > 0) load(true); }, [dataVersion]);
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   // ── Actuals ──
@@ -340,10 +345,68 @@ export function ProfileScreen() {
         return updated;
       });
       setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: categoryId } : t));
+      // Invalidate caches so Money/Home tabs reflect the change
+      useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
       // Don't auto-close — caller controls step advancement
     } catch {}
     setTxTagSaving(false);
   }, [saveCategoryTag]);
+
+  const handleBatchTagProperty = useCallback(async (propertyId: string | null) => {
+    setTxTagSaving(true);
+    try {
+      for (const txId of selectedTxIds) {
+        await apiFetch('/api/transactions/update', {
+          method: 'POST',
+          body: JSON.stringify({ id: txId, property_tag: propertyId }),
+        });
+      }
+      setTransactions(prev => prev.map(t =>
+        selectedTxIds.has(t.id) ? { ...t, property_tag: propertyId } : t
+      ));
+      useDataStore.setState({ cockpit: null, transactions: null, tags: null });
+    } catch (e) {
+      console.error('Batch tag failed:', e);
+    }
+    setTxTagSaving(false);
+    setSelectedTxIds(new Set());
+    setMultiSelectMode(false);
+    setTxTagStep('idle');
+  }, [selectedTxIds]);
+
+  const handleBatchCategoryTag = useCallback(async (categoryId: string | null) => {
+    setTxTagSaving(true);
+    try {
+      for (const txId of selectedTxIds) {
+        await saveCategoryTag(txId, categoryId);
+      }
+      setCategoryTags(prev => {
+        const updated = { ...prev };
+        selectedTxIds.forEach(txId => {
+          if (categoryId) updated[txId] = categoryId;
+          else delete updated[txId];
+        });
+        return updated;
+      });
+      setTransactions(prev => prev.map(t =>
+        selectedTxIds.has(t.id) ? { ...t, category_tag: categoryId } : t
+      ));
+      useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
+    } catch {}
+    setTxTagSaving(false);
+    setSelectedTxIds(new Set());
+    setMultiSelectMode(false);
+    setTxTagStep('idle');
+  }, [selectedTxIds, saveCategoryTag]);
+
+  const toggleTxSelection = useCallback((txId: string) => {
+    setSelectedTxIds(prev => {
+      const next = new Set(prev);
+      if (next.has(txId)) next.delete(txId);
+      else next.add(txId);
+      return next;
+    });
+  }, []);
 
   const propLabel = useCallback((pid: string) => {
     const p = (profile?.properties || []).find((pr: any) => (pr.id || pr.prop_id) === pid);
@@ -432,11 +495,24 @@ export function ProfileScreen() {
         <View style={txStyles.section}>
           <View style={txStyles.header}>
             <Text style={styles.sectionLabel}>TRANSACTIONS</Text>
-            {untaggedCount > 0 && (
-              <View style={txStyles.untaggedBadge}>
-                <Text style={txStyles.untaggedBadgeText}>{untaggedCount} untagged</Text>
-              </View>
-            )}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {untaggedCount > 0 && (
+                <View style={txStyles.untaggedBadge}>
+                  <Text style={txStyles.untaggedBadgeText}>{untaggedCount} untagged</Text>
+                </View>
+              )}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => {
+                  setMultiSelectMode(!multiSelectMode);
+                  setSelectedTxIds(new Set());
+                }}
+              >
+                <Text style={{ color: Colors.green, fontSize: 13, fontWeight: '600' }}>
+                  {multiSelectMode ? 'Cancel' : 'Select'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
           {visibleTxs.map((t: any, i: number) => {
             const amt = t.amount ?? 0;
@@ -451,12 +527,30 @@ export function ProfileScreen() {
               <View key={t.id}>
                 <TouchableOpacity
                   activeOpacity={0.7}
-                  style={[txStyles.row, excluded && { opacity: 0.45 }]}
+                  style={[txStyles.row, excluded && { opacity: 0.45 }, multiSelectMode && selectedTxIds.has(t.id) && { backgroundColor: Colors.greenDim }]}
                   onPress={() => {
-                    setTxTaggingId(t.id);
-                    setTxTagStep('property');
+                    if (multiSelectMode) {
+                      toggleTxSelection(t.id);
+                    } else {
+                      setTxTaggingId(t.id);
+                      setTxTagStep('property');
+                    }
+                  }}
+                  onLongPress={() => {
+                    if (!multiSelectMode) {
+                      setMultiSelectMode(true);
+                      setSelectedTxIds(new Set([t.id]));
+                    }
                   }}
                 >
+                  {multiSelectMode && (
+                    <Ionicons
+                      name={selectedTxIds.has(t.id) ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={selectedTxIds.has(t.id) ? Colors.green : Colors.textDim}
+                      style={{ marginRight: 8 }}
+                    />
+                  )}
                   <View style={txStyles.rowInfo}>
                     <Text style={[txStyles.rowName, excluded && { textDecorationLine: 'line-through' }]} numberOfLines={1}>
                       {t.payee || t.name || t.merchant || t.description || 'Unknown'}
@@ -485,6 +579,24 @@ export function ProfileScreen() {
             >
               <Text style={txStyles.showAllText}>
                 {txShowAll ? 'Show Less' : `Show All ${transactions.length} Transactions`}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Floating batch tag bar */}
+          {multiSelectMode && selectedTxIds.size > 0 && (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={{
+                backgroundColor: Colors.green, borderRadius: Radius.md,
+                padding: Spacing.md, marginTop: Spacing.sm,
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+              }}
+              onPress={() => setTxTagStep('property')}
+            >
+              <Ionicons name="pricetag" size={16} color="#fff" />
+              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                Tag {selectedTxIds.size} Transaction{selectedTxIds.size !== 1 ? 's' : ''}
               </Text>
             </TouchableOpacity>
           )}
@@ -845,7 +957,7 @@ export function ProfileScreen() {
 
       {/* ── Step 1: Property / Airbnb Income Bottom Sheet ── */}
       <Modal
-        visible={txTagStep === 'property' && !!txTaggingId}
+        visible={txTagStep === 'property' && (!!txTaggingId || (multiSelectMode && selectedTxIds.size > 0))}
         transparent
         animationType="slide"
         onRequestClose={() => { setTxTagStep('idle'); setTxTaggingId(null); }}
@@ -854,11 +966,17 @@ export function ProfileScreen() {
           onPress={() => { setTxTagStep('idle'); setTxTaggingId(null); }}>
           <View style={tagSheetStyles.sheet} onStartShouldSetResponder={() => true}>
             <View style={tagSheetStyles.handle} />
-            <Text style={tagSheetStyles.title}>TAG TRANSACTION</Text>
+            <Text style={tagSheetStyles.title}>
+              {multiSelectMode && selectedTxIds.size > 0
+                ? `TAG ${selectedTxIds.size} TRANSACTION${selectedTxIds.size !== 1 ? 'S' : ''}`
+                : 'TAG TRANSACTION'}
+            </Text>
             <Text style={tagSheetStyles.subtitle}>
-              {transactions.find((t: any) => t.id === txTaggingId)?.payee
-                || transactions.find((t: any) => t.id === txTaggingId)?.name
-                || 'Transaction'}
+              {multiSelectMode && selectedTxIds.size > 0
+                ? `Apply tag to ${selectedTxIds.size} selected`
+                : (transactions.find((t: any) => t.id === txTaggingId)?.payee
+                  || transactions.find((t: any) => t.id === txTaggingId)?.name
+                  || 'Transaction')}
             </Text>
 
             {/* Airbnb Income shortcut */}
@@ -866,6 +984,10 @@ export function ProfileScreen() {
               activeOpacity={0.7}
               style={[tagSheetStyles.option, { borderColor: Colors.green + '40', backgroundColor: Colors.greenDim }]}
               onPress={async () => {
+                if (multiSelectMode && selectedTxIds.size > 0) {
+                  await handleBatchCategoryTag('__rental_income__');
+                  return;
+                }
                 if (!txTaggingId) return;
                 await handleCategoryTag(txTaggingId, '__rental_income__');
                 setTxTagStep('idle');
@@ -887,6 +1009,10 @@ export function ProfileScreen() {
                 activeOpacity={0.7}
                 style={tagSheetStyles.option}
                 onPress={async () => {
+                  if (multiSelectMode && selectedTxIds.size > 0) {
+                    await handleBatchTagProperty(p.id);
+                    return;
+                  }
                   if (!txTaggingId) return;
                   await handleTagTransaction(txTaggingId, p.id);
                   setTxTagStep('category');
@@ -908,6 +1034,10 @@ export function ProfileScreen() {
               activeOpacity={0.7}
               style={[tagSheetStyles.option, { borderColor: 'rgba(161,161,170,0.25)', backgroundColor: 'rgba(255,255,255,0.08)' }]}
               onPress={async () => {
+                if (multiSelectMode && selectedTxIds.size > 0) {
+                  await handleBatchCategoryTag('__internal_transfer__');
+                  return;
+                }
                 if (!txTaggingId) return;
                 await handleCategoryTag(txTaggingId, '__internal_transfer__');
                 setTxTagStep('idle');
@@ -927,6 +1057,10 @@ export function ProfileScreen() {
               activeOpacity={0.7}
               style={[tagSheetStyles.option, { borderColor: Colors.red + '30', backgroundColor: Colors.redDim }]}
               onPress={async () => {
+                if (multiSelectMode && selectedTxIds.size > 0) {
+                  await handleBatchCategoryTag('__delete__');
+                  return;
+                }
                 if (!txTaggingId) return;
                 await handleCategoryTag(txTaggingId, '__delete__');
                 setTxTagStep('idle');

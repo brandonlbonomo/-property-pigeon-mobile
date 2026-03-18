@@ -976,7 +976,7 @@ export function CleanerMoneyScreen() {
 }
 
 const styles = StyleSheet.create({
-  outerContainer: { flex: 1, backgroundColor: Colors.bg },
+  outerContainer: { flex: 1, backgroundColor: 'transparent' },
   content: { padding: Spacing.md, paddingBottom: Spacing.xl },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {

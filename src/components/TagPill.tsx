@@ -45,7 +45,7 @@ export function TagPill({ tagId, label, propertyIndex = 0, selected, onPress, si
     ? { bg: special.bg, text: special.text }
     : getPropertyColor(propertyIndex);
   const emoji = special?.emoji ?? '🏠';
-  const displayLabel = special?.label ?? (label || tagId).toUpperCase();
+  const displayLabel = special?.label ?? (label || tagId || 'Tag').toUpperCase();
 
   const isSm = size === 'sm';
   const pillStyle = [

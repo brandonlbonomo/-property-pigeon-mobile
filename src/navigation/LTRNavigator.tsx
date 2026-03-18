@@ -179,13 +179,13 @@ export function PillNavigator() {
       {/* Brand tint — covers only status bar + header + pills, fades to transparent */}
       <LinearGradient
         colors={[
-          'rgba(22,163,74,0.28)',
-          'rgba(26,188,88,0.18)',
-          'rgba(30,206,110,0.06)',
-          'rgba(30,206,110,0.00)',
+          'rgba(30,206,110,0.22)',
+          'rgba(30,206,110,0.12)',
+          'rgba(30,206,110,0.03)',
+          'rgba(10,10,10,0)',
         ]}
-        locations={[0, 0.45, 0.85, 1]}
-        style={[styles.headerGlow, { height: insets.top + 100 }]}
+        locations={[0, 0.35, 0.7, 1]}
+        style={[styles.headerGlow, { height: insets.top + 200 }]}
         pointerEvents="none"
       />
       {/* Header */}
@@ -334,9 +334,12 @@ const styles = StyleSheet.create({
     pointerEvents: 'none',
   },
   logo: {
-    width: 32,
-    height: 32,
-    resizeMode: 'contain',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    resizeMode: 'cover',
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
   },
   page: {
     flex: 1,

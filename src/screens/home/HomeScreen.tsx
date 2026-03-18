@@ -61,6 +61,13 @@ export function HomeScreen() {
   }, [fetchCockpit, fetchIcalEvents, fetchInvGroups, fetchAnalytics, isSTR, hasPriceLabs]);
 
   useEffect(() => { load(); }, []);
+
+  // Auto-reload when cockpit cache is invalidated (e.g. after tagging)
+  const cockpitCache = useDataStore(s => s.cockpit);
+  useEffect(() => {
+    if (!cockpitCache && !loading) load(true);
+  }, [cockpitCache]);
+
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   // Derived data — all hooks must be above early returns
@@ -186,10 +193,9 @@ export function HomeScreen() {
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
   return (
-    <View style={{ flex: 1 }}>
-    <GradientHeader />
+    <View style={{ flex: 1, backgroundColor: 'transparent' }}>
     <ScrollView
-      style={[styles.container, { backgroundColor: 'transparent' }]}
+      style={styles.container}
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
       {...({delaysContentTouches: false} as any)}
@@ -220,13 +226,13 @@ export function HomeScreen() {
       {/* ── FY Year-over-Year ── */}
       <View style={styles.fyCard}>
         <View style={styles.fyRow}>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, backgroundColor: 'transparent' }}>
             <Text style={styles.fyLabel}>FY {now.getFullYear() - 1}</Text>
           </View>
           <Text style={styles.fyAmount}>{fmt$(fyPriorAnnual)}</Text>
         </View>
         <View style={styles.fyRow}>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, backgroundColor: 'transparent' }}>
             <Text style={styles.fyLabel}>FY {now.getFullYear()} Projected</Text>
           </View>
           <Text style={styles.fyAmount}>{fmt$(fyCurrentAnnual)}</Text>
@@ -449,7 +455,7 @@ export function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   content: { padding: Spacing.md, paddingBottom: Spacing.xl * 2 },
   center: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
 

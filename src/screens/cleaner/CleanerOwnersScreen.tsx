@@ -304,7 +304,7 @@ export function CleanerOwnersScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   content: { padding: Spacing.md, paddingBottom: Spacing.xl * 2 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: Spacing.sm },
   backText: { fontSize: FontSize.md, color: Colors.primary },

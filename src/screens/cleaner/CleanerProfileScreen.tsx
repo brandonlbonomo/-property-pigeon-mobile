@@ -487,7 +487,7 @@ export function CleanerProfileScreen({ sqftRates, onOpenRates }: { sqftRates?: S
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   content: { padding: Spacing.md, paddingBottom: Spacing.xl },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {

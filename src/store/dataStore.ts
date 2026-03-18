@@ -3,7 +3,7 @@ import { apiFetch } from '../services/api';
 import { useUserStore } from './userStore';
 import { findCatalogItem } from '../constants/inventoryCatalog';
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 30 * 1000; // 30 seconds — match server cache, never serve stale data
 
 interface CacheEntry<T> {
   data: T;
@@ -50,6 +50,8 @@ interface DataState {
   analytics: CacheEntry<any> | null;
   customCategories: CacheEntry<any[]> | null;
   lastError: string | null;
+  /** Increments on property add/delete/edit — screens watch this to reload */
+  dataVersion: number;
 
   fetchCockpit: (force?: boolean) => Promise<any>;
   fetchTransactions: (force?: boolean) => Promise<any[]>;
@@ -89,6 +91,7 @@ export const useDataStore = create<DataState>((set, get) => ({
   analytics: null,
   customCategories: null,
   lastError: null,
+  dataVersion: 0,
 
   // API returns: { current: { total_revenue, total_expenses, net_income, expenses: { by_property } }, pct_changes, prior, month }
   // Normalize to: { kpis: { revenue_mtd, expenses_mtd, net_mtd, ... }, pct_changes, prior, month, raw }
@@ -554,11 +557,11 @@ export const useDataStore = create<DataState>((set, get) => ({
   deleteProperty: async (propId: string) => {
     const res = await apiFetch(`/api/props/${encodeURIComponent(propId)}`, { method: 'DELETE' });
     // Cascade: clear all caches since property deletion affects everything
-    set({
+    set(s => ({
       cockpit: null, transactions: null, tags: null, categoryTags: null, merchantMemory: null,
       props: null, icalEvents: null, icalFeeds: null, plBookings: null,
-      invGroups: null, analytics: null, lastError: null,
-    });
+      invGroups: null, analytics: null, lastError: null, dataVersion: s.dataVersion + 1,
+    }));
     return res;
   },
 
@@ -569,9 +572,10 @@ export const useDataStore = create<DataState>((set, get) => ({
 
   clearError: () => set({ lastError: null }),
 
-  invalidateAll: () => set({
+  invalidateAll: () => set(s => ({
     cockpit: null, transactions: null, tags: null, categoryTags: null, merchantMemory: null,
     props: null, icalEvents: null, icalFeeds: null, plBookings: null,
     invGroups: null, analytics: null, customCategories: null, lastError: null,
-  }),
+    dataVersion: s.dataVersion + 1,
+  })),
 }));

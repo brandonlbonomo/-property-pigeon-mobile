@@ -255,6 +255,16 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   }, [fetchCockpit, fetchProps]);
 
   useEffect(() => { load(); }, []);
+
+  // Auto-reload when cockpit cache is invalidated (e.g. after tagging a transaction)
+  const cockpitCache = useDataStore(s => s.cockpit);
+  useEffect(() => {
+    // cockpit was invalidated (set to null) — reload fresh data
+    if (!cockpitCache && !loading) {
+      load(true);
+    }
+  }, [cockpitCache]);
+
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   // Extract values

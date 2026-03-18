@@ -90,6 +90,10 @@ export function CalendarScreen() {
   }, [fetchIcalEvents, fetchIcalFeeds, fetchProps, fetchAnalytics, hasPriceLabs]);
 
   useEffect(() => { load(); }, []);
+
+  // Auto-reload when data is invalidated (property add/delete/tag)
+  const dataVersion = useDataStore(s => s.dataVersion);
+  useEffect(() => { if (dataVersion > 0) load(true); }, [dataVersion]);
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   const today = new Date();
@@ -243,8 +247,7 @@ export function CalendarScreen() {
 
 
   return (
-    <View style={{ flex: 1 }}>
-    <GradientHeader />
+    <View style={{ flex: 1, backgroundColor: 'transparent' }}>
     <ScrollView
       style={[styles.container, { backgroundColor: 'transparent' }]}
       contentContainerStyle={styles.content}
@@ -490,7 +493,7 @@ export function CalendarScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.bg },
+  container: { flex: 1, backgroundColor: 'transparent' },
   content: { padding: Spacing.md, paddingBottom: Spacing.xl },
   center: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
 

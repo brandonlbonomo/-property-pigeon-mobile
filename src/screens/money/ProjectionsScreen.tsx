@@ -196,6 +196,9 @@ export function ProjectionsScreen() {
   }, [fetchCockpit]);
 
   useEffect(() => { load(); }, []);
+
+  const dataVersion = useDataStore(s => s.dataVersion);
+  useEffect(() => { if (dataVersion > 0) load(true); }, [dataVersion]);
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   // Current actuals
