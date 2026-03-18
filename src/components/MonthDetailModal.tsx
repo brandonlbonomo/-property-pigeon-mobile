@@ -72,9 +72,27 @@ export function MonthDetailModal({ visible, yearMonth, onClose }: Props) {
     }
   }, [visible, yearMonth]);
 
-  const income = transactions.filter(t => (t.amount ?? 0) > 0 || t.category === 'income');
-  const expenses = transactions.filter(t => (t.amount ?? 0) < 0 || t.category === 'expense');
-  const displayList = tab === 'income' ? income : expenses;
+  const INCOME_CATS = new Set(['__rental_income__', '__cleaning_income__']);
+  const EXCLUDED_CATS = new Set(['__delete__', '__internal_transfer__']);
+
+  // Only show tagged transactions (matches bar chart calculation exactly)
+  const tagged = transactions.filter(t => {
+    const propTag = t.property_tag;
+    const catTag = t.category_tag;
+    if (!propTag && !catTag) return false;
+    if (EXCLUDED_CATS.has(catTag)) return false;
+    if (propTag === 'deleted' || propTag === 'transfer') return false;
+    return true;
+  });
+
+  const income = tagged.filter(t => {
+    const catTag = t.category_tag;
+    if (INCOME_CATS.has(catTag)) return true;
+    if (catTag) return false; // has a non-income category tag = expense
+    return t.type === 'in' || (t.amount ?? 0) < 0; // Plaid: negative = money in
+  });
+  const expenseList = tagged.filter(t => !income.includes(t));
+  const displayList = tab === 'income' ? income : expenseList;
   const total = displayList.reduce((s, t) => s + Math.abs(t.amount ?? 0), 0);
 
   const startEdit = (t: any) => {
@@ -190,12 +208,18 @@ export function MonthDetailModal({ visible, yearMonth, onClose }: Props) {
                     <TouchableOpacity activeOpacity={0.7} onPress={() => startEdit(t)} style={styles.txRow}>
                       <View style={styles.txInfo}>
                         <Text style={styles.txName} numberOfLines={1}>
-                          {t.name || t.merchant || t.description || 'Transaction'}
+                          {t.payee || t.name || t.merchant || t.description || 'Unknown Payee'}
                         </Text>
                         <Text style={styles.txMeta}>
-                          {t.date || ''}{t.category ? ` · ${t.category}` : ''}{t.property_tag ? ` · ${propLabel(t.property_tag)}` : ''}
+                          {t.date || ''}
+                          {t.property_tag && !t.property_tag.startsWith('__') ? ` · ${propLabel(t.property_tag)}` : ''}
+                          {t.category_tag === '__rental_income__' ? ' · Airbnb Income' : ''}
+                          {t.category_tag === '__cleaning_income__' ? ' · Cleaning Income' : ''}
+                          {t.category_tag === '__internal_transfer__' ? ' · Transfer' : ''}
+                          {t.category_tag && !t.category_tag.startsWith('__') ? ` · ${t.category_tag}` : ''}
+                          {t.auto_tagged ? ' · auto' : ''}
                         </Text>
-                        {t.source && <Text style={styles.txSource}>{t.source === 'manual' ? 'Manual' : 'Plaid'}</Text>}
+                        {t.account && <Text style={styles.txSource}>{t.account}</Text>}
                       </View>
                       <View style={styles.txRight}>
                         <Text style={[styles.txAmount, {
