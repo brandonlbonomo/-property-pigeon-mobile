@@ -317,6 +317,34 @@ export function ProfileScreen() {
     return txShowAll ? list : list.slice(0, 20);
   }, [untaggedTxs, taggedTxs, txShowAll]);
 
+  const promptCreateRule = useCallback((txId: string, tagValue: string) => {
+    const tx = transactions.find((t: any) => t.id === txId);
+    const payee = tx?.payee || tx?.name || '';
+    if (!payee || payee.length < 3) return;
+    const tagLabel = tagValue.startsWith('__')
+      ? (tagValue === '__rental_income__' ? 'Airbnb Income' : tagValue === '__internal_transfer__' ? 'Internal Transfer' : tagValue)
+      : propLabel(tagValue);
+    Alert.alert(
+      'Create Auto-Tag Rule?',
+      `Automatically tag all future "${payee}" transactions as "${tagLabel}"?`,
+      [
+        { text: 'No Thanks', style: 'cancel' },
+        { text: 'Create Rule', onPress: async () => {
+          try {
+            const res = await apiFetch('/api/tags/rule', {
+              method: 'POST',
+              body: JSON.stringify({ payee, prop_id: tagValue }),
+            });
+            if (res.applied > 0) {
+              useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
+              load(true);
+            }
+          } catch {}
+        }},
+      ],
+    );
+  }, [transactions, propLabel]);
+
   const handleTagTransaction = useCallback(async (txId: string, propertyId: string | null) => {
     setTxTagSaving(true);
     try {
@@ -325,14 +353,13 @@ export function ProfileScreen() {
         body: JSON.stringify({ id: txId, property_tag: propertyId }),
       });
       setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: propertyId } : t));
-      // Invalidate caches so Money tab and refreshes reflect the change
       useDataStore.setState({ cockpit: null, transactions: null, tags: null });
-      // Don't auto-close — caller controls step advancement
+      if (propertyId) promptCreateRule(txId, propertyId);
     } catch (e) {
       console.error('Tag save failed:', e);
     }
     setTxTagSaving(false);
-  }, []);
+  }, [promptCreateRule]);
 
   const handleCategoryTag = useCallback(async (txId: string, categoryId: string | null) => {
     setTxTagSaving(true);
@@ -345,8 +372,8 @@ export function ProfileScreen() {
         return updated;
       });
       setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: categoryId } : t));
-      // Invalidate caches so Money/Home tabs reflect the change
       useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
+      if (categoryId) promptCreateRule(txId, categoryId);
       // Don't auto-close — caller controls step advancement
     } catch {}
     setTxTagSaving(false);
@@ -559,6 +586,7 @@ export function ProfileScreen() {
                       {fmtDate(t.date || '')}
                       {t.property_tag && !t.property_tag.startsWith('__') ? ` · ${propLabel(t.property_tag)}` : ''}
                       {catDef ? ` · ${catDef.label}` : ''}
+                      {t.auto_tagged ? ' · auto' : ''}
                     </Text>
                   </View>
                   <Text style={[txStyles.rowAmt, { color: amtColor }]}>

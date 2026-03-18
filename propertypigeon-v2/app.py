@@ -1900,6 +1900,51 @@ def run_sync():
             continue
 
     store["transactions"] = tx_store
+
+    # ── Auto-tag new transactions using saved rules ──
+    rules = store.get("rules", {})
+    tags = store.get("tags", {})
+    cat_tags = store.get("category_tags", {})
+    auto_tagged_count = 0
+    if rules:
+        # Build case-insensitive lookup: lowercase payee → rule value
+        rule_lookup = {}
+        for payee_pattern, rule_val in rules.items():
+            rule_lookup[payee_pattern.lower().strip()] = {
+                "payee": payee_pattern,
+                "value": rule_val,
+            }
+
+        for tx_id, tx in tx_store.items():
+            # Skip already-tagged transactions
+            if tx_id in tags or tx_id in cat_tags:
+                continue
+            payee = (tx.get("payee") or tx.get("name") or "").lower().strip()
+            if not payee:
+                continue
+            # Check for exact match or substring match
+            matched_rule = rule_lookup.get(payee)
+            if not matched_rule:
+                # Try substring matching
+                for pattern, rule in rule_lookup.items():
+                    if pattern in payee or payee in pattern:
+                        matched_rule = rule
+                        break
+            if matched_rule:
+                val = matched_rule["value"]
+                # Value can be a property ID or a category tag (starts with __)
+                if val.startswith("__"):
+                    cat_tags[tx_id] = val
+                else:
+                    tags[tx_id] = val
+                tx_store[tx_id]["auto_tagged"] = True
+                auto_tagged_count += 1
+
+        if auto_tagged_count > 0:
+            store["tags"] = tags
+            store["category_tags"] = cat_tags
+            logger.info("Auto-tagged %d transactions from %d rules", auto_tagged_count, len(rules))
+
     save_store(store)
 
     # Invalidate caches after sync
@@ -7838,7 +7883,7 @@ def messages_delete_conversation(conv_id):
 def add_tag_rule():
     body = request.get_json(force=True) or {}
     payee = body.get("payee")
-    prop_id = body.get("prop_id")
+    prop_id = body.get("prop_id")  # property ID or category tag (e.g. __rental_income__)
     if not payee or not prop_id:
         return jsonify({"ok": False, "error": "payee and prop_id required"}), 400
     store = load_store()
@@ -7846,7 +7891,34 @@ def add_tag_rule():
         store["rules"] = {}
     store["rules"][payee] = prop_id
     save_store(store)
-    return jsonify({"ok": True})
+
+    # Retroactively apply rule to existing untagged transactions
+    tags = store.get("tags", {})
+    cat_tags = store.get("category_tags", {})
+    tx_store = store.get("transactions", {})
+    applied = 0
+    payee_lower = payee.lower().strip()
+    for tx_id, tx in tx_store.items():
+        if tx_id in tags or tx_id in cat_tags:
+            continue
+        tx_payee = (tx.get("payee") or tx.get("name") or "").lower().strip()
+        if payee_lower in tx_payee or tx_payee in payee_lower:
+            if prop_id.startswith("__"):
+                cat_tags[tx_id] = prop_id
+            else:
+                tags[tx_id] = prop_id
+            tx_store[tx_id]["auto_tagged"] = True
+            applied += 1
+    if applied > 0:
+        store["tags"] = tags
+        store["category_tags"] = cat_tags
+        store["transactions"] = tx_store
+        save_store(store)
+        uid = getattr(g, 'user_id', None)
+        _invalidate_cache("transactions", uid)
+        _invalidate_cache("tags", uid)
+        _invalidate_cache("cockpit", uid)
+    return jsonify({"ok": True, "applied": applied})
 
 @app.route("/api/tags/rule", methods=["DELETE"])
 def delete_tag_rule():

@@ -334,12 +334,9 @@ const styles = StyleSheet.create({
     pointerEvents: 'none',
   },
   logo: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    resizeMode: 'cover',
-    backgroundColor: 'transparent',
-    overflow: 'hidden',
+    width: 44,
+    height: 44,
+    resizeMode: 'contain',
   },
   page: {
     flex: 1,
