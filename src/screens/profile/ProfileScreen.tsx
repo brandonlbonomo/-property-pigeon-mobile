@@ -320,10 +320,12 @@ export function ProfileScreen() {
         body: JSON.stringify({ id: txId, property_tag: propertyId }),
       });
       setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: propertyId } : t));
-      // Invalidate cockpit cache so Money tab reflects the change
-      useDataStore.setState({ cockpit: null });
+      // Invalidate caches so Money tab and refreshes reflect the change
+      useDataStore.setState({ cockpit: null, transactions: null, tags: null });
       // Don't auto-close — caller controls step advancement
-    } catch {}
+    } catch (e) {
+      console.error('Tag save failed:', e);
+    }
     setTxTagSaving(false);
   }, []);
 
