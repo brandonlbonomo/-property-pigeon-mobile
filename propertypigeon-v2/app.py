@@ -2688,7 +2688,19 @@ def get_props():
     if cached is not None:
         return jsonify(cached)
     store = load_store()
-    result = {"props": store.get("custom_props", [])}
+    # Only return props that exist in the user's properties list (single source of truth)
+    valid_ids = set()
+    for p in store.get("properties", []):
+        pid = p.get("id") or p.get("name")
+        if pid:
+            valid_ids.add(pid)
+    custom = store.get("custom_props", [])
+    if valid_ids:
+        # Filter to only valid properties — no orphaned names leak through
+        filtered = [p for p in custom if (p.get("id") or p.get("name")) in valid_ids]
+    else:
+        filtered = custom  # No properties key yet — return all (backward compat)
+    result = {"props": filtered}
     if uid:
         _set_cached_response("props", uid, result)
     return jsonify(result)

@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../constants/theme';
 import { useDataStore } from '../store/dataStore';
+import { useUserStore } from '../store/userStore';
 import { apiFetch } from '../services/api';
 import { fmt$ } from '../utils/format';
 
@@ -53,12 +54,15 @@ export function MonthDetailModal({ visible, yearMonth, onClose }: Props) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const [txs, props] = await Promise.all([
-        fetchTransactionsByMonth(yearMonth, true),
-        fetchProps().catch(() => []),
-      ]);
+      const txs = await fetchTransactionsByMonth(yearMonth, true);
+      // Properties come exclusively from Manage Properties (userStore) — single source of truth
+      const userProps = (useUserStore.getState().profile?.properties || []).map((p: any) => ({
+        id: p.id || p.name,
+        label: p.label || p.name,
+        prop_id: p.id || p.name,
+      }));
       setTransactions(txs);
-      setProperties(props || []);
+      setProperties(userProps);
     } catch {
       setTransactions([]);
     }
@@ -178,7 +182,7 @@ export function MonthDetailModal({ visible, yearMonth, onClose }: Props) {
               onPress={() => { setTab('expenses'); setEditingId(null); }}
             >
               <Text style={[styles.tabText, tab === 'expenses' && styles.tabTextActive]}>
-                Expenses ({expenses.length})
+                Expenses ({expenseList.length})
               </Text>
             </TouchableOpacity>
           </View>

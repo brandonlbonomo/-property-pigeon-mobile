@@ -271,8 +271,12 @@ export const useDataStore = create<DataState>((set, get) => ({
       try {
         const raw = await apiFetch('/api/props');
         const apiData = Array.isArray(raw) ? raw : (raw?.props ?? []);
-        const apiIds = new Set(apiData.map((p: any) => p.id || p.prop_id));
-        const merged = [...apiData, ...localProps.filter(p => !apiIds.has(p.id))];
+        // Only include properties that exist in the user's local Manage Properties list
+        // This prevents orphaned backend props (like "B STREET") from leaking through
+        const localIds = new Set(localProps.map(p => p.id));
+        const validApiProps = apiData.filter((p: any) => localIds.has(p.id || p.prop_id));
+        const validApiIds = new Set(validApiProps.map((p: any) => p.id || p.prop_id));
+        const merged = [...validApiProps, ...localProps.filter(p => !validApiIds.has(p.id))];
         set({ props: { data: merged, fetchedAt: Date.now() } });
         return merged;
       } catch {
