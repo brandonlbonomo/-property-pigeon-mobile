@@ -2727,7 +2727,9 @@ def get_props():
 @app.route("/api/props", methods=["POST"])
 def save_props():
     store = load_store()
-    store["custom_props"] = request.json.get("props", [])
+    props_data = request.json.get("props", [])
+    store["custom_props"] = props_data
+    store["properties"] = props_data  # Keep both keys in sync
     save_store(store)
     _invalidate_cache("props", getattr(g, 'user_id', None))
     return jsonify({"ok": True})
@@ -7944,15 +7946,48 @@ def _get_appreciation_rate(market: str) -> float:
     return 0.035  # National average
 
 
+# ── Federal Funds Rate Cache ──
+_fed_rate_cache = {"rate": 5.25, "fetched_at": 0}
+_fed_rate_lock = threading.Lock()
+
+def _fetch_federal_funds_rate():
+    """Scrape current federal funds rate from federalreserve.gov.
+    Cache for 15 days. On failure, use last cached value or default 5.25%."""
+    with _fed_rate_lock:
+        now = _time.time()
+        if now - _fed_rate_cache["fetched_at"] < 15 * 86400:
+            return _fed_rate_cache["rate"]
+    try:
+        import urllib.request
+        url = "https://www.federalreserve.gov/releases/h15/default.htm"
+        req = urllib.request.Request(url, headers={"User-Agent": "PortfolioPigeon/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        # Parse federal funds effective rate from the H.15 page
+        import re
+        # Look for the effective rate pattern near "Federal funds"
+        match = re.search(r'Federal funds.*?(\d+\.\d+)\s*</td>', html, re.DOTALL | re.IGNORECASE)
+        if match:
+            rate = float(match.group(1))
+            with _fed_rate_lock:
+                _fed_rate_cache["rate"] = rate
+                _fed_rate_cache["fetched_at"] = now
+            logger.info("Federal funds rate updated: %.2f%%", rate)
+            return rate
+    except Exception as e:
+        logger.warning("Failed to fetch federal funds rate: %s", e)
+    return _fed_rate_cache["rate"]
+
+
 @app.route("/api/properties/<prop_id>/valuation", methods=["GET"])
 def property_valuation(prop_id):
-    """Compute Portfolio Pigeon valuation estimate for a property."""
+    """Portfolio Pigeon proprietary 4-method blended valuation."""
     uid = getattr(g, 'user_id', None)
     if not uid:
         return jsonify({"error": "Not authenticated"}), 401
 
     store = load_store()
-    props = store.get("properties", [])
+    props = store.get("properties", []) + store.get("custom_props", [])
     prop = None
     for p in props:
         if (p.get("id") or p.get("name")) == prop_id:
@@ -7961,7 +7996,6 @@ def property_valuation(prop_id):
     if not prop:
         return jsonify({"error": "Property not found"}), 404
 
-    # Check opt-out
     if prop.get("valuationOptOut"):
         return jsonify({"valuation": None, "opted_out": True})
 
@@ -7979,46 +8013,59 @@ def property_valuation(prop_id):
     today = _d.today()
     years_owned = max((today - pd).days / 365.25, 0)
     market = prop.get("market", "")
-    rate = _get_appreciation_rate(market)
+    appreciation_rate = _get_appreciation_rate(market)
     is_str = prop.get("isAirbnb", False)
+    cap_rate = 0.065  # Default 6.5%
 
-    # Appreciation component
-    appreciation_value = purchase_price * ((1 + rate) ** years_owned)
-    appreciation_gain = appreciation_value - purchase_price
-    appreciation_pct = ((appreciation_value / purchase_price) - 1) * 100 if purchase_price > 0 else 0
-
-    # Revenue multiplier component
+    # ── Gather transaction data ──
     tags = store.get("tags", {})
     cat_tags = store.get("category_tags", {})
     txs = store.get("transactions", {})
     INCOME_CATS = {"__rental_income__", "__cleaning_income__"}
+    EXCLUDED_CATS = {"__delete__", "__internal_transfer__"}
 
-    # Compute total revenue and date range for this property
     total_rev = 0.0
+    total_exp = 0.0
     earliest_date = None
     latest_date = None
+    # Per-year revenue for trend calculation
+    rev_by_year = {}
+
     for tx_id, tx in txs.items():
         prop_tag = tags.get(tx_id)
         cat_tag = cat_tags.get(tx_id)
-        if prop_tag != prop_id and cat_tag not in INCOME_CATS:
+        if not prop_tag and not cat_tag:
             continue
-        if prop_tag != prop_id and not (cat_tag in INCOME_CATS and not prop_tag):
+        if cat_tag in EXCLUDED_CATS:
             continue
+
+        # Only count transactions tagged to this property or income categories
+        belongs = (prop_tag == prop_id) or (cat_tag in INCOME_CATS and not prop_tag)
+        if not belongs:
+            continue
+
+        amount = abs(tx.get("amount", 0))
         tx_type = tx.get("type", "out")
         is_income = cat_tag in INCOME_CATS or (not cat_tag and tx_type == "in")
-        if not is_income:
-            continue
-        amount = abs(tx.get("amount", 0))
-        total_rev += amount
         d = tx.get("date", "")
+
+        if is_income:
+            total_rev += amount
+            if d and len(d) >= 4:
+                yr = d[:4]
+                rev_by_year[yr] = rev_by_year.get(yr, 0) + amount
+        else:
+            total_exp += amount
+
         if d:
             if not earliest_date or d < earliest_date:
                 earliest_date = d
             if not latest_date or d > latest_date:
                 latest_date = d
 
-    # Annualize revenue
+    # Annualize revenue and expenses
     annual_rev = 0.0
+    annual_exp = 0.0
     months_of_data = 0
     if earliest_date and latest_date and total_rev > 0:
         try:
@@ -8027,40 +8074,75 @@ def property_valuation(prop_id):
             days = max((l - e).days, 30)
             months_of_data = days / 30.44
             annual_rev = (total_rev / days) * 365.25
+            annual_exp = (total_exp / days) * 365.25 if total_exp > 0 else 0
         except Exception:
             annual_rev = total_rev
+            annual_exp = total_exp
 
-    # GRM (Gross Rent Multiplier) valuation
+    # If no revenue, use appreciation only at 100%
+    if annual_rev <= 0:
+        appreciation_value = purchase_price * ((1 + appreciation_rate) ** years_owned)
+        equity_gain = appreciation_value - purchase_price
+        return jsonify({
+            "valuation": {
+                "estimate": round(appreciation_value, 0),
+                "equity_gain": round(equity_gain, 0),
+                "purchase_price": purchase_price,
+                "years_owned": round(years_owned, 1),
+                "method": "appreciation_only",
+            },
+        })
+
+    # ══ METHOD 1: Appreciation (30%) ══
+    m1_value = purchase_price * ((1 + appreciation_rate) ** years_owned)
+
+    # ══ METHOD 2: Income/Cap Rate (35%) ══
+    # NOI = gross revenue - actual expenses (or gross × 0.35 if no expense data)
+    noi = annual_rev - annual_exp if annual_exp > 0 else annual_rev * 0.35
+    m2_value = noi / cap_rate if cap_rate > 0 else 0
+
+    # Federal funds rate adjustment
+    fed_rate = _fetch_federal_funds_rate()
+    if fed_rate > 5.0:
+        m2_value *= 0.97  # Compress 3%
+    elif fed_rate < 3.0:
+        m2_value *= 1.03  # Expand 3%
+
+    # ══ METHOD 3: GRM (15%) ══
     grm = 10 if is_str else 12
-    revenue_value = annual_rev * grm if annual_rev > 0 else 0
+    m3_value = annual_rev * grm
 
-    # Blended estimate
-    if annual_rev > 0 and purchase_price > 0:
-        blended = (appreciation_value * 0.45) + (revenue_value * 0.55)
-    elif purchase_price > 0:
-        blended = appreciation_value
-    else:
-        blended = 0
+    # ══ METHOD 4: Revenue Trend Premium (20%) ══
+    # Compare last 2 years of revenue for YoY growth
+    sorted_years = sorted(rev_by_year.keys())
+    trend_multiplier = 1.0
+    if len(sorted_years) >= 2:
+        cur_yr_rev = rev_by_year[sorted_years[-1]]
+        prev_yr_rev = rev_by_year[sorted_years[-2]]
+        if prev_yr_rev > 0:
+            yoy_growth = (cur_yr_rev - prev_yr_rev) / prev_yr_rev
+            # Scale linearly: -15% → 0.85x, 0% → 1.0x, +15% → 1.15x
+            trend_multiplier = max(0.85, min(1.15, 1.0 + yoy_growth))
+    # If < 12 months or no prior year, neutral 1.0x (already default)
+    m4_value = m2_value * trend_multiplier
 
-    equity_gain = blended - purchase_price if blended > 0 else 0
+    # ══ BLEND ══
+    blended = (m1_value * 0.30) + (m2_value * 0.35) + (m3_value * 0.15) + (m4_value * 0.20)
+
+    # ── Additional adjustments ──
+    # Stability premium: 5+ years owned → 1.5% boost
+    if years_owned >= 5:
+        blended *= 1.015
+
+    equity_gain = blended - purchase_price
 
     return jsonify({
         "valuation": {
-            "purchase_price": purchase_price,
-            "purchase_date": purchase_date,
-            "years_owned": round(years_owned, 1),
-            "appreciation_rate": round(rate * 100, 1),
-            "appreciation_value": round(appreciation_value, 0),
-            "appreciation_gain": round(appreciation_gain, 0),
-            "appreciation_pct": round(appreciation_pct, 1),
-            "annual_revenue": round(annual_rev, 0),
-            "months_of_data": round(months_of_data, 0),
-            "grm": grm,
-            "revenue_value": round(revenue_value, 0),
-            "blended_estimate": round(blended, 0),
+            "estimate": round(blended, 0),
             "equity_gain": round(equity_gain, 0),
-            "market": market,
-            "is_str": is_str,
+            "purchase_price": purchase_price,
+            "years_owned": round(years_owned, 1),
+            "method": "blended_4x",
         },
     })
 
@@ -8082,8 +8164,9 @@ def map_properties():
             continue
 
         # Load this user's store for properties and financials
-        store_file = os.path.join(DATA_DIR, f"store_{uid}.json")
-        if not os.path.exists(store_file):
+        base = "/data" if _os.path.isdir("/data") else "."
+        store_file = f"{base}/store_{uid}.json"
+        if not _os.path.exists(store_file):
             continue
         try:
             with open(store_file) as f:
@@ -8091,7 +8174,17 @@ def map_properties():
         except Exception:
             continue
 
-        props = store.get("properties", [])
+        # Check both properties and custom_props (mobile saves to custom_props)
+        props = store.get("properties", []) + store.get("custom_props", [])
+        # Deduplicate by id
+        seen_ids = set()
+        deduped = []
+        for p in props:
+            pid = p.get("id") or p.get("name")
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
+                deduped.append(p)
+        props = deduped
         tags = store.get("tags", {})
         cat_tags = store.get("category_tags", {})
         txs = store.get("transactions", {})

@@ -46,12 +46,8 @@ function formatRevenue(rev: number): string {
   return fmt$(rev);
 }
 
-function bubbleSize(rev: number): number {
-  const min = 50, max = 90;
-  if (rev <= 0) return min;
-  const scale = Math.log10(Math.max(rev, 1)) / 6; // log scale, 6 = $1M
-  return Math.min(max, Math.max(min, min + (max - min) * scale));
-}
+// Zillow-style: compact width based on text length, not revenue
+// All bubbles are small readable pills — size doesn't vary much
 
 export function NetworkMapScreen() {
   const [properties, setProperties] = useState<MapProperty[]>([]);
@@ -193,7 +189,6 @@ export function NetworkMapScreen() {
           >
             <View style={[
               styles.bubble,
-              { width: bubbleSize(item.revenue), height: bubbleSize(item.revenue) * 0.55 },
               item.is_own && styles.bubbleOwn,
             ]}>
               <Text style={[styles.bubbleText, item.is_own && styles.bubbleTextOwn]} numberOfLines={1}>
@@ -265,47 +260,31 @@ export function NetworkMapScreen() {
                   <Text style={styles.revenueValue}>{fmt$(selected.revenue)}</Text>
                 </View>
 
-                {/* Valuation breakdown (own properties only) */}
-                {selected.is_own && valuation && (
+                {/* Valuation — show estimate to all, equity gain to owner only */}
+                {valuation?.estimate && (
                   <View style={[styles.revenueCard, { backgroundColor: Colors.glassDark, borderColor: Colors.glassBorder }]}>
                     <Text style={[styles.revenueLabel, { color: Colors.text }]}>Portfolio Pigeon Estimate</Text>
-                    <Text style={[styles.revenueValue, { color: Colors.green }]}>{fmt$(valuation.blended_estimate)}</Text>
+                    <Text style={[styles.revenueValue, { color: Colors.green }]}>{fmt$(valuation.estimate)}</Text>
 
-                    <View style={{ marginTop: Spacing.sm, gap: 6 }}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Purchase Price</Text>
-                        <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{fmt$(valuation.purchase_price)}</Text>
-                      </View>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Years Owned</Text>
-                        <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{valuation.years_owned} yrs</Text>
-                      </View>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Appreciation ({valuation.appreciation_rate}%/yr)</Text>
-                        <Text style={{ color: Colors.green, fontSize: FontSize.xs, fontWeight: '600' }}>+{fmt$(valuation.appreciation_gain)} ({valuation.appreciation_pct}%)</Text>
-                      </View>
-                      {valuation.annual_revenue > 0 && (
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Revenue Value ({valuation.grm}x GRM)</Text>
-                          <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{fmt$(valuation.revenue_value)}</Text>
-                        </View>
-                      )}
-                      <View style={{ height: 1, backgroundColor: Colors.border, marginVertical: 4 }} />
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    {/* Equity gain — owner only */}
+                    {selected.is_own && valuation.equity_gain != null && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.sm }}>
                         <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '700' }}>Equity Gain</Text>
-                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '800' }}>+{fmt$(valuation.equity_gain)}</Text>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '800' }}>
+                          {valuation.equity_gain >= 0 ? '+' : ''}{fmt$(valuation.equity_gain)}
+                        </Text>
                       </View>
-                    </View>
+                    )}
 
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: Spacing.sm }}>
                       <Ionicons name="information-circle-outline" size={12} color={Colors.textDim} />
                       <Text style={{ color: Colors.textDim, fontSize: 10, flex: 1 }}>
-                        Based on purchase price, time owned, and revenue. Not an appraisal.
+                        Portfolio Pigeon Proprietary Estimate. Not an appraisal.
                       </Text>
                     </View>
                   </View>
                 )}
-                {selected.is_own && valuationLoading && (
+                {valuationLoading && (
                   <ActivityIndicator color={Colors.green} style={{ marginBottom: Spacing.md }} />
                 )}
 
@@ -344,37 +323,37 @@ const styles = StyleSheet.create({
   center: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   loadingText: { color: Colors.textDim, fontSize: FontSize.sm, marginTop: Spacing.sm },
 
-  // Bubble markers
+  // Zillow-style compact pill markers
   bubble: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: Radius.pill,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.25)',
+    backgroundColor: 'rgba(30,30,34,0.92)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     alignItems: 'center',
     justifyContent: 'center',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.5,
+        shadowRadius: 4,
       },
     }),
   },
   bubbleOwn: {
-    backgroundColor: 'rgba(30,206,110,0.2)',
-    borderColor: 'rgba(30,206,110,0.5)',
+    backgroundColor: 'rgba(30,206,110,0.85)',
+    borderColor: 'rgba(30,206,110,0.6)',
   },
   bubbleText: {
     color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   bubbleTextOwn: {
-    color: Colors.green,
+    color: '#fff',
   },
   countBadge: {
     position: 'absolute',

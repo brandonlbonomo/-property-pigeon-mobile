@@ -346,29 +346,25 @@ export function ProfileScreen() {
   }, [transactions, propLabel]);
 
   const handleTagTransaction = useCallback(async (txId: string, propertyId: string | null) => {
-    // Optimistic UI — update instantly, confirm with backend async
-    const prevTransactions = transactions;
+    // Optimistic UI — update instantly
     setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: propertyId } : t));
     setTxTagSaving(false);
-    useDataStore.setState({ cockpit: null, transactions: null, tags: null });
 
-    if (propertyId) promptCreateRule(txId, propertyId);
-
-    // Fire API in background
+    // Fire API and invalidate cockpit after it confirms
     apiFetch('/api/transactions/update', {
       method: 'POST',
       body: JSON.stringify({ id: txId, property_tag: propertyId }),
+    }).then(() => {
+      // Invalidate cockpit so Money tab refetches with new tag data
+      useDataStore.setState({ cockpit: null, transactions: null });
     }).catch(() => {
-      // Revert on failure
-      setTransactions(prevTransactions);
+      setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: null } : t));
       Alert.alert('Error', 'Failed to save tag. Please try again.');
     });
-  }, [promptCreateRule, transactions]);
+  }, []);
 
   const handleCategoryTag = useCallback(async (txId: string, categoryId: string | null) => {
     // Optimistic UI — update instantly
-    const prevTransactions = transactions;
-    const prevCategoryTags = { ...categoryTags };
     setCategoryTags(prev => {
       const updated = { ...prev };
       if (categoryId) updated[txId] = categoryId;
@@ -377,18 +373,16 @@ export function ProfileScreen() {
     });
     setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: categoryId } : t));
     setTxTagSaving(false);
-    useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
 
-    if (categoryId) promptCreateRule(txId, categoryId);
-
-    // Fire API in background
-    saveCategoryTag(txId, categoryId).catch(() => {
-      // Revert on failure
-      setTransactions(prevTransactions);
-      setCategoryTags(prevCategoryTags);
+    // Fire API and invalidate after it confirms
+    saveCategoryTag(txId, categoryId).then(() => {
+      useDataStore.setState({ cockpit: null, transactions: null });
+    }).catch(() => {
+      setCategoryTags(prev => { const u = { ...prev }; delete u[txId]; return u; });
+      setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: null } : t));
       Alert.alert('Error', 'Failed to save tag. Please try again.');
     });
-  }, [saveCategoryTag, transactions, categoryTags, promptCreateRule]);
+  }, [saveCategoryTag]);
 
   const handleBatchTagProperty = useCallback(async (propertyId: string | null) => {
     // Optimistic — update UI instantly
@@ -397,10 +391,8 @@ export function ProfileScreen() {
     setTransactions(prev => prev.map(t =>
       ids.has(t.id) ? { ...t, property_tag: propertyId } : t
     ));
-    setSelectedTxIds(new Set());
-    setMultiSelectMode(false);
-    setTxTagStep('idle');
-    useDataStore.setState({ cockpit: null, transactions: null, tags: null });
+    // Don't clear selectedTxIds yet — category step needs them
+    // setTxTagStep will be set by the caller
 
     // Fire all API calls in background
     Promise.all(
@@ -410,7 +402,9 @@ export function ProfileScreen() {
           body: JSON.stringify({ id: txId, property_tag: propertyId }),
         })
       )
-    ).catch(() => {
+    ).then(() => {
+      useDataStore.setState({ cockpit: null, transactions: null });
+    }).catch(() => {
       setTransactions(prevTransactions);
       Alert.alert('Error', 'Some tags failed to save. Please try again.');
     });
@@ -1060,6 +1054,7 @@ export function ProfileScreen() {
                 onPress={async () => {
                   if (multiSelectMode && selectedTxIds.size > 0) {
                     await handleBatchTagProperty(p.id);
+                    setTxTagStep('category');
                     return;
                   }
                   if (!txTaggingId) return;
@@ -1159,7 +1154,7 @@ export function ProfileScreen() {
 
       {/* ── Step 2: Category Bottom Sheet ── */}
       <Modal
-        visible={txTagStep === 'category' && !!txTaggingId}
+        visible={txTagStep === 'category' && (!!txTaggingId || selectedTxIds.size > 0)}
         transparent
         animationType="slide"
         onRequestClose={() => { setTxTagStep('idle'); setTxTaggingId(null); }}
@@ -1184,6 +1179,10 @@ export function ProfileScreen() {
                   activeOpacity={0.7}
                   style={[tagSheetStyles.option, { borderColor: cat.color + '30' }]}
                   onPress={async () => {
+                    if (selectedTxIds.size > 0) {
+                      await handleBatchCategoryTag(cat.id);
+                      return;
+                    }
                     if (!txTaggingId) return;
                     await handleCategoryTag(txTaggingId, cat.id);
                     setTxTagStep('idle');
@@ -1201,6 +1200,10 @@ export function ProfileScreen() {
                   activeOpacity={0.7}
                   style={[tagSheetStyles.option, { borderColor: tag.color + '30' }]}
                   onPress={async () => {
+                    if (selectedTxIds.size > 0) {
+                      await handleBatchCategoryTag(tag.id);
+                      return;
+                    }
                     if (!txTaggingId) return;
                     await handleCategoryTag(txTaggingId, tag.id);
                     setTxTagStep('idle');
