@@ -7909,6 +7909,83 @@ def messages_delete_conversation(conv_id):
     return jsonify({"ok": True})
 
 
+# ── Investor Network Map ──────────────────────────────────────
+@app.route("/api/map/properties", methods=["GET"])
+def map_properties():
+    """Return all public properties with lat/lng for the network map.
+    Each property includes owner info and projected annual revenue."""
+    all_props = []
+    users = load_users()
+    requesting_uid = getattr(g, 'user_id', None)
+
+    for email, user_data in users.items():
+        uid = user_data.get("id")
+        username = user_data.get("username", "")
+        role = user_data.get("role", "owner")
+        if role != "owner":
+            continue
+
+        # Load this user's store for properties and financials
+        store_file = os.path.join(DATA_DIR, f"store_{uid}.json")
+        if not os.path.exists(store_file):
+            continue
+        try:
+            with open(store_file) as f:
+                store = json.load(f)
+        except Exception:
+            continue
+
+        props = store.get("properties", [])
+        tags = store.get("tags", {})
+        cat_tags = store.get("category_tags", {})
+        txs = store.get("transactions", {})
+        INCOME_CATS = {"__rental_income__", "__cleaning_income__"}
+
+        for p in props:
+            lat = p.get("lat")
+            lng = p.get("lng")
+            if not lat or not lng:
+                continue
+            # Skip private properties
+            if p.get("private"):
+                continue
+
+            pid = p.get("id") or p.get("name")
+            is_own = uid == requesting_uid
+
+            # Compute annual revenue from tagged transactions
+            annual_rev = 0.0
+            for tx_id, tx in txs.items():
+                prop_tag = tags.get(tx_id)
+                cat_tag = cat_tags.get(tx_id)
+                if prop_tag != pid and cat_tag not in INCOME_CATS:
+                    continue
+                if prop_tag == pid or (cat_tag in INCOME_CATS and not prop_tag):
+                    amount = abs(tx.get("amount", 0))
+                    tx_type = tx.get("type", "out")
+                    is_income = cat_tag in INCOME_CATS or (not cat_tag and tx_type == "in")
+                    if is_income:
+                        annual_rev += amount
+
+            all_props.append({
+                "id": pid,
+                "lat": lat,
+                "lng": lng,
+                "label": p.get("label") or p.get("name", ""),
+                "address": p.get("address", ""),
+                "units": p.get("units", 1),
+                "isAirbnb": p.get("isAirbnb", False),
+                "market": p.get("market", ""),
+                "revenue": round(annual_rev, 0),
+                "owner_id": uid,
+                "owner_username": username,
+                "is_own": is_own,
+                "photos": (p.get("photos") or [])[:1],  # Only first photo
+            })
+
+    return jsonify({"properties": all_props})
+
+
 # ── Tag rules ─────────────────────────────────────────────────
 @app.route("/api/tags/rule", methods=["POST"])
 def add_tag_rule():

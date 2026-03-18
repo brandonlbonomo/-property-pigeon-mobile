@@ -18,9 +18,10 @@ import { MoneyScreen } from '../screens/money/MoneyScreen';
 import { ProjectionsScreen } from '../screens/money/ProjectionsScreen';
 import { InventoryScreen } from '../screens/inventory/InventoryScreen';
 import { CleaningsScreen, useCleaningsBadgeCount } from '../screens/cleanings/CleaningsScreen';
+import { NetworkMapScreen } from '../screens/network/NetworkMapScreen';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const BASE_ORDER = ['profile', 'performance', 'projections'];
+const BASE_ORDER = ['profile', 'performance', 'projections', 'network'];
 const STR_PILLS = ['calendar', 'inventory'];
 
 const PILL_LABELS: Record<string, string> = {
@@ -29,6 +30,7 @@ const PILL_LABELS: Record<string, string> = {
   projections: 'Projections',
   calendar: 'Calendar',
   inventory: 'Inventory',
+  network: 'Map',
 };
 
 function PageContent({ pageKey }: { pageKey: string }) {
@@ -38,6 +40,7 @@ function PageContent({ pageKey }: { pageKey: string }) {
     case 'projections': return <ProjectionsScreen />;
     case 'calendar': return <CleaningsScreen />; // Calendar pill → CleaningsScreen (iCal events, check-ins, cleanings)
     case 'inventory': return <InventoryScreen />;
+    case 'network': return <NetworkMapScreen />;
     default: return <View />;
   }
 }
