@@ -15,6 +15,7 @@ import { ChatScreen } from '../screens/messages/ChatScreen';
 import { ComposeMessageScreen } from '../screens/messages/ComposeMessageScreen';
 import { ComposeGroupScreen } from '../screens/messages/ComposeGroupScreen';
 import { PillNavigator } from './LTRNavigator';
+import { NetworkMapScreen } from '../screens/network/NetworkMapScreen';
 
 const RootStack = createNativeStackNavigator();
 
@@ -245,6 +246,16 @@ export function AppNavigator() {
                 </TouchableOpacity>
               );
             },
+          }}
+        />
+        <RootStack.Screen
+          name="NetworkMap"
+          component={NetworkMapScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: false,
+            contentStyle: { backgroundColor: Colors.bg },
+            animation: 'slide_from_bottom',
           }}
         />
         <RootStack.Screen

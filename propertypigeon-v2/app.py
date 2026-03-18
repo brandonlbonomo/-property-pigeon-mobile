@@ -8147,6 +8147,168 @@ def property_valuation(prop_id):
     })
 
 
+# ── Airbnb Payout Split Engine ─────────────────────────────────
+
+@app.route("/api/income/split-suggest", methods=["POST"])
+def income_split_suggest():
+    """Given a transaction ID tagged as Airbnb income, suggest a per-property split
+    based on iCal booking nights in the payout period.
+    Returns: { splits: [{prop_id, prop_label, nights, pct, amount}], has_ical: bool }
+    If no iCal data, returns has_ical: false so frontend can ask user for manual split."""
+    body = request.json or {}
+    tx_ids = body.get("tx_ids", [])
+    if isinstance(tx_ids, str):
+        tx_ids = [tx_ids]
+    if not tx_ids:
+        return jsonify({"error": "tx_ids required"}), 400
+
+    store = load_store()
+    txs = store.get("transactions", {})
+    events = store.get("ical_events", [])
+    props = store.get("properties", []) + store.get("custom_props", [])
+
+    # Dedupe props
+    seen = set()
+    unique_props = []
+    for p in props:
+        pid = p.get("id") or p.get("name")
+        if pid and pid not in seen:
+            seen.add(pid)
+            unique_props.append(p)
+
+    # Get total amount and date range from selected transactions
+    total_amount = 0.0
+    min_date = None
+    max_date = None
+    for tid in tx_ids:
+        tx = txs.get(tid)
+        if not tx:
+            continue
+        total_amount += abs(tx.get("amount", 0))
+        d = tx.get("date", "")
+        if d:
+            if not min_date or d < min_date:
+                min_date = d
+            if not max_date or d > max_date:
+                max_date = d
+
+    if total_amount <= 0:
+        return jsonify({"error": "No valid transactions"}), 400
+
+    # Expand date window: payouts cover ~30 days before the payout date
+    from datetime import date as _d, timedelta as _td
+    try:
+        end_date = _d.fromisoformat(max_date) if max_date else _d.today()
+        start_date = _d.fromisoformat(min_date) - _td(days=35) if min_date else end_date - _td(days=35)
+    except Exception:
+        end_date = _d.today()
+        start_date = end_date - _td(days=35)
+
+    # Count nights per property from iCal events in the payout window
+    nights_by_prop = {}
+    for ev in events:
+        prop_id = ev.get("propId")
+        if not prop_id:
+            continue
+        ev_start = ev.get("start", "")
+        ev_end = ev.get("end", "")
+        if not ev_start or not ev_end:
+            continue
+        # Skip blocked/owner events
+        summary = (ev.get("summary") or "").lower()
+        if summary in ("reserved", "not available", "unavailable", "blocked"):
+            continue
+        try:
+            es = _d.fromisoformat(ev_start)
+            ee = _d.fromisoformat(ev_end)
+        except Exception:
+            continue
+        # Check overlap with payout window
+        overlap_start = max(es, start_date)
+        overlap_end = min(ee, end_date)
+        overlap_nights = max(0, (overlap_end - overlap_start).days)
+        if overlap_nights > 0:
+            nights_by_prop[prop_id] = nights_by_prop.get(prop_id, 0) + overlap_nights
+
+    total_nights = sum(nights_by_prop.values())
+    has_ical = total_nights > 0
+
+    if has_ical:
+        # Proportional split based on nights
+        splits = []
+        for pid, nights in sorted(nights_by_prop.items(), key=lambda x: -x[1]):
+            pct = nights / total_nights
+            prop = next((p for p in unique_props if (p.get("id") or p.get("name")) == pid), None)
+            splits.append({
+                "prop_id": pid,
+                "prop_label": (prop.get("label") or prop.get("name") or pid) if prop else pid,
+                "nights": nights,
+                "pct": round(pct * 100, 1),
+                "amount": round(total_amount * pct, 2),
+            })
+    else:
+        # No iCal data — return all STR properties with equal split for user to adjust
+        str_props = [p for p in unique_props if p.get("isAirbnb")]
+        if not str_props:
+            str_props = unique_props
+        equal_pct = 100.0 / max(len(str_props), 1)
+        splits = [{
+            "prop_id": p.get("id") or p.get("name"),
+            "prop_label": p.get("label") or p.get("name") or "Property",
+            "nights": 0,
+            "pct": round(equal_pct, 1),
+            "amount": round(total_amount * equal_pct / 100, 2),
+        } for p in str_props]
+
+    return jsonify({
+        "splits": splits,
+        "has_ical": has_ical,
+        "total_amount": round(total_amount, 2),
+        "tx_ids": tx_ids,
+        "window": {"start": str(start_date), "end": str(end_date)},
+    })
+
+
+@app.route("/api/income/split-apply", methods=["POST"])
+def income_split_apply():
+    """Apply a user-confirmed split: tag each tx proportionally to properties."""
+    body = request.json or {}
+    tx_ids = body.get("tx_ids", [])
+    splits = body.get("splits", [])
+    if not tx_ids or not splits:
+        return jsonify({"error": "tx_ids and splits required"}), 400
+
+    store = load_store()
+    tags = store.get("tags", {})
+    cat_tags = store.get("category_tags", {})
+    txs = store.get("transactions", {})
+
+    # Store split metadata on transactions
+    split_data = {s["prop_id"]: s["pct"] for s in splits}
+    for tid in tx_ids:
+        if tid not in txs:
+            continue
+        # Tag as rental income
+        cat_tags[tid] = "__rental_income__"
+        # Store the split info on the transaction for per-property revenue calculation
+        txs[tid]["revenue_split"] = split_data
+        # Tag to the highest-percentage property for primary display
+        primary = max(splits, key=lambda s: s["pct"])
+        tags[tid] = primary["prop_id"]
+
+    store["tags"] = tags
+    store["category_tags"] = cat_tags
+    store["transactions"] = txs
+    save_store(store)
+
+    uid = getattr(g, 'user_id', None)
+    _invalidate_cache("transactions", uid)
+    _invalidate_cache("tags", uid)
+    _invalidate_cache("cockpit", uid)
+
+    return jsonify({"ok": True, "applied": len(tx_ids)})
+
+
 # ── Investor Network Map ──────────────────────────────────────
 @app.route("/api/map/properties", methods=["GET"])
 def map_properties():

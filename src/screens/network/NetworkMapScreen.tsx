@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import MapView, { Marker, Region } from 'react-native-maps';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { apiFetch } from '../../services/api';
 import { useUserStore } from '../../store/userStore';
@@ -57,6 +59,8 @@ export function NetworkMapScreen() {
   const [valuationLoading, setValuationLoading] = useState(false);
   const mapRef = useRef<MapView>(null);
   const profile = useUserStore(s => s.profile);
+  const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
 
   // Fetch valuation when a property is selected (own properties only)
   useEffect(() => {
@@ -204,8 +208,17 @@ export function NetworkMapScreen() {
         ))}
       </MapView>
 
+      {/* Close button */}
+      <TouchableOpacity
+        activeOpacity={0.7}
+        style={[styles.closeBtn, { top: insets.top + Spacing.sm }]}
+        onPress={() => navigation.goBack()}
+      >
+        <Ionicons name="close" size={22} color={Colors.text} />
+      </TouchableOpacity>
+
       {/* Property count overlay */}
-      <View style={styles.countOverlay}>
+      <View style={[styles.countOverlay, { top: insets.top + Spacing.sm }]}>
         <Text style={styles.countOverlayText}>
           {properties.length} properties
         </Text>
@@ -254,10 +267,30 @@ export function NetworkMapScreen() {
                   ) : null}
                 </View>
 
-                {/* Revenue */}
+                {/* Revenue + 5yr Projection */}
                 <View style={styles.revenueCard}>
                   <Text style={styles.revenueLabel}>Annual Revenue</Text>
                   <Text style={styles.revenueValue}>{fmt$(selected.revenue)}</Text>
+                  {selected.revenue > 0 && (
+                    <View style={{ marginTop: Spacing.sm, gap: 4 }}>
+                      <Text style={{ color: Colors.textSecondary, fontSize: 10, fontWeight: '600', marginBottom: 2 }}>PROJECTED INCOME</Text>
+                      {[1, 2, 3, 4, 5].map(yr => {
+                        const projected = selected.revenue * Math.pow(1.035, yr);
+                        return (
+                          <View key={yr} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                            <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Year {yr} ({new Date().getFullYear() + yr})</Text>
+                            <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{fmt$(projected)}</Text>
+                          </View>
+                        );
+                      })}
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.xs, fontWeight: '700' }}>5-Year Total</Text>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.xs, fontWeight: '800' }}>
+                          {fmt$([1,2,3,4,5].reduce((s, yr) => s + selected.revenue * Math.pow(1.035, yr), 0))}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
                 </View>
 
                 {/* Valuation — show estimate to all, equity gain to owner only */}
@@ -268,12 +301,26 @@ export function NetworkMapScreen() {
 
                     {/* Equity gain — owner only */}
                     {selected.is_own && valuation.equity_gain != null && (
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.sm }}>
-                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '700' }}>Equity Gain</Text>
-                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '800' }}>
-                          {valuation.equity_gain >= 0 ? '+' : ''}{fmt$(valuation.equity_gain)}
-                        </Text>
-                      </View>
+                      <>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.sm }}>
+                          <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '700' }}>Equity Gain</Text>
+                          <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '800' }}>
+                            {valuation.equity_gain >= 0 ? '+' : ''}{fmt$(valuation.equity_gain)}
+                          </Text>
+                        </View>
+                        {valuation.purchase_price > 0 && (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                            <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Purchase Price</Text>
+                            <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{fmt$(valuation.purchase_price)}</Text>
+                          </View>
+                        )}
+                        {valuation.years_owned > 0 && (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
+                            <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Years Owned</Text>
+                            <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{valuation.years_owned} yrs</Text>
+                          </View>
+                        )}
+                      </>
                     )}
 
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: Spacing.sm }}>
@@ -368,10 +415,26 @@ const styles = StyleSheet.create({
   },
   countText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
+  // Close button
+  closeBtn: {
+    position: 'absolute',
+    left: Spacing.md,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.glass,
+    borderWidth: 0.5,
+    borderColor: Colors.glassBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+    }),
+  },
   // Count overlay
   countOverlay: {
     position: 'absolute',
-    top: Spacing.md,
     alignSelf: 'center',
     backgroundColor: Colors.glass,
     borderRadius: Radius.pill,

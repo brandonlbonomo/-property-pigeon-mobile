@@ -93,7 +93,9 @@ export function ProfileScreen() {
   const [drillDownMonth, setDrillDownMonth] = useState<string | null>(null);
   const [categoryTags, setCategoryTags] = useState<Record<string, string>>({});
   const [txTaggingId, setTxTaggingId] = useState<string | null>(null);
-  const [txTagStep, setTxTagStep] = useState<'idle' | 'property' | 'category'>('idle');
+  const [txTagStep, setTxTagStep] = useState<'idle' | 'property' | 'category' | 'split'>('idle');
+  const [splitData, setSplitData] = useState<any>(null);
+  const [splitLoading, setSplitLoading] = useState(false);
   const [txTagSaving, setTxTagSaving] = useState(false);
   const [txShowAll, setTxShowAll] = useState(false);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
@@ -1027,21 +1029,52 @@ export function ProfileScreen() {
               activeOpacity={0.7}
               style={[tagSheetStyles.option, { borderColor: Colors.green + '40', backgroundColor: Colors.greenDim }]}
               onPress={async () => {
-                if (multiSelectMode && selectedTxIds.size > 0) {
-                  await handleBatchCategoryTag('__rental_income__');
+                // Fetch split suggestion from backend
+                const ids = multiSelectMode && selectedTxIds.size > 0
+                  ? Array.from(selectedTxIds)
+                  : txTaggingId ? [txTaggingId] : [];
+                if (ids.length === 0) return;
+
+                const props = profile?.properties || [];
+                if (props.filter((p: any) => p.isAirbnb).length <= 1) {
+                  // Only 1 or 0 STR properties — no split needed, tag directly
+                  if (multiSelectMode && selectedTxIds.size > 0) {
+                    await handleBatchCategoryTag('__rental_income__');
+                  } else if (txTaggingId) {
+                    await handleCategoryTag(txTaggingId, '__rental_income__');
+                  }
+                  setTxTagStep('idle');
+                  setTxTaggingId(null);
                   return;
                 }
-                if (!txTaggingId) return;
-                await handleCategoryTag(txTaggingId, '__rental_income__');
-                setTxTagStep('idle');
-                setTxTaggingId(null);
+
+                // Multiple STR properties — show split screen
+                setSplitLoading(true);
+                setTxTagStep('split');
+                try {
+                  const res = await apiFetch('/api/income/split-suggest', {
+                    method: 'POST',
+                    body: JSON.stringify({ tx_ids: ids }),
+                  });
+                  setSplitData(res);
+                } catch {
+                  // Fallback: tag directly without split
+                  if (multiSelectMode && selectedTxIds.size > 0) {
+                    await handleBatchCategoryTag('__rental_income__');
+                  } else if (txTaggingId) {
+                    await handleCategoryTag(txTaggingId, '__rental_income__');
+                  }
+                  setTxTagStep('idle');
+                  setTxTaggingId(null);
+                }
+                setSplitLoading(false);
               }}
               disabled={txTagSaving}
             >
               <Ionicons name="logo-usd" size={16} color={Colors.green} />
               <View style={tagSheetStyles.optionText}>
                 <Text style={[tagSheetStyles.optionLabel, { color: Colors.green }]}>Airbnb Income</Text>
-                <Text style={tagSheetStyles.optionHint}>Tag as rental income — no property needed</Text>
+                <Text style={tagSheetStyles.optionHint}>Split across properties by booking nights</Text>
               </View>
             </TouchableOpacity>
 
@@ -1220,6 +1253,97 @@ export function ProfileScreen() {
             <TouchableOpacity activeOpacity={0.7} style={tagSheetStyles.cancelBtn}
               onPress={() => { setTxTagStep('idle'); setTxTaggingId(null); }}>
               <Text style={tagSheetStyles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Income Split Modal ── */}
+      <Modal
+        visible={txTagStep === 'split'}
+        transparent
+        animationType="slide"
+        onRequestClose={() => { setTxTagStep('idle'); setTxTaggingId(null); setSplitData(null); }}
+      >
+        <TouchableOpacity activeOpacity={1} style={tagSheetStyles.overlay}
+          onPress={() => { setTxTagStep('idle'); setTxTaggingId(null); setSplitData(null); }}>
+          <View style={[tagSheetStyles.sheet, { maxHeight: '70%' }]} onStartShouldSetResponder={() => true}>
+            <View style={tagSheetStyles.handle} />
+            <Text style={tagSheetStyles.title}>SPLIT AIRBNB INCOME</Text>
+            {splitLoading ? (
+              <ActivityIndicator color={Colors.green} style={{ marginVertical: Spacing.xl }} />
+            ) : splitData ? (
+              <>
+                <Text style={tagSheetStyles.subtitle}>
+                  {splitData.has_ical
+                    ? `Split ${fmt$(splitData.total_amount)} based on ${splitData.splits.reduce((s: number, sp: any) => s + sp.nights, 0)} booking nights`
+                    : `No iCal bookings found — adjust split manually`}
+                </Text>
+                <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
+                  {(splitData.splits || []).map((sp: any) => (
+                    <View key={sp.prop_id} style={[tagSheetStyles.option, { flexDirection: 'column', alignItems: 'stretch', gap: 4 }]}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                          <Ionicons name="home" size={14} color={Colors.green} />
+                          <Text style={tagSheetStyles.optionLabel}>{sp.prop_label}</Text>
+                        </View>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '700' }}>
+                          {fmt$(sp.amount)}
+                        </Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: Colors.textDim, fontSize: FontSize.xs }}>
+                          {sp.nights > 0 ? `${sp.nights} nights` : 'Manual'}
+                        </Text>
+                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>{sp.pct}%</Text>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={{ backgroundColor: Colors.green, borderRadius: Radius.md, padding: Spacing.md, alignItems: 'center', marginTop: Spacing.sm }}
+                  onPress={async () => {
+                    try {
+                      await apiFetch('/api/income/split-apply', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                          tx_ids: splitData.tx_ids,
+                          splits: splitData.splits,
+                        }),
+                      });
+                      // Update local state
+                      const splitMap = Object.fromEntries(
+                        (splitData.splits || []).map((s: any) => [s.prop_id, s.pct])
+                      );
+                      setTransactions(prev => prev.map(t =>
+                        splitData.tx_ids.includes(t.id)
+                          ? { ...t, category_tag: '__rental_income__', revenue_split: splitMap }
+                          : t
+                      ));
+                      useDataStore.setState({ cockpit: null, transactions: null });
+                    } catch {
+                      Alert.alert('Error', 'Failed to apply split.');
+                    }
+                    setTxTagStep('idle');
+                    setTxTaggingId(null);
+                    setSelectedTxIds(new Set());
+                    setMultiSelectMode(false);
+                    setSplitData(null);
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: FontSize.md, fontWeight: '700' }}>
+                    Confirm Split
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            <TouchableOpacity activeOpacity={0.7}
+              style={{ alignItems: 'center', paddingVertical: Spacing.sm, marginTop: Spacing.xs }}
+              onPress={() => { setTxTagStep('idle'); setTxTaggingId(null); setSplitData(null); }}>
+              <Text style={{ color: Colors.textSecondary, fontSize: FontSize.sm }}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

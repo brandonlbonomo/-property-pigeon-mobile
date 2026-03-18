@@ -21,7 +21,7 @@ import { CleaningsScreen, useCleaningsBadgeCount } from '../screens/cleanings/Cl
 import { NetworkMapScreen } from '../screens/network/NetworkMapScreen';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const BASE_ORDER = ['profile', 'performance', 'projections', 'network'];
+const BASE_ORDER = ['profile', 'performance', 'projections'];
 const STR_PILLS = ['calendar', 'inventory'];
 
 const PILL_LABELS: Record<string, string> = {
@@ -144,26 +144,28 @@ export function PillNavigator() {
   useEffect(() => { useMessageStore.getState().fetchUnreadCount(); }, []);
 
   const springFabs = useCallback((show: boolean) => {
-    if (show === fabsVisibleRef.current) return;
-    fabsVisibleRef.current = show;
+    // Always stop running animations first to prevent stuck states
+    fabMsgAnim.stopAnimation();
+    fabMenuAnim.stopAnimation();
+
     if (show) {
-      Animated.stagger(120, [
+      Animated.stagger(100, [
         Animated.spring(fabMsgAnim, {
-          toValue: 1, useNativeDriver: true, tension: 14, friction: 5,
+          toValue: 1, useNativeDriver: true, tension: 18, friction: 6,
         }),
         Animated.spring(fabMenuAnim, {
-          toValue: 1, useNativeDriver: true, tension: 11, friction: 4.5,
+          toValue: 1, useNativeDriver: true, tension: 14, friction: 5.5,
         }),
       ]).start();
     } else {
-      Animated.stagger(40, [
+      Animated.parallel([
         Animated.timing(fabMenuAnim, {
-          toValue: 0, useNativeDriver: true, duration: 400,
-          easing: Easing.inOut(Easing.cubic),
+          toValue: 0, useNativeDriver: true, duration: 250,
+          easing: Easing.out(Easing.cubic),
         }),
         Animated.timing(fabMsgAnim, {
-          toValue: 0, useNativeDriver: true, duration: 450,
-          easing: Easing.inOut(Easing.cubic),
+          toValue: 0, useNativeDriver: true, duration: 300,
+          easing: Easing.out(Easing.cubic),
         }),
       ]).start();
     }
@@ -254,9 +256,21 @@ export function PillNavigator() {
         ))}
       </ScrollView>
 
-      {/* ── Floating liquid-glass FABs (profile page only) ── */}
+      {/* ── Floating liquid-glass FAB stack (right side) ── */}
+      {/* Map FAB (bottom — always visible, persistent) */}
+      <View
+        style={[styles.fab, { bottom: insets.bottom + 20 }]}
+      >
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[styles.fabTouch, { borderColor: Colors.green + '40' }]}
+          onPress={() => navigation.navigate('NetworkMap')}
+        >
+          <Ionicons name="globe" size={20} color={Colors.green} />
+        </TouchableOpacity>
+      </View>
 
-      {/* Message FAB (bottom) */}
+      {/* Message FAB (above map — slides out from map bubble on profile) */}
       <Animated.View
         style={[
           styles.fab,
@@ -264,8 +278,8 @@ export function PillNavigator() {
             bottom: insets.bottom + 20,
             opacity: fabMsgAnim,
             transform: [
-              { translateY: fabMsgAnim.interpolate({ inputRange: [0, 1], outputRange: [60, 0] }) },
-              { scale: fabMsgAnim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) },
+              { translateY: fabMsgAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -58] }) },
+              { scale: fabMsgAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.3, 0.8, 1] }) },
             ],
           },
         ]}
@@ -281,16 +295,16 @@ export function PillNavigator() {
         </TouchableOpacity>
       </Animated.View>
 
-      {/* Hamburger FAB (above message) */}
+      {/* Hamburger FAB (above message — slides out from message bubble) */}
       <Animated.View
         style={[
           styles.fab,
           {
-            bottom: insets.bottom + 78,
+            bottom: insets.bottom + 20,
             opacity: fabMenuAnim,
             transform: [
-              { translateY: fabMenuAnim.interpolate({ inputRange: [0, 1], outputRange: [120, 0] }) },
-              { scale: fabMenuAnim.interpolate({ inputRange: [0, 1], outputRange: [0.1, 1] }) },
+              { translateY: fabMenuAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -116] }) },
+              { scale: fabMenuAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.1, 0.6, 1] }) },
             ],
           },
         ]}
