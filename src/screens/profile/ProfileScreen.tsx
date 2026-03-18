@@ -346,85 +346,106 @@ export function ProfileScreen() {
   }, [transactions, propLabel]);
 
   const handleTagTransaction = useCallback(async (txId: string, propertyId: string | null) => {
-    setTxTagSaving(true);
-    try {
-      await apiFetch('/api/transactions/update', {
-        method: 'POST',
-        body: JSON.stringify({ id: txId, property_tag: propertyId }),
-      });
-      setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: propertyId } : t));
-      useDataStore.setState({ cockpit: null, transactions: null, tags: null });
-      if (propertyId) promptCreateRule(txId, propertyId);
-    } catch (e) {
-      console.error('Tag save failed:', e);
-    }
+    // Optimistic UI — update instantly, confirm with backend async
+    const prevTransactions = transactions;
+    setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: propertyId } : t));
     setTxTagSaving(false);
-  }, [promptCreateRule]);
+    useDataStore.setState({ cockpit: null, transactions: null, tags: null });
+
+    if (propertyId) promptCreateRule(txId, propertyId);
+
+    // Fire API in background
+    apiFetch('/api/transactions/update', {
+      method: 'POST',
+      body: JSON.stringify({ id: txId, property_tag: propertyId }),
+    }).catch(() => {
+      // Revert on failure
+      setTransactions(prevTransactions);
+      Alert.alert('Error', 'Failed to save tag. Please try again.');
+    });
+  }, [promptCreateRule, transactions]);
 
   const handleCategoryTag = useCallback(async (txId: string, categoryId: string | null) => {
-    setTxTagSaving(true);
-    try {
-      await saveCategoryTag(txId, categoryId);
-      setCategoryTags(prev => {
-        const updated = { ...prev };
-        if (categoryId) updated[txId] = categoryId;
-        else delete updated[txId];
-        return updated;
-      });
-      setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: categoryId } : t));
-      useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
-      if (categoryId) promptCreateRule(txId, categoryId);
-      // Don't auto-close — caller controls step advancement
-    } catch {}
+    // Optimistic UI — update instantly
+    const prevTransactions = transactions;
+    const prevCategoryTags = { ...categoryTags };
+    setCategoryTags(prev => {
+      const updated = { ...prev };
+      if (categoryId) updated[txId] = categoryId;
+      else delete updated[txId];
+      return updated;
+    });
+    setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: categoryId } : t));
     setTxTagSaving(false);
-  }, [saveCategoryTag]);
+    useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
+
+    if (categoryId) promptCreateRule(txId, categoryId);
+
+    // Fire API in background
+    saveCategoryTag(txId, categoryId).catch(() => {
+      // Revert on failure
+      setTransactions(prevTransactions);
+      setCategoryTags(prevCategoryTags);
+      Alert.alert('Error', 'Failed to save tag. Please try again.');
+    });
+  }, [saveCategoryTag, transactions, categoryTags, promptCreateRule]);
 
   const handleBatchTagProperty = useCallback(async (propertyId: string | null) => {
-    setTxTagSaving(true);
-    try {
-      for (const txId of selectedTxIds) {
-        await apiFetch('/api/transactions/update', {
+    // Optimistic — update UI instantly
+    const prevTransactions = transactions;
+    const ids = new Set(selectedTxIds);
+    setTransactions(prev => prev.map(t =>
+      ids.has(t.id) ? { ...t, property_tag: propertyId } : t
+    ));
+    setSelectedTxIds(new Set());
+    setMultiSelectMode(false);
+    setTxTagStep('idle');
+    useDataStore.setState({ cockpit: null, transactions: null, tags: null });
+
+    // Fire all API calls in background
+    Promise.all(
+      Array.from(ids).map(txId =>
+        apiFetch('/api/transactions/update', {
           method: 'POST',
           body: JSON.stringify({ id: txId, property_tag: propertyId }),
-        });
-      }
-      setTransactions(prev => prev.map(t =>
-        selectedTxIds.has(t.id) ? { ...t, property_tag: propertyId } : t
-      ));
-      useDataStore.setState({ cockpit: null, transactions: null, tags: null });
-    } catch (e) {
-      console.error('Batch tag failed:', e);
-    }
-    setTxTagSaving(false);
-    setSelectedTxIds(new Set());
-    setMultiSelectMode(false);
-    setTxTagStep('idle');
-  }, [selectedTxIds]);
+        })
+      )
+    ).catch(() => {
+      setTransactions(prevTransactions);
+      Alert.alert('Error', 'Some tags failed to save. Please try again.');
+    });
+  }, [selectedTxIds, transactions]);
 
   const handleBatchCategoryTag = useCallback(async (categoryId: string | null) => {
-    setTxTagSaving(true);
-    try {
-      for (const txId of selectedTxIds) {
-        await saveCategoryTag(txId, categoryId);
-      }
-      setCategoryTags(prev => {
-        const updated = { ...prev };
-        selectedTxIds.forEach(txId => {
-          if (categoryId) updated[txId] = categoryId;
-          else delete updated[txId];
-        });
-        return updated;
+    // Optimistic — update UI instantly
+    const prevTransactions = transactions;
+    const prevCategoryTags = { ...categoryTags };
+    const ids = new Set(selectedTxIds);
+    setCategoryTags(prev => {
+      const updated = { ...prev };
+      ids.forEach(txId => {
+        if (categoryId) updated[txId] = categoryId;
+        else delete updated[txId];
       });
-      setTransactions(prev => prev.map(t =>
-        selectedTxIds.has(t.id) ? { ...t, category_tag: categoryId } : t
-      ));
-      useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
-    } catch {}
-    setTxTagSaving(false);
+      return updated;
+    });
+    setTransactions(prev => prev.map(t =>
+      ids.has(t.id) ? { ...t, category_tag: categoryId } : t
+    ));
     setSelectedTxIds(new Set());
     setMultiSelectMode(false);
     setTxTagStep('idle');
-  }, [selectedTxIds, saveCategoryTag]);
+    useDataStore.setState({ cockpit: null, transactions: null, tags: null, categoryTags: null });
+
+    // Fire all API calls in background
+    Promise.all(
+      Array.from(ids).map(txId => saveCategoryTag(txId, categoryId))
+    ).catch(() => {
+      setTransactions(prevTransactions);
+      setCategoryTags(prevCategoryTags);
+      Alert.alert('Error', 'Some tags failed to save. Please try again.');
+    });
+  }, [selectedTxIds, saveCategoryTag, transactions, categoryTags]);
 
   const toggleTxSelection = useCallback((txId: string) => {
     setSelectedTxIds(prev => {
