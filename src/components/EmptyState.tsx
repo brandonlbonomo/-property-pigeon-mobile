@@ -3,15 +3,14 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Colors, FontSize, Spacing } from '../constants/theme';
 
 interface Props {
-  icon?: string;
   message: string;
   sub?: string;
 }
 
-export function EmptyState({ icon = '📭', message, sub }: Props) {
+export function EmptyState({ message, sub }: Props) {
   return (
     <View style={styles.container}>
-      <Text style={styles.icon}>{icon}</Text>
+      <Text style={styles.dash}>--</Text>
       <Text style={styles.message}>{message}</Text>
       {sub ? <Text style={styles.sub}>{sub}</Text> : null}
     </View>
@@ -24,8 +23,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: Spacing.xl * 2,
   },
-  icon: {
-    fontSize: 40,
+  dash: {
+    fontSize: 28,
+    color: Colors.textDim,
     marginBottom: Spacing.md,
   },
   message: {

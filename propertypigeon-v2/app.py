@@ -1294,6 +1294,7 @@ def batch_init():
     store = load_store()  # Single disk read, cached for this request
     tx_store = store.get("transactions", {})
     tags = store.get("tags", {})
+    cat_tags = store.get("category_tags", {})
     # Merge tags into transactions
     txs = []
     for tx in tx_store.values():
@@ -1301,6 +1302,8 @@ def batch_init():
         tid = t.get("id", "")
         if tid in tags:
             t["property_tag"] = tags[tid]
+        if tid in cat_tags:
+            t["category_tag"] = cat_tags[tid]
         txs.append(t)
     return jsonify({
         "cockpit": None,  # Cockpit requires computation — use /api/cockpit
@@ -2551,13 +2554,16 @@ def get_all_transactions():
     store = load_store()
     tx_store = store.get("transactions", {})
     tags = store.get("tags", {})
-    # Merge property_tag into each transaction so mobile has it
+    cat_tags = store.get("category_tags", {})
+    # Merge property_tag and category_tag into each transaction so mobile has it
     txs = []
     for tx in tx_store.values():
         t = dict(tx)
         tid = t.get("id", "")
         if tid in tags:
             t["property_tag"] = tags[tid]
+        if tid in cat_tags:
+            t["category_tag"] = cat_tags[tid]
         # Server-side month filter
         if month_filter and not (t.get("date", "") or "").startswith(month_filter):
             continue
@@ -2608,6 +2614,55 @@ def save_tags():
     uid = getattr(g, 'user_id', None)
     _invalidate_cache("tags", uid)
     _invalidate_cache("transactions", uid)  # tags affect transaction display
+    return jsonify({"ok": True})
+
+# ── Category Tags (per-transaction category classification) ────
+@app.route("/api/category-tags", methods=["GET"])
+def get_category_tags():
+    store = load_store()
+    return jsonify({"category_tags": store.get("category_tags", {})})
+
+@app.route("/api/category-tags", methods=["POST"])
+def save_category_tag():
+    body = request.json or {}
+    tx_id = body.get("id")
+    category = body.get("category")
+    if not tx_id:
+        return jsonify({"ok": False, "error": "Missing transaction id"}), 400
+    store = load_store()
+    cat_tags = store.get("category_tags", {})
+    if category:
+        cat_tags[tx_id] = category
+    elif tx_id in cat_tags:
+        del cat_tags[tx_id]
+    store["category_tags"] = cat_tags
+    save_store(store)
+    uid = getattr(g, 'user_id', None)
+    _invalidate_cache("cockpit:", uid)  # category tags affect financial calculations
+    _invalidate_cache("transactions", uid)  # category_tag is merged into transaction objects
+    return jsonify({"ok": True})
+
+# ── Merchant Memory (payee → property auto-mapping) ───────────
+@app.route("/api/merchant-memory", methods=["GET"])
+def get_merchant_memory():
+    store = load_store()
+    return jsonify({"merchant_memory": store.get("merchant_memory", {})})
+
+@app.route("/api/merchant-memory", methods=["POST"])
+def save_merchant_memory():
+    body = request.json or {}
+    payee = body.get("payee", "").lower().strip()
+    prop_id = body.get("property_id")
+    if not payee:
+        return jsonify({"ok": False, "error": "Missing payee"}), 400
+    store = load_store()
+    mem = store.get("merchant_memory", {})
+    if prop_id:
+        mem[payee] = prop_id
+    elif payee in mem:
+        del mem[payee]
+    store["merchant_memory"] = mem
+    save_store(store)
     return jsonify({"ok": True})
 
 # ── Manual Income ──────────────────────────────────────────────
@@ -5038,6 +5093,10 @@ def cockpit_data():
     user_props = store.get("properties", [])
     all_prop_ids = set(p.get("id") or p.get("name") for p in user_props if p.get("id") or p.get("name"))
 
+    cat_tags = store.get("category_tags", {})
+    INCOME_CATS  = {"__rental_income__", "__cleaning_income__"}
+    EXCLUDED_CATS = {"__delete__", "__internal_transfer__"}
+
     def _month_financials(month_key):
         total_rev      = 0.0
         revenue_tx_ids = []
@@ -5051,22 +5110,38 @@ def cockpit_data():
                 continue
             if tx.get("pending"):
                 continue
+
+            cat_tag = cat_tags.get(tx_id)
             prop_id = tags.get(tx_id)
-            if not prop_id or prop_id in ("deleted", "transfer"):
+
+            # Skip transactions excluded by category tag
+            if cat_tag in EXCLUDED_CATS:
                 continue
+            # Skip legacy excluded property tags
+            if prop_id in ("deleted", "transfer"):
+                continue
+
+            # Must have at least one tag (property or category) to be included
+            if not prop_id and not cat_tag:
+                continue
+
             amount  = abs(tx.get("amount", 0))
             tx_type = tx.get("type", "out")
 
-            if tx_type == "in":
-                # Only include Plaid revenue if no manual override for this month
+            # Category tag determines income/expense; falls back to tx_type
+            is_income = cat_tag in INCOME_CATS or (not cat_tag and tx_type == "in")
+
+            if is_income:
                 if month_key not in manual:
                     total_rev += amount
                     revenue_tx_ids.append(tx_id)
-                    revenue_by_prop[prop_id] = revenue_by_prop.get(prop_id, 0.0) + amount
+                    if prop_id:
+                        revenue_by_prop[prop_id] = revenue_by_prop.get(prop_id, 0.0) + amount
             else:
                 expenses += amount
                 expense_tx_ids.append(tx_id)
-                expense_by_prop[prop_id] = expense_by_prop.get(prop_id, 0.0) + amount
+                if prop_id:
+                    expense_by_prop[prop_id] = expense_by_prop.get(prop_id, 0.0) + amount
 
         # Manual income overrides Plaid revenue for this month
         is_manual = False

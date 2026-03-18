@@ -1,21 +1,38 @@
 export const Colors = {
-  bg: '#0d1117',
-  card: 'rgba(255,255,255,0.06)',
-  cardBorder: 'rgba(255,255,255,0.1)',
-  primary: '#4f8ef7',
-  primaryDim: 'rgba(79,142,247,0.15)',
-  green: '#3ecf8e',
-  greenDim: 'rgba(62,207,142,0.15)',
-  red: '#f87171',
-  redDim: 'rgba(248,113,113,0.15)',
-  yellow: '#fbbf24',
-  yellowDim: 'rgba(251,191,36,0.15)',
-  text: '#e8eaf0',
-  textSecondary: 'rgba(232,234,240,0.6)',
-  textDim: 'rgba(232,234,240,0.35)',
-  border: 'rgba(255,255,255,0.08)',
-  tabBar: 'rgba(13,17,23,0.95)',
+  // Deep black background
+  bg: '#0A0A0A',
+  primary: '#FFFFFF',
+  primaryDim: 'rgba(255,255,255,0.06)',
+  green: '#1ECE6E',
+  greenDim: 'rgba(30,206,110,0.12)',
+  red: '#EF4444',
+  redDim: 'rgba(239,68,68,0.12)',
+  yellow: '#F59E0B',
+  yellowDim: 'rgba(245,158,11,0.12)',
+  text: '#F5F5F5',
+  textSecondary: '#A1A1AA',
+  textDim: '#6B7280',
+  border: 'rgba(255,255,255,0.06)',
+  tabBar: '#111111',
+
+  // Dark glass system
+  glass: 'rgba(30,30,32,0.82)',
+  glassBorder: 'rgba(60,60,70,0.55)',
+  glassHeavy: 'rgba(28,28,30,0.92)',
+  glassDark: 'rgba(40,40,48,0.25)',
+  glassOverlay: 'rgba(22,22,24,0.94)',
+
+  // Glass depth — subtle highlights on dark
+  glassHighlight: 'rgba(255,255,255,0.08)',
+  glassShine: 'rgba(255,255,255,0.04)',
+  glassShadow: 'rgba(0,0,0,0.40)',
+
+  // Brand accent — header glow & active indicators
+  brandGreen: '#1ECE6E',
+  brandGlow: 'rgba(30,206,110,0.15)',
+  brandGlowMid: 'rgba(30,206,110,0.06)',
 };
+
 
 export const Spacing = {
   xs: 4,
@@ -30,13 +47,35 @@ export const Radius = {
   md: 12,
   lg: 16,
   xl: 20,
+  pill: 100,
+};
+
+export const BarColors = {
+  // Green gradient for positive actual bars
+  greenStart: '#0A7A42',
+  greenMid: '#1ECE6E',
+  greenEnd: '#7EEAAA',
+
+  // Red gradient for negative actual bars
+  redStart: '#991B1B',
+  redMid: '#EF4444',
+  redEnd: '#FCA5A5',
+
+  // Dark neutral for projected bars
+  projectedStart: '#2A2A2E',
+  projectedMid: '#3A3A40',
+  projectedEnd: '#1A1A1E',
+  projectedHighlight: 'rgba(255,255,255,0.08)',
+
+  barShadow: 'rgba(0,0,0,0.15)',
+  barShadowProjected: 'rgba(0,0,0,0.35)',
 };
 
 export const FontSize = {
-  xs: 11,
-  sm: 13,
-  md: 15,
-  lg: 18,
-  xl: 22,
-  xxl: 28,
+  xs: 13,
+  sm: 15,
+  md: 17,
+  lg: 20,
+  xl: 24,
+  xxl: 32,
 };

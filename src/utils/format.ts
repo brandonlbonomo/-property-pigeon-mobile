@@ -1,6 +1,10 @@
 export function fmt$(n: number, compact = false): string {
-  if (compact && Math.abs(n) >= 1000) {
-    return '$' + (n / 1000).toFixed(1) + 'k';
+  if (compact) {
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs >= 1_000_000) return sign + '$' + (abs / 1_000_000).toFixed(1) + 'M';
+    if (abs >= 1_000) return sign + '$' + (abs / 1_000).toFixed(0) + 'k';
+    return sign + '$' + abs.toFixed(0);
   }
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -8,6 +12,14 @@ export function fmt$(n: number, compact = false): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(n);
+}
+
+export function fmtCompact(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1_000_000) return sign + '$' + (abs / 1_000_000).toFixed(1) + 'M';
+  if (abs >= 1_000) return sign + '$' + (abs / 1_000).toFixed(0) + 'k';
+  return sign + '$' + abs.toFixed(0);
 }
 
 export function fmtPct(n: number): string {

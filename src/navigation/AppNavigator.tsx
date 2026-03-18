@@ -1,124 +1,255 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { NavigationContainer, useNavigation } from '@react-navigation/native';
+import { navigationRef } from './navigationRef';
+import { ProPaywallScreen } from '../components/ProPaywallModal';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { Colors, FontSize } from '../constants/theme';
-import { HomeScreen } from '../screens/home/HomeScreen';
-import { MoneyScreen } from '../screens/money/MoneyScreen';
-import { MonthDetailScreen } from '../screens/money/MonthDetailScreen';
-import { CalendarScreen } from '../screens/calendar/CalendarScreen';
-import { InventoryScreen } from '../screens/inventory/InventoryScreen';
-import { CleaningsScreen } from '../screens/cleanings/CleaningsScreen';
+import { Colors, Radius } from '../constants/theme';
 import { SettingsScreen } from '../screens/settings/SettingsScreen';
-import { fmtMonthYear } from '../utils/format';
+import { NotificationsScreen } from '../screens/notifications/NotificationsScreen';
+import { SearchScreen } from '../screens/search/SearchScreen';
+import { ConversationsScreen } from '../screens/messages/ConversationsScreen';
+import { ChatScreen } from '../screens/messages/ChatScreen';
+import { ComposeMessageScreen } from '../screens/messages/ComposeMessageScreen';
+import { ComposeGroupScreen } from '../screens/messages/ComposeGroupScreen';
+import { PillNavigator } from './LTRNavigator';
 
-const Tab = createBottomTabNavigator();
-const MoneyStack = createNativeStackNavigator();
+const RootStack = createNativeStackNavigator();
 
-function TabIcon({ emoji, focused }: { emoji: string; focused: boolean }) {
+// ── Shared header components (used by both TabNavigator and LTRNavigator) ──
+
+export function HeaderLeft() {
+  const navigation = useNavigation<any>();
   return (
-    <Text style={{ fontSize: focused ? 22 : 20, opacity: focused ? 1 : 0.55 }}>
-      {emoji}
-    </Text>
-  );
-}
-
-function MoneyStackNavigator() {
-  return (
-    <MoneyStack.Navigator
-      screenOptions={{
-        headerStyle: { backgroundColor: Colors.bg },
-        headerTintColor: Colors.text,
-        headerTitleStyle: { color: Colors.text },
-      }}
+    <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.navigate('Settings')}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      style={{ marginLeft: 4 }}
     >
-      <MoneyStack.Screen name="MoneyMain" component={MoneyScreen} options={{ title: 'Money' }} />
-      <MoneyStack.Screen
-        name="MonthDetail"
-        component={MonthDetailScreen}
-        options={({ route }: any) => ({
-          title: fmtMonthYear((route.params?.month || '') + '-01'),
-        })}
-      />
-    </MoneyStack.Navigator>
+      <Ionicons name="settings-outline" size={22} color={Colors.textSecondary} />
+    </TouchableOpacity>
   );
 }
 
-const screenOpts = {
+export function HeaderRight() {
+  const navigation = useNavigation<any>();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginRight: 4 }}>
+      <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.navigate('Search')}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <Ionicons name="search-outline" size={22} color={Colors.textSecondary} />
+      </TouchableOpacity>
+      <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.navigate('Conversations')}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <Ionicons name="chatbubble-outline" size={20} color={Colors.textSecondary} />
+      </TouchableOpacity>
+      <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.navigate('Notifications')}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <Ionicons name="notifications-outline" size={22} color={Colors.textSecondary} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+export function CustomHeaderTitle() {
+  return (
+    <Image source={require('../../assets/logo.png')} style={headerStyles.logo} />
+  );
+}
+
+export const headerStyles = StyleSheet.create({
+  logo: {
+    width: 32,
+    height: 32,
+    resizeMode: 'contain',
+  },
+});
+
+export const screenOpts = {
   headerStyle: { backgroundColor: Colors.bg },
   headerTintColor: Colors.text,
-  headerTitleStyle: { color: Colors.text, fontWeight: '700' as const },
+  headerTitleStyle: { color: Colors.text, fontWeight: '600' as const },
   headerShadowVisible: false,
+  headerTitle: () => <CustomHeaderTitle />,
+  headerLeft: () => <HeaderLeft />,
+  headerRight: () => <HeaderRight />,
 };
+
+function MainScreen() {
+  return <PillNavigator />;
+}
 
 export function AppNavigator() {
   return (
-    <NavigationContainer>
-      <Tab.Navigator
-        screenOptions={{
-          tabBarStyle: {
-            backgroundColor: Colors.tabBar,
-            borderTopColor: Colors.border,
-            borderTopWidth: 1,
-          },
-          tabBarActiveTintColor: Colors.primary,
-          tabBarInactiveTintColor: Colors.textDim,
-          tabBarLabelStyle: { fontSize: FontSize.xs, marginBottom: 2 },
-          ...screenOpts,
-        }}
-      >
-        <Tab.Screen
-          name="Home"
-          component={HomeScreen}
+    <NavigationContainer ref={navigationRef}>
+      <RootStack.Navigator>
+        <RootStack.Screen
+          name="Main"
+          component={MainScreen}
           options={{
-            title: 'Home',
-            tabBarIcon: ({ focused }) => <TabIcon emoji="🏠" focused={focused} />,
-          }}
-        />
-        <Tab.Screen
-          name="Money"
-          component={MoneyStackNavigator}
-          options={{
-            title: 'Money',
             headerShown: false,
-            tabBarIcon: ({ focused }) => <TabIcon emoji="💰" focused={focused} />,
           }}
         />
-        <Tab.Screen
-          name="Calendar"
-          component={CalendarScreen}
-          options={{
-            title: 'Occupancy',
-            tabBarIcon: ({ focused }) => <TabIcon emoji="📅" focused={focused} />,
-          }}
-        />
-        <Tab.Screen
-          name="Inventory"
-          component={InventoryScreen}
-          options={{
-            title: 'Inventory',
-            tabBarIcon: ({ focused }) => <TabIcon emoji="📦" focused={focused} />,
-          }}
-        />
-        <Tab.Screen
-          name="Cleanings"
-          component={CleaningsScreen}
-          options={{
-            title: 'Cleanings',
-            tabBarIcon: ({ focused }) => <TabIcon emoji="🧹" focused={focused} />,
-          }}
-        />
-        <Tab.Screen
+        <RootStack.Screen
           name="Settings"
           component={SettingsScreen}
           options={{
-            title: 'Settings',
-            tabBarIcon: ({ focused }) => <TabIcon emoji="⚙️" focused={focused} />,
+            presentation: 'modal',
+            headerTitle: 'Settings',
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
           }}
         />
-      </Tab.Navigator>
+        <RootStack.Screen
+          name="Notifications"
+          component={NotificationsScreen}
+          options={{
+            presentation: 'modal',
+            headerTitle: 'Notifications',
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
+          }}
+        />
+        <RootStack.Screen
+          name="Search"
+          component={SearchScreen}
+          options={{
+            presentation: 'modal',
+            headerTitle: 'Search Users',
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
+          }}
+        />
+        <RootStack.Screen
+          name="Conversations"
+          component={ConversationsScreen}
+          options={{
+            presentation: 'modal',
+            headerTitle: 'Messages',
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
+          }}
+        />
+        <RootStack.Screen
+          name="Chat"
+          component={ChatScreen}
+          options={{
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+          }}
+        />
+        <RootStack.Screen
+          name="ComposeMessage"
+          component={ComposeMessageScreen}
+          options={{
+            presentation: 'modal',
+            headerTitle: 'New Message',
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
+          }}
+        />
+        <RootStack.Screen
+          name="ComposeGroup"
+          component={ComposeGroupScreen}
+          options={{
+            presentation: 'modal',
+            headerTitle: 'New Group',
+            headerStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7}
+          onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
+          }}
+        />
+        <RootStack.Screen
+          name="ProPaywall"
+          component={ProPaywallScreen}
+          options={{
+            presentation: 'fullScreenModal',
+            headerShown: false,
+            animation: 'slide_from_bottom',
+          }}
+        />
+      </RootStack.Navigator>
     </NavigationContainer>
   );
 }

@@ -1,18 +1,23 @@
 {
   "expo": {
-    "name": "Property Pigeon",
+    "name": "Portfolio Pigeon",
     "slug": "property-pigeon-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0d1117"
+      "backgroundColor": "#F2F2F7"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.portfoliopigeon.mobile",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Use Face ID for quick sign-in",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,10 +26,51 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.portfoliopigeon.mobile",
+      "permissions": [
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Portfolio Pigeon to use Face ID for quick sign-in"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#3B82F6"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Portfolio Pigeon to access your photos to send in messages.",
+          "cameraPermission": "Allow Portfolio Pigeon to use your camera to take photos for messages."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "16c31c89-b461-4c4d-9580-4ea57bb72cc1"
+      }
+    },
+    "owner": "brandonlbonomo",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/16c31c89-b461-4c4d-9580-4ea57bb72cc1"
     }
   }
 }

@@ -1,35 +1,199 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { StyleSheet, AppState, AppStateStatus, LogBox } from 'react-native';
+
+LogBox.ignoreLogs([
+  '[RevenueCat]',
+  'Error fetching offerings',
+  'RevenueCat',
+]);
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as SecureStore from 'expo-secure-store';
 
-import { useAuthStore } from './src/store/authStore';
+import { useOnboardingStore } from './src/store/onboardingStore';
+import { useUserStore } from './src/store/userStore';
+import { useNotificationStore } from './src/store/notificationStore';
 import { AppNavigator } from './src/navigation/AppNavigator';
-import { LoginScreen } from './src/screens/auth/LoginScreen';
+import { CleanerAppNavigator } from './src/navigation/CleanerAppNavigator';
+import { OnboardingNavigator } from './src/navigation/OnboardingNavigator';
 import { LoadingScreen } from './src/components/LoadingScreen';
+import { BiometricSplash } from './src/components/BiometricSplash';
+import { registerForPushNotifications, addNotificationResponseListener } from './src/services/notifications';
+import { onAuthExpired } from './src/services/api';
 import { Colors } from './src/constants/theme';
+import { configureRevenueCat, identifyUser, addCustomerInfoListener, hasEntitlement } from './src/services/revenueCat';
+
+const BACKGROUND_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+type AuthGate = 'loading' | 'biometric' | 'authenticated' | 'login';
 
 export default function App() {
-  const { token, isLoading, hydrate } = useAuthStore();
+  const { hasCompleted, isLoading, biometricEnabled, hydrate: hydrateOnboarding } = useOnboardingStore();
+  const hydrateUser = useUserStore(s => s.hydrate);
+  const fetchBillingStatus = useUserStore(s => s.fetchBillingStatus);
+  const userHydrated = useUserStore(s => s.hydrated);
+  const accountType = useUserStore(s => s.profile?.accountType);
+  const setPushToken = useNotificationStore(s => s.setPushToken);
+  const fetchNotifications = useNotificationStore(s => s.fetchNotifications);
+
+  const [authGate, setAuthGate] = useState<AuthGate>('loading');
+  const backgroundedAt = useRef<number | null>(null);
+
+  // On 401, clear auth state and redirect to login
+  useEffect(() => {
+    onAuthExpired(() => {
+      useUserStore.getState().clearAll();
+      useOnboardingStore.getState().reset();
+      setAuthGate('login');
+    });
+  }, []);
+
+  // Configure RevenueCat once at app startup
+  useEffect(() => {
+    configureRevenueCat();
+  }, []);
 
   useEffect(() => {
-    hydrate();
+    hydrateOnboarding();
+    hydrateUser().then(async () => {
+      // Identify user with RevenueCat after hydration
+      const profile = useUserStore.getState().profile;
+      if (profile?.email) {
+        await identifyUser(profile.email);
+      }
+      await fetchBillingStatus();
+    }).catch(() => {});
   }, []);
+
+  // Listen for RevenueCat subscription changes (runtime updates only).
+  // On app startup, fetchBillingStatus handles the initial check after hydration.
+  // This listener catches mid-session changes (renewals, expirations, new purchases).
+  useEffect(() => {
+    const listener = addCustomerInfoListener((info) => {
+      const isActive = hasEntitlement(info);
+      const profile = useUserStore.getState().profile;
+      if (!profile) return; // Not yet hydrated — fetchBillingStatus handles startup
+      useUserStore.getState().setProfile({
+        isSubscriptionActive: isActive || profile.isFounder || profile.lifetimeFree,
+      });
+    });
+    return () => listener.remove();
+  }, []);
+
+  // Determine auth gate after hydration (wait for both stores)
+  useEffect(() => {
+    if (isLoading || !userHydrated) return;
+
+    if (!hasCompleted) {
+      setAuthGate('login');
+      return;
+    }
+
+    if (biometricEnabled) {
+      SecureStore.getItemAsync('pp_token').then(token => {
+        setAuthGate(token ? 'biometric' : 'login');
+      }).catch(() => setAuthGate('login'));
+    } else {
+      setAuthGate('authenticated');
+    }
+  }, [isLoading, userHydrated, hasCompleted, biometricEnabled]);
+
+  // Identify user with RevenueCat when auth completes (e.g. after sign-in)
+  useEffect(() => {
+    if (authGate !== 'authenticated') return;
+    const profile = useUserStore.getState().profile;
+    if (profile?.email) {
+      identifyUser(profile.email).then(() => fetchBillingStatus()).catch(() => {});
+    }
+  }, [authGate]);
+
+  // 5-minute background timeout
+  useEffect(() => {
+    const handleAppState = (next: AppStateStatus) => {
+      if (next === 'background' || next === 'inactive') {
+        backgroundedAt.current = Date.now();
+      } else if (next === 'active' && backgroundedAt.current !== null) {
+        const elapsed = Date.now() - backgroundedAt.current;
+        backgroundedAt.current = null;
+        if (
+          elapsed > BACKGROUND_TIMEOUT &&
+          biometricEnabled &&
+          authGate === 'authenticated'
+        ) {
+          setAuthGate('biometric');
+        }
+      }
+    };
+
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, [biometricEnabled, authGate]);
+
+  // Register push notifications after auth is ready (wait for token hydration)
+  useEffect(() => {
+    if (!hasCompleted || isLoading || !userHydrated) return;
+    registerForPushNotifications().then(token => {
+      if (token) setPushToken(token);
+    });
+    fetchNotifications();
+    const sub = addNotificationResponseListener(() => {
+      fetchNotifications();
+    });
+    return () => sub.remove();
+  }, [hasCompleted, isLoading, userHydrated]);
+
+  const handleBiometricSuccess = useCallback(() => {
+    setAuthGate('authenticated');
+  }, []);
+
+  const handleBiometricFallback = useCallback(() => {
+    setAuthGate('login');
+  }, []);
+
+  if (authGate === 'loading') {
+    return (
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaProvider>
+          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <LoadingScreen />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
+
+  if (authGate === 'biometric') {
+    return (
+      <GestureHandlerRootView style={styles.rootWhite}>
+        <SafeAreaProvider>
+          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <BiometricSplash
+            onSuccess={handleBiometricSuccess}
+            onFallback={handleBiometricFallback}
+          />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
+
+  if (authGate === 'login') {
+    return (
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaProvider>
+          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <OnboardingNavigator />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
+
+  const Navigator = accountType === 'cleaner' ? CleanerAppNavigator : AppNavigator;
 
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
         <StatusBar style="light" backgroundColor={Colors.bg} />
-        {isLoading ? (
-          <LoadingScreen />
-        ) : token ? (
-          <AppNavigator />
-        ) : (
-          <View style={styles.authContainer}>
-            <LoginScreen />
-          </View>
-        )}
+        <Navigator />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
@@ -37,5 +201,5 @@ export default function App() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.bg },
-  authContainer: { flex: 1, backgroundColor: Colors.bg },
+  rootWhite: { flex: 1, backgroundColor: Colors.bg },
 });

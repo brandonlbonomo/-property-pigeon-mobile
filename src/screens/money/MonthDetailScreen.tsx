@@ -1,153 +1,116 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity,
+  View, Text, ScrollView, StyleSheet, ActivityIndicator, RefreshControl,
 } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRoute } from '@react-navigation/native';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { useDataStore } from '../../store/dataStore';
 import { Card } from '../../components/Card';
 import { SectionHeader } from '../../components/SectionHeader';
 import { EmptyState } from '../../components/EmptyState';
-import { fmt$, fmtDate, fmtMonthYear } from '../../utils/format';
+import { fmt$ } from '../../utils/format';
 
 export function MonthDetailScreen() {
   const route = useRoute<any>();
   const { month } = route.params;
-  const { fetchTransactions, fetchTags, fetchProps } = useDataStore();
-  const [txs, setTxs] = useState<any[]>([]);
-  const [tags, setTags] = useState<Record<string, string>>({});
+  const { fetchCockpit, fetchProps } = useDataStore();
+  const [cockpit, setCockpit] = useState<any>(null);
   const [props, setProps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'in' | 'out'>('all');
-  const [propFilter, setPropFilter] = useState<string>('all');
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [allTxs, allTags, allProps] = await Promise.all([
-          fetchTransactions(),
-          fetchTags(),
-          fetchProps(),
-        ]);
-        const monthTxs = (allTxs || []).filter((tx: any) =>
-          (tx.user_date || tx.date || '').slice(0, 7) === month
-        );
-        setTxs(monthTxs);
-        setTags(allTags || {});
-        setProps(allProps || []);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [month]);
+  const load = useCallback(async (force = false) => {
+    try {
+      setError(null);
+      const [c, pr] = await Promise.all([
+        fetchCockpit(force),
+        fetchProps(force),
+      ]);
+      setCockpit(c);
+      setProps(pr || []);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load data');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [fetchCockpit, fetchProps]);
 
-  const filtered = txs.filter(tx => {
-    const t = tx.type || tx.tx_type;
-    if (filter !== 'all' && t !== filter) return false;
-    if (propFilter !== 'all' && tags[tx.id] !== propFilter) return false;
-    return true;
-  });
+  useEffect(() => { load(); }, [month]);
 
-  const revenue = filtered.filter(t => (t.type || t.tx_type) === 'in').reduce((s, t) => s + Math.abs(t.amount), 0);
-  const expenses = filtered.filter(t => (t.type || t.tx_type) === 'out').reduce((s, t) => s + Math.abs(t.amount), 0);
+  const onRefresh = () => { setRefreshing(true); load(true); };
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color={Colors.green} />
       </View>
     );
   }
 
+  const isCurrentMonth = cockpit?.month === month;
+  if (!isCurrentMonth) {
+    return (
+      <View style={styles.container}>
+        <EmptyState message="No transaction details for this month" sub="Only current month summary is available" />
+      </View>
+    );
+  }
+
+  const kpis = cockpit?.kpis || {};
+  const byProp = cockpit?.expenses_by_property || {};
+
+  const propLabel = (pid: string) => {
+    const p = (props || []).find((p: any) => (p.id || p.prop_id) === pid);
+    return p?.label || pid.split('-')[0]?.toUpperCase() || pid;
+  };
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Summary */}
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+    >
+      {error && (
+        <View style={styles.errorBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
       <Card>
         <View style={styles.summaryRow}>
           <View style={styles.summaryCol}>
             <Text style={styles.summaryLabel}>Revenue</Text>
-            <Text style={[styles.summaryVal, { color: Colors.green }]}>{fmt$(revenue)}</Text>
+            <Text style={[styles.summaryVal, { color: Colors.green }]}>{fmt$(kpis.revenue_mtd ?? 0)}</Text>
           </View>
           <View style={styles.summaryCol}>
             <Text style={styles.summaryLabel}>Expenses</Text>
-            <Text style={[styles.summaryVal, { color: Colors.red }]}>{fmt$(expenses)}</Text>
+            <Text style={[styles.summaryVal, { color: Colors.red }]}>{fmt$(kpis.expenses_mtd ?? 0)}</Text>
           </View>
           <View style={styles.summaryCol}>
             <Text style={styles.summaryLabel}>Net</Text>
-            <Text style={[styles.summaryVal, { color: (revenue - expenses) >= 0 ? Colors.green : Colors.red }]}>
-              {fmt$(revenue - expenses)}
+            <Text style={[styles.summaryVal, { color: (kpis.net_mtd ?? 0) >= 0 ? Colors.green : Colors.red }]}>
+              {fmt$(kpis.net_mtd ?? 0)}
             </Text>
           </View>
         </View>
       </Card>
 
-      {/* Type filter pills */}
-      <View style={styles.pills}>
-        {(['all', 'in', 'out'] as const).map(f => (
-          <TouchableOpacity
-            key={f}
-            style={[styles.pill, filter === f && styles.pillActive]}
-            onPress={() => setFilter(f)}
-          >
-            <Text style={[styles.pillText, filter === f && styles.pillTextActive]}>
-              {f === 'all' ? 'All' : f === 'in' ? 'Income' : 'Expenses'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Property filter */}
-      {props.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.propScroll}>
-          <TouchableOpacity
-            style={[styles.pill, propFilter === 'all' && styles.pillActive]}
-            onPress={() => setPropFilter('all')}
-          >
-            <Text style={[styles.pillText, propFilter === 'all' && styles.pillTextActive]}>All Props</Text>
-          </TouchableOpacity>
-          {props.map((p: any) => (
-            <TouchableOpacity
-              key={p.id || p.prop_id}
-              style={[styles.pill, propFilter === (p.id || p.prop_id) && styles.pillActive]}
-              onPress={() => setPropFilter(p.id || p.prop_id)}
-            >
-              <Text style={[styles.pillText, propFilter === (p.id || p.prop_id) && styles.pillTextActive]}>
-                {p.label || p.id}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
-
-      <SectionHeader title={`Transactions (${filtered.length})`} />
-
-      {filtered.length === 0 ? (
-        <EmptyState icon="💸" message="No transactions" />
-      ) : (
-        filtered.map((tx: any, i: number) => {
-          const isIn = (tx.type || tx.tx_type) === 'in';
-          const propId = tags[tx.id];
-          const prop = props.find((p: any) => (p.id || p.prop_id) === propId);
-          return (
-            <Card key={tx.id || i} padding={Spacing.sm}>
-              <View style={styles.txRow}>
-                <View style={styles.txInfo}>
-                  <Text style={styles.txPayee} numberOfLines={1}>{tx.payee || 'Unknown'}</Text>
-                  <Text style={styles.txMeta}>
-                    {fmtDate(tx.user_date || tx.date)}
-                    {prop ? ` · ${prop.label || prop.id}` : ''}
-                    {tx.account_name ? ` · ${tx.account_name}` : ''}
-                  </Text>
+      {Object.keys(byProp).length > 0 && (
+        <>
+          <SectionHeader title="Expenses by Property" />
+          {Object.entries(byProp)
+            .sort(([, a]: any, [, b]: any) => b - a)
+            .map(([pid, amount]: any) => (
+              <Card key={pid} padding={Spacing.sm}>
+                <View style={styles.propRow}>
+                  <Text style={styles.propName}>{propLabel(pid)}</Text>
+                  <Text style={[styles.propAmt, { color: Colors.red }]}>-{fmt$(amount)}</Text>
                 </View>
-                <Text style={[styles.txAmt, { color: isIn ? Colors.green : Colors.red }]}>
-                  {isIn ? '+' : '-'}{fmt$(Math.abs(tx.amount))}
-                </Text>
-              </View>
-            </Card>
-          );
-        })
+              </Card>
+            ))
+          }
+        </>
       )}
     </ScrollView>
   );
@@ -161,19 +124,13 @@ const styles = StyleSheet.create({
   summaryCol: { flex: 1, alignItems: 'center' },
   summaryLabel: { fontSize: FontSize.xs, color: Colors.textSecondary },
   summaryVal: { fontSize: FontSize.lg, fontWeight: '700' },
-  pills: { flexDirection: 'row', gap: Spacing.xs, marginBottom: Spacing.sm, flexWrap: 'wrap' },
-  propScroll: { marginBottom: Spacing.sm },
-  pill: {
-    paddingHorizontal: Spacing.sm, paddingVertical: 6,
-    borderRadius: Radius.xl, borderWidth: 1, borderColor: Colors.border,
-    marginRight: Spacing.xs,
+  propRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  propName: { color: Colors.text, fontSize: FontSize.sm, fontWeight: '500', flex: 1 },
+  propAmt: { fontSize: FontSize.sm, fontWeight: '600' },
+  errorBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    backgroundColor: 'rgba(239,68,68,0.08)', borderRadius: Radius.md,
+    padding: Spacing.sm, marginBottom: Spacing.md, borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.20)',
   },
-  pillActive: { backgroundColor: Colors.primaryDim, borderColor: Colors.primary },
-  pillText: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  pillTextActive: { color: Colors.primary },
-  txRow: { flexDirection: 'row', alignItems: 'center' },
-  txInfo: { flex: 1, marginRight: Spacing.xs },
-  txPayee: { color: Colors.text, fontSize: FontSize.sm, fontWeight: '500' },
-  txMeta: { color: Colors.textDim, fontSize: FontSize.xs, marginTop: 2 },
-  txAmt: { fontSize: FontSize.sm, fontWeight: '600' },
+  errorText: { fontSize: FontSize.xs, color: Colors.red, flex: 1, lineHeight: 16 },
 });
