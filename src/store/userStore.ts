@@ -23,6 +23,10 @@ export interface UserProperty {
   unitPhotos?: Record<string, string[]>;
   /** iCal feeds owned by this property */
   icalFeeds?: { url: string; listingName?: string }[];
+  /** Valuation fields */
+  purchasePrice?: number;
+  purchaseDate?: string; // YYYY-MM-DD
+  valuationOptOut?: boolean;
 }
 
 /** Generate a stable ID for a property from its name */

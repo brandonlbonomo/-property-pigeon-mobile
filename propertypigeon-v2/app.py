@@ -7909,6 +7909,162 @@ def messages_delete_conversation(conv_id):
     return jsonify({"ok": True})
 
 
+# ── Property Valuation Engine ─────────────────────────────────
+
+# City-based annual appreciation rates (national average 3.5%)
+CITY_APPRECIATION_RATES = {
+    "austin": 0.055, "boise": 0.05, "nashville": 0.05, "raleigh": 0.048,
+    "tampa": 0.047, "phoenix": 0.046, "dallas": 0.045, "charlotte": 0.045,
+    "denver": 0.044, "atlanta": 0.043, "houston": 0.04, "orlando": 0.04,
+    "jacksonville": 0.04, "san antonio": 0.038, "las vegas": 0.038,
+    "seattle": 0.042, "portland": 0.035, "miami": 0.04, "fort lauderdale": 0.04,
+    "san diego": 0.038, "los angeles": 0.035, "san francisco": 0.03,
+    "new york": 0.028, "chicago": 0.025, "detroit": 0.03, "cleveland": 0.022,
+    "st louis": 0.02, "baltimore": 0.025, "philadelphia": 0.03,
+    "minneapolis": 0.032, "kansas city": 0.033, "indianapolis": 0.035,
+    "columbus": 0.038, "salt lake city": 0.045, "savannah": 0.04,
+    "charleston": 0.042, "asheville": 0.04, "gatlinburg": 0.045,
+    "pigeon forge": 0.045, "destin": 0.04, "gulf shores": 0.038,
+    "myrtle beach": 0.035, "panama city": 0.035, "scottsdale": 0.046,
+    "sedona": 0.04, "park city": 0.042, "big bear": 0.035,
+    "joshua tree": 0.04, "palm springs": 0.038, "key west": 0.035,
+}
+
+def _get_appreciation_rate(market: str) -> float:
+    """Return city-specific appreciation rate, or 3.5% national average."""
+    if not market:
+        return 0.035
+    m = market.lower().strip()
+    # Try exact match, then substring
+    if m in CITY_APPRECIATION_RATES:
+        return CITY_APPRECIATION_RATES[m]
+    for city, rate in CITY_APPRECIATION_RATES.items():
+        if city in m or m in city:
+            return rate
+    return 0.035  # National average
+
+
+@app.route("/api/properties/<prop_id>/valuation", methods=["GET"])
+def property_valuation(prop_id):
+    """Compute Portfolio Pigeon valuation estimate for a property."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    store = load_store()
+    props = store.get("properties", [])
+    prop = None
+    for p in props:
+        if (p.get("id") or p.get("name")) == prop_id:
+            prop = p
+            break
+    if not prop:
+        return jsonify({"error": "Property not found"}), 404
+
+    # Check opt-out
+    if prop.get("valuationOptOut"):
+        return jsonify({"valuation": None, "opted_out": True})
+
+    purchase_price = prop.get("purchasePrice")
+    purchase_date = prop.get("purchaseDate")
+    if not purchase_price or not purchase_date:
+        return jsonify({"valuation": None, "missing_data": True})
+
+    from datetime import date as _d
+    try:
+        pd = _d.fromisoformat(purchase_date)
+    except Exception:
+        return jsonify({"valuation": None, "error": "Invalid purchase date"}), 400
+
+    today = _d.today()
+    years_owned = max((today - pd).days / 365.25, 0)
+    market = prop.get("market", "")
+    rate = _get_appreciation_rate(market)
+    is_str = prop.get("isAirbnb", False)
+
+    # Appreciation component
+    appreciation_value = purchase_price * ((1 + rate) ** years_owned)
+    appreciation_gain = appreciation_value - purchase_price
+    appreciation_pct = ((appreciation_value / purchase_price) - 1) * 100 if purchase_price > 0 else 0
+
+    # Revenue multiplier component
+    tags = store.get("tags", {})
+    cat_tags = store.get("category_tags", {})
+    txs = store.get("transactions", {})
+    INCOME_CATS = {"__rental_income__", "__cleaning_income__"}
+
+    # Compute total revenue and date range for this property
+    total_rev = 0.0
+    earliest_date = None
+    latest_date = None
+    for tx_id, tx in txs.items():
+        prop_tag = tags.get(tx_id)
+        cat_tag = cat_tags.get(tx_id)
+        if prop_tag != prop_id and cat_tag not in INCOME_CATS:
+            continue
+        if prop_tag != prop_id and not (cat_tag in INCOME_CATS and not prop_tag):
+            continue
+        tx_type = tx.get("type", "out")
+        is_income = cat_tag in INCOME_CATS or (not cat_tag and tx_type == "in")
+        if not is_income:
+            continue
+        amount = abs(tx.get("amount", 0))
+        total_rev += amount
+        d = tx.get("date", "")
+        if d:
+            if not earliest_date or d < earliest_date:
+                earliest_date = d
+            if not latest_date or d > latest_date:
+                latest_date = d
+
+    # Annualize revenue
+    annual_rev = 0.0
+    months_of_data = 0
+    if earliest_date and latest_date and total_rev > 0:
+        try:
+            e = _d.fromisoformat(earliest_date)
+            l = _d.fromisoformat(latest_date)
+            days = max((l - e).days, 30)
+            months_of_data = days / 30.44
+            annual_rev = (total_rev / days) * 365.25
+        except Exception:
+            annual_rev = total_rev
+
+    # GRM (Gross Rent Multiplier) valuation
+    grm = 10 if is_str else 12
+    revenue_value = annual_rev * grm if annual_rev > 0 else 0
+
+    # Blended estimate
+    if annual_rev > 0 and purchase_price > 0:
+        blended = (appreciation_value * 0.45) + (revenue_value * 0.55)
+    elif purchase_price > 0:
+        blended = appreciation_value
+    else:
+        blended = 0
+
+    equity_gain = blended - purchase_price if blended > 0 else 0
+
+    return jsonify({
+        "valuation": {
+            "purchase_price": purchase_price,
+            "purchase_date": purchase_date,
+            "years_owned": round(years_owned, 1),
+            "appreciation_rate": round(rate * 100, 1),
+            "appreciation_value": round(appreciation_value, 0),
+            "appreciation_gain": round(appreciation_gain, 0),
+            "appreciation_pct": round(appreciation_pct, 1),
+            "annual_revenue": round(annual_rev, 0),
+            "months_of_data": round(months_of_data, 0),
+            "grm": grm,
+            "revenue_value": round(revenue_value, 0),
+            "blended_estimate": round(blended, 0),
+            "equity_gain": round(equity_gain, 0),
+            "market": market,
+            "is_str": is_str,
+        },
+    })
+
+
 # ── Investor Network Map ──────────────────────────────────────
 @app.route("/api/map/properties", methods=["GET"])
 def map_properties():

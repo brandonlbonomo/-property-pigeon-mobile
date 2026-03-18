@@ -322,9 +322,9 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
 // ── Add Property Modal ──
 function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }: {
   visible: boolean; onClose: () => void;
-  onSave: (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; icalUrl?: string; icalUrls?: string[]; lat?: number; lng?: number; unitLabels?: string[] }) => Promise<void>;
+  onSave: (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; icalUrl?: string; icalUrls?: string[]; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean }) => Promise<void>;
   portfolioType: 'str' | 'ltr' | 'both' | null;
-  editData?: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; lat?: number; lng?: number; unitLabels?: string[]; existingIcalUrls?: string[] } | null;
+  editData?: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; lat?: number; lng?: number; unitLabels?: string[]; existingIcalUrls?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean } | null;
 }) {
   const isEditing = !!editData;
   const [name, setName] = useState('');
@@ -336,6 +336,9 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
   const [resolvedAddress, setResolvedAddress] = useState<ResolvedAddress | null>(null);
   const [icalUrls, setIcalUrls] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [purchasePrice, setPurchasePrice] = useState('');
+  const [purchaseDate, setPurchaseDate] = useState('');
+  const [valuationOptOut, setValuationOptOut] = useState(false);
 
   const unitCount = Math.max(1, parseInt(units) || 1);
 
@@ -349,11 +352,15 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
       setMarket(editData.market || '');
       setUnitLabels(editData.unitLabels || []);
       setIcalUrls(editData.existingIcalUrls || []);
+      setPurchasePrice(editData.purchasePrice ? String(editData.purchasePrice) : '');
+      setPurchaseDate(editData.purchaseDate || '');
+      setValuationOptOut(editData.valuationOptOut || false);
       if (editData.lat) setResolvedAddress({ address: editData.address, lat: editData.lat, lng: editData.lng || 0, city: '', state: '' });
       else setResolvedAddress(null);
     } else if (!visible) {
       setName(''); setAddress(''); setUnits('1'); setUnitLabels([]);
       setIsAirbnb(portfolioType !== 'ltr'); setMarket(''); setResolvedAddress(null); setIcalUrls([]);
+      setPurchasePrice(''); setPurchaseDate(''); setValuationOptOut(false);
     }
   }, [visible, editData]);
 
@@ -379,6 +386,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
     try {
       const labels = unitCount > 1 ? unitLabels.slice(0, unitCount).map(l => l.trim()).filter(Boolean) : undefined;
       const validIcals = trimmedIcals.filter(Boolean);
+      const pp = parseFloat(purchasePrice);
       await onSave({
         name: name.trim(), address: address.trim(), units: unitCount,
         isAirbnb,
@@ -387,6 +395,9 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
         ...(unitCount > 1 && validIcals.length ? { icalUrls: trimmedIcals } : {}),
         ...(resolvedAddress?.lat ? { lat: resolvedAddress.lat, lng: resolvedAddress.lng } : {}),
         ...(labels?.length ? { unitLabels: labels } : {}),
+        ...(pp > 0 ? { purchasePrice: pp } : {}),
+        ...(purchaseDate ? { purchaseDate } : {}),
+        valuationOptOut,
       });
       setName(''); setAddress(''); setUnits('1'); setUnitLabels([]); setIsAirbnb(portfolioType !== 'ltr');
       setMarket(''); setResolvedAddress(null); setIcalUrls([]); onClose();
@@ -495,6 +506,27 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
                 placeholder="https://www.airbnb.com/calendar/ical/..."
                 placeholderTextColor={Colors.textDim}
                 autoCapitalize="none" keyboardType="url" maxLength={2000} />
+            </>
+          )}
+
+          {/* Valuation section */}
+          <Text style={styles.modalSectionLabel}>VALUATION (optional)</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm }}>
+            <Text style={styles.modalFieldLabel}>Enable Portfolio Pigeon Valuation</Text>
+            <Switch value={!valuationOptOut} onValueChange={(v) => setValuationOptOut(!v)}
+              trackColor={{ false: Colors.glassDark, true: Colors.green + '40' }}
+              thumbColor={!valuationOptOut ? Colors.green : Colors.textDim} />
+          </View>
+          {!valuationOptOut && (
+            <>
+              <Text style={styles.modalFieldLabel}>Purchase Price</Text>
+              <TextInput style={styles.modalInput} value={purchasePrice}
+                onChangeText={setPurchasePrice} placeholder="e.g. 350000"
+                placeholderTextColor={Colors.textDim} keyboardType="decimal-pad" />
+              <Text style={styles.modalFieldLabel}>Purchase Date</Text>
+              <TextInput style={styles.modalInput} value={purchaseDate}
+                onChangeText={setPurchaseDate} placeholder="YYYY-MM-DD"
+                placeholderTextColor={Colors.textDim} />
             </>
           )}
 
@@ -1079,7 +1111,7 @@ export function SettingsScreen() {
     Alert.alert('Cache Cleared', 'Data will reload on next visit to each tab.');
   };
 
-  const handleAddProperty = async (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; icalUrl?: string; icalUrls?: string[]; lat?: number; lng?: number; unitLabels?: string[] }) => {
+  const handleAddProperty = async (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; icalUrl?: string; icalUrls?: string[]; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean }) => {
     const currentProps = userProfile?.properties || [];
     if (isReadOnly && currentProps.length >= 2) {
       handleProGate();
@@ -1091,6 +1123,9 @@ export function SettingsScreen() {
       ...(p.market ? { market: p.market } : {}),
       ...(p.lat ? { lat: p.lat, lng: p.lng } : {}),
       ...(p.unitLabels?.length ? { unitLabels: p.unitLabels } : {}),
+      ...(p.purchasePrice ? { purchasePrice: p.purchasePrice } : {}),
+      ...(p.purchaseDate ? { purchaseDate: p.purchaseDate } : {}),
+      ...(p.valuationOptOut ? { valuationOptOut: true } : {}),
     };
     const updatedProps = [...currentProps, newProp];
     await setUserProfile({ properties: updatedProps });

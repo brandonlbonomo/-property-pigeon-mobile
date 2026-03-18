@@ -57,8 +57,20 @@ export function NetworkMapScreen() {
   const [properties, setProperties] = useState<MapProperty[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<MapProperty | null>(null);
+  const [valuation, setValuation] = useState<any>(null);
+  const [valuationLoading, setValuationLoading] = useState(false);
   const mapRef = useRef<MapView>(null);
   const profile = useUserStore(s => s.profile);
+
+  // Fetch valuation when a property is selected (own properties only)
+  useEffect(() => {
+    if (!selected?.is_own) { setValuation(null); return; }
+    setValuationLoading(true);
+    apiFetch(`/api/properties/${encodeURIComponent(selected.id)}/valuation`)
+      .then(res => setValuation(res.valuation || null))
+      .catch(() => setValuation(null))
+      .finally(() => setValuationLoading(false));
+  }, [selected?.id]);
 
   const loadProperties = useCallback(async () => {
     try {
@@ -252,6 +264,50 @@ export function NetworkMapScreen() {
                   <Text style={styles.revenueLabel}>Annual Revenue</Text>
                   <Text style={styles.revenueValue}>{fmt$(selected.revenue)}</Text>
                 </View>
+
+                {/* Valuation breakdown (own properties only) */}
+                {selected.is_own && valuation && (
+                  <View style={[styles.revenueCard, { backgroundColor: Colors.glassDark, borderColor: Colors.glassBorder }]}>
+                    <Text style={[styles.revenueLabel, { color: Colors.text }]}>Portfolio Pigeon Estimate</Text>
+                    <Text style={[styles.revenueValue, { color: Colors.green }]}>{fmt$(valuation.blended_estimate)}</Text>
+
+                    <View style={{ marginTop: Spacing.sm, gap: 6 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Purchase Price</Text>
+                        <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{fmt$(valuation.purchase_price)}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Years Owned</Text>
+                        <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{valuation.years_owned} yrs</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Appreciation ({valuation.appreciation_rate}%/yr)</Text>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.xs, fontWeight: '600' }}>+{fmt$(valuation.appreciation_gain)} ({valuation.appreciation_pct}%)</Text>
+                      </View>
+                      {valuation.annual_revenue > 0 && (
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>Revenue Value ({valuation.grm}x GRM)</Text>
+                          <Text style={{ color: Colors.text, fontSize: FontSize.xs, fontWeight: '600' }}>{fmt$(valuation.revenue_value)}</Text>
+                        </View>
+                      )}
+                      <View style={{ height: 1, backgroundColor: Colors.border, marginVertical: 4 }} />
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '700' }}>Equity Gain</Text>
+                        <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '800' }}>+{fmt$(valuation.equity_gain)}</Text>
+                      </View>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: Spacing.sm }}>
+                      <Ionicons name="information-circle-outline" size={12} color={Colors.textDim} />
+                      <Text style={{ color: Colors.textDim, fontSize: 10, flex: 1 }}>
+                        Based on purchase price, time owned, and revenue. Not an appraisal.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                {selected.is_own && valuationLoading && (
+                  <ActivityIndicator color={Colors.green} style={{ marginBottom: Spacing.md }} />
+                )}
 
                 {/* Owner */}
                 <View style={styles.ownerRow}>
