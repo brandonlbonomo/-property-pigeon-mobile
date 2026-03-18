@@ -237,22 +237,56 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const scrollX = useRef(new Animated.Value(0)).current;
   const horizontalRef = useRef<ScrollView>(null);
 
+  const { fetchTransactions, fetchCategoryTags } = useDataStore();
+  const [monthlyActuals, setMonthlyActuals] = useState<Record<string, { revenue: number; expenses: number }>>({});
+
   const load = useCallback(async (force = false) => {
     try {
       setError('');
-      const [c, pr] = await Promise.all([
+      const [c, pr, txs, catTags] = await Promise.all([
         fetchCockpit(force),
         fetchProps(force),
+        fetchTransactions(force),
+        fetchCategoryTags(force),
       ]);
       setCockpit(c);
       setProps(pr || []);
+
+      // Compute actual monthly revenue/expenses from tagged transactions
+      const actuals: Record<string, { revenue: number; expenses: number }> = {};
+      const INCOME_CATS = new Set(['__rental_income__', '__cleaning_income__']);
+      const EXCLUDED_CATS = new Set(['__delete__', '__internal_transfer__']);
+
+      for (const tx of (txs || [])) {
+        const catTag = catTags?.[tx.id] || tx.category_tag;
+        const propTag = tx.property_tag;
+
+        // Skip untagged and excluded
+        if (!propTag && !catTag) continue;
+        if (EXCLUDED_CATS.has(catTag)) continue;
+        if (propTag === 'deleted' || propTag === 'transfer') continue;
+        if (tx.pending) continue;
+
+        const month = (tx.date || '').slice(0, 7);
+        if (!month) continue;
+        if (!actuals[month]) actuals[month] = { revenue: 0, expenses: 0 };
+
+        const amount = Math.abs(tx.amount ?? 0);
+        const isIncome = INCOME_CATS.has(catTag) || (!catTag && (tx.type === 'in' || tx.amount < 0));
+        if (isIncome) {
+          actuals[month].revenue += amount;
+        } else {
+          actuals[month].expenses += amount;
+        }
+      }
+      setMonthlyActuals(actuals);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchCockpit, fetchProps]);
+  }, [fetchCockpit, fetchProps, fetchTransactions, fetchCategoryTags]);
 
   useEffect(() => { load(); }, []);
 
@@ -308,65 +342,138 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
 
   const [drillDownMonth, setDrillDownMonth] = useState<string | null>(null);
 
-  function yearBars(current: number, priorVal: number, targetYear: number, p: Period): BarData[] {
-    const timeline = generateYearTimeline(current, priorVal, projectionStyle, targetYear);
-    const priorYearTimeline = generateYearTimeline(current, priorVal, projectionStyle, targetYear - 1);
+  // Build monthly bars from ACTUAL transaction data — single source of truth
+  const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-    if (p === 'Quarterly') {
-      const quarters = aggregateToQuarters(timeline);
-      return quarters.map((q, i) => ({
-        label: q.label, value: q.value, isActual: q.isActual, isCurrent: q.isCurrent,
-        priorValue: i > 0 ? quarters[i - 1].value : undefined,
-        priorLabel: i > 0 ? quarters[i - 1].label : undefined,
-        month: `${targetYear}-Q${i + 1}`,
-        year: targetYear,
-      }));
-    }
-    return timeline.map((m, i) => {
-      const yoyMonth = priorYearTimeline[i];
-      const yoyPct = yoyMonth && yoyMonth.value !== 0
-        ? ((m.value - yoyMonth.value) / Math.abs(yoyMonth.value)) * 100
-        : undefined;
-      return {
-        label: m.label, value: m.value, isActual: m.isActual, isCurrent: m.isCurrent,
-        priorValue: i > 0 ? timeline[i - 1].value : undefined,
-        priorLabel: i > 0 ? timeline[i - 1].label : undefined,
-        yoyValue: yoyPct,
-        month: `${targetYear}-${String(i + 1).padStart(2, '0')}`,
-        year: targetYear,
-      };
-    });
+  type Metric = 'revenue' | 'expenses' | 'net' | 'margin';
+
+  function detectMetric(current: number): Metric {
+    if (current === revenue) return 'revenue';
+    if (current === expenses) return 'expenses';
+    if (current === net) return 'net';
+    return 'margin';
   }
 
-  function annualBars(current: number, priorVal: number): BarData[] {
+  function getMonthMetric(targetYear: number, month: number, metric: Metric): number {
+    const key = `${targetYear}-${String(month + 1).padStart(2, '0')}`;
+    const data = monthlyActuals[key];
+    const rev = data?.revenue ?? 0;
+    const exp = data?.expenses ?? 0;
+    switch (metric) {
+      case 'revenue': return rev;
+      case 'expenses': return exp;
+      case 'net': return rev - exp;
+      case 'margin': return rev > 0 ? ((rev - exp) / rev) * 100 : 0;
+    }
+  }
+
+  function yearBars(_current: number, _priorVal: number, targetYear: number, p: Period): BarData[] {
+    const now = new Date();
+    const curMonth = now.getMonth();
+    const curYear = now.getFullYear();
+    const metric = detectMetric(_current);
+
+    const monthly: BarData[] = [];
+    for (let m = 0; m < 12; m++) {
+      const val = getMonthMetric(targetYear, m, metric);
+      const isPast = targetYear < curYear || (targetYear === curYear && m <= curMonth);
+      monthly.push({
+        label: MONTH_ABBR[m],
+        value: val,
+        isActual: isPast,
+        isCurrent: targetYear === curYear && m === curMonth,
+        month: `${targetYear}-${String(m + 1).padStart(2, '0')}`,
+        year: targetYear,
+        priorValue: m > 0 ? getMonthMetric(targetYear, m - 1, metric) : undefined,
+        priorLabel: m > 0 ? MONTH_ABBR[m - 1] : undefined,
+      });
+    }
+
+    if (p === 'Quarterly') {
+      const quarters: BarData[] = [];
+      for (let q = 0; q < 4; q++) {
+        const qMonths = monthly.slice(q * 3, q * 3 + 3);
+        const qVal = qMonths.reduce((s, m) => s + m.value, 0);
+        const hasActual = qMonths.some(m => m.isActual);
+        const hasCurrent = qMonths.some(m => m.isCurrent);
+        quarters.push({
+          label: `Q${q + 1}`,
+          value: qVal,
+          isActual: hasActual,
+          isCurrent: hasCurrent,
+          month: `${targetYear}-Q${q + 1}`,
+          year: targetYear,
+          priorValue: q > 0 ? quarters[q - 1].value : undefined,
+          priorLabel: q > 0 ? quarters[q - 1].label : undefined,
+        });
+      }
+      return quarters;
+    }
+
+    return monthly;
+  }
+
+  function annualBars(_current: number, _priorVal: number): BarData[] {
+    const metric = detectMetric(_current);
     return years.map(y => {
-      const timeline = generateYearTimeline(current, priorVal, projectionStyle, y);
-      const total = timeline.reduce((sum, m) => sum + m.value, 0);
-      const hasActual = timeline.some(m => m.isActual);
+      let total = 0;
+      if (metric === 'margin') {
+        // Margin is avg, not sum
+        let totalRev = 0, totalExp = 0;
+        for (let m = 0; m < 12; m++) {
+          totalRev += getMonthMetric(y, m, 'revenue');
+          totalExp += getMonthMetric(y, m, 'expenses');
+        }
+        total = totalRev > 0 ? ((totalRev - totalExp) / totalRev) * 100 : 0;
+      } else {
+        for (let m = 0; m < 12; m++) total += getMonthMetric(y, m, metric);
+      }
+      const hasActual = Object.keys(monthlyActuals).some(k => k.startsWith(String(y)));
       const isCurrent = y === currentYear;
       return { label: String(y), value: total, isActual: hasActual, isCurrent, year: y, month: String(y) };
     });
   }
 
-  function displayValue(current: number, priorVal: number, selectedYear: number, p: Period): number {
-    const timeline = generateYearTimeline(current, priorVal, projectionStyle, selectedYear);
+  function displayValue(_current: number, _priorVal: number, selectedYear: number, p: Period): number {
+    const metric = detectMetric(_current);
+    const now = new Date();
+    const curMonth = now.getMonth();
+
+    if (metric === 'margin') {
+      // Margin: compute from actual rev/exp totals
+      let totalRev = 0, totalExp = 0;
+      const startMonth = p === 'Quarterly' && selectedYear === currentYear
+        ? Math.floor(curMonth / 3) * 3 : 0;
+      const endMonth = p === 'Quarterly' && selectedYear === currentYear
+        ? startMonth + 3 : (p === 'Monthly' ? curMonth + 1 : 12);
+      for (let m = startMonth; m < endMonth; m++) {
+        totalRev += getMonthMetric(selectedYear, m, 'revenue');
+        totalExp += getMonthMetric(selectedYear, m, 'expenses');
+      }
+      return totalRev > 0 ? ((totalRev - totalExp) / totalRev) * 100 : 0;
+    }
+
     if (p === 'Annual') {
-      return timeline.reduce((sum, m) => sum + m.value, 0);
+      let total = 0;
+      for (let m = 0; m < 12; m++) total += getMonthMetric(selectedYear, m, metric);
+      return total;
     }
     if (p === 'Quarterly') {
-      const quarters = aggregateToQuarters(timeline);
       if (selectedYear === currentYear) {
-        const match = quarters.find(q => q.isCurrent);
-        return match?.value ?? quarters[quarters.length - 1]?.value ?? 0;
+        const q = Math.floor(curMonth / 3);
+        let total = 0;
+        for (let m = q * 3; m < q * 3 + 3; m++) total += getMonthMetric(selectedYear, m, metric);
+        return total;
       }
-      return quarters.reduce((sum, q) => sum + q.value, 0);
+      let total = 0;
+      for (let m = 0; m < 12; m++) total += getMonthMetric(selectedYear, m, metric);
+      return total;
     }
+    // Monthly — show current month
     if (selectedYear === currentYear) {
-      const cur = timeline.find(m => m.isCurrent);
-      return cur?.value ?? 0;
+      return getMonthMetric(selectedYear, curMonth, metric);
     }
-    const curMonth = new Date().getMonth();
-    return timeline[curMonth]?.value ?? 0;
+    return getMonthMetric(selectedYear, curMonth, metric);
   }
 
   const revenueLabel = portfolioType === 'str' ? 'STR Revenue' : 'Revenue';
