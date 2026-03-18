@@ -609,7 +609,7 @@ export function CleaningsScreen() {
         <ScrollView
           style={{ width: SCREEN_W }}
           contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
           keyboardShouldPersistTaps="handled"
           onTouchStart={dismissAllChartTooltips}
         >
@@ -844,7 +844,7 @@ export function CleaningsScreen() {
         <ScrollView
           style={{ width: SCREEN_W }}
           contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
         >
           {isReadOnly ? <LockedSubTab /> : (
             <>
@@ -947,7 +947,7 @@ export function CleaningsScreen() {
         <ScrollView
           style={{ width: SCREEN_W }}
           contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
           onTouchStart={dismissAllChartTooltips}
         >
           {isReadOnly ? <LockedSubTab /> : (

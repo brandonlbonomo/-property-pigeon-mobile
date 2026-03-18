@@ -142,7 +142,7 @@ export function DataSourcesScreen({ navigation }: any) {
         {showSTRSources && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <View style={[styles.sectionIcon, { backgroundColor: Colors.primaryDim }]}>
+              <View style={[styles.sectionIcon, { backgroundColor: Colors.greenDim }]}>
                 <Ionicons name="analytics-outline" size={18} color={Colors.primary} />
               </View>
               <Text style={styles.sectionTitle}>PriceLabs</Text>
@@ -280,7 +280,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: FontSize.md, color: Colors.primary },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
   title: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
   subtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.lg, lineHeight: 20 },
 
@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md, padding: Spacing.md, color: Colors.text, fontSize: FontSize.md,
   },
   connectBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.md,
+    backgroundColor: Colors.green, borderRadius: Radius.md,
     padding: Spacing.sm + 2, alignItems: 'center', marginTop: Spacing.sm,
   },
   connectBtnText: { color: '#fff', fontSize: FontSize.sm, fontWeight: '600' },
@@ -329,14 +329,14 @@ const styles = StyleSheet.create({
   plaidBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
     padding: Spacing.md, borderRadius: Radius.md,
-    borderWidth: 1.5, borderColor: Colors.primary + '40', borderStyle: 'dashed',
-    backgroundColor: Colors.primaryDim,
+    borderWidth: 1.5, borderColor: Colors.green + '40', borderStyle: 'dashed',
+    backgroundColor: Colors.greenDim,
   },
   plaidBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
 
   buttons: { gap: Spacing.sm, marginTop: Spacing.md, marginBottom: Spacing.xl },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

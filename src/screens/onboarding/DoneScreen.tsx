@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: 6 },
   detailText: { fontSize: FontSize.sm, color: Colors.text, flex: 1 },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center', marginBottom: Spacing.lg,
     flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm,
     ...Platform.select({

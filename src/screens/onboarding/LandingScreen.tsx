@@ -71,12 +71,12 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.xl,
   },
   primaryBtn: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     borderRadius: Radius.xl,
     padding: Spacing.md + 2,
     alignItems: 'center',
     ...Platform.select({
-      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },
     }),
   },
   primaryBtnText: {

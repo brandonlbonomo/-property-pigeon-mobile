@@ -493,7 +493,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: FontSize.md, color: Colors.primary },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
   title: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
   subtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.lg, lineHeight: 20 },
   label: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: '500', marginBottom: Spacing.xs, marginTop: Spacing.md },
@@ -536,7 +536,7 @@ const styles = StyleSheet.create({
   },
   resultUsername: { fontSize: FontSize.md, fontWeight: '600', color: Colors.text, flex: 1 },
   roleBadge: {
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.pill,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
     paddingHorizontal: 8, paddingVertical: 2,
   },
   roleBadgeText: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.primary },
@@ -613,7 +613,7 @@ const styles = StyleSheet.create({
 
   // Buttons
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center', marginTop: Spacing.xl,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

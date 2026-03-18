@@ -231,7 +231,7 @@ export function AddPropertiesScreen({ navigation }: any) {
 
           {atLimit ? (
             <TouchableOpacity
-              style={[styles.addPropertyBtn, { borderColor: Colors.primary + '40', backgroundColor: Colors.primaryDim }]}
+              style={[styles.addPropertyBtn, { borderColor: Colors.green + '40', backgroundColor: Colors.greenDim }]}
               onPress={checkout.startCheckout}
               disabled={checkout.loading}
               activeOpacity={0.7}
@@ -300,7 +300,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: FontSize.md, color: Colors.primary },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
   title: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
   subtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.lg, lineHeight: 20 },
 
@@ -316,7 +316,7 @@ const styles = StyleSheet.create({
   addedSub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 1 },
 
   badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.pill },
-  badgeAirbnb: { backgroundColor: Colors.primaryDim },
+  badgeAirbnb: { backgroundColor: Colors.greenDim },
   badgeLTR: { backgroundColor: Colors.greenDim },
   badgeText: { fontSize: 10, fontWeight: '600' },
   badgeTextAirbnb: { color: Colors.primary },
@@ -347,15 +347,15 @@ const styles = StyleSheet.create({
   addPropertyBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
     padding: Spacing.sm, borderRadius: Radius.lg, marginTop: Spacing.md,
-    borderWidth: 1.5, borderColor: Colors.primary + '40', borderStyle: 'dashed',
-    backgroundColor: Colors.primaryDim,
+    borderWidth: 1.5, borderColor: Colors.green + '40', borderStyle: 'dashed',
+    backgroundColor: Colors.greenDim,
   },
   addPropertyBtnDisabled: { borderColor: Colors.border, backgroundColor: 'transparent' },
   addPropertyText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '500' },
 
   buttons: { gap: Spacing.sm, marginBottom: Spacing.xl },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

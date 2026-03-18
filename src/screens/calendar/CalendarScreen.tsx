@@ -248,7 +248,7 @@ export function CalendarScreen() {
     <ScrollView
       style={[styles.container, { backgroundColor: 'transparent' }]}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
     >
       {/* Error banner */}
       {lastError && (

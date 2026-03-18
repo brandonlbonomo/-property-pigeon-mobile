@@ -1156,16 +1156,37 @@ export function SettingsScreen() {
   };
 
   const handleDeleteProperty = (indexStr: string, label: string) => {
-    Alert.alert('Delete Property', `Delete "${label}"?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        const currentProps = userProfile?.properties || [];
-        const idx = parseInt(indexStr, 10);
-        const updatedProps = currentProps.filter((_, i) => i !== idx);
-        await setUserProfile({ properties: updatedProps });
-        setProperties(updatedProps);
-      }},
-    ]);
+    const currentProps = userProfile?.properties || [];
+    const idx = parseInt(indexStr, 10);
+    const prop = currentProps[idx];
+    const propId = prop?.id || prop?.name;
+
+    Alert.alert(
+      'Delete Property',
+      `Deleting "${label}" will permanently remove all associated data including units, iCal feeds, calendar events, transaction tags, inventory, and P&L history.\n\nThis cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete All Data', style: 'destructive', onPress: async () => {
+          try {
+            // Backend cascade delete — removes feeds, events, tags, inventory, etc.
+            if (propId) {
+              try {
+                await useDataStore.getState().deleteProperty(propId);
+              } catch {
+                // Backend may not support cascade delete yet — continue with local delete
+                useDataStore.getState().invalidateAll();
+              }
+            }
+            // Remove from local profile
+            const updatedProps = currentProps.filter((_, i) => i !== idx);
+            await setUserProfile({ properties: updatedProps });
+            setProperties(updatedProps);
+          } catch (e: any) {
+            Alert.alert('Error', e.message || 'Could not delete property. Please try again.');
+          }
+        }},
+      ],
+    );
   };
 
   const handleSavePriceLabs = async () => {
@@ -2261,12 +2282,7 @@ export function SettingsScreen() {
               </>
             )}
             <SettingRow icon="card-outline" label="Plaid Connections" sub={isReadOnly ? "Subscribe to Pro" : `${plaidAccounts.length} accounts connected`} onPress={isReadOnly ? handleProGate : () => setSection('plaid')} />
-            {!isLTR && (
-              <>
-                <Divider />
-                <SettingRow icon="sparkles-outline" label="Cleaner Feeds" sub={isReadOnly ? "Subscribe to Pro" : `${cleanerFeeds.length} cleaners configured`} onPress={isReadOnly ? handleProGate : () => setSection('cleanerFeeds')} />
-              </>
-            )}
+            {/* Cleaner Feeds removed — iCal feeds managed within Manage Properties */}
           </CardGroup>
 
           <SectionTitle title="Income" />

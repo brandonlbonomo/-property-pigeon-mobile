@@ -69,6 +69,8 @@ interface DataState {
   deleteCustomCategory: (id: string) => Promise<void>;
   fetchTransactionsByMonth: (yearMonth: string, force?: boolean) => Promise<any[]>;
   fetchReceivedInvoices: (force?: boolean) => Promise<any[]>;
+  deleteProperty: (propId: string) => Promise<any>;
+  deleteIcalFeed: (feedKey: string) => Promise<void>;
   clearError: () => void;
   invalidateAll: () => void;
 }
@@ -163,9 +165,10 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
     return dedup('tags', async () => {
       try {
-        const data = await apiFetch('/api/tags');
-        set({ tags: { data: data ?? {}, fetchedAt: Date.now() } });
-        return data ?? {};
+        const raw = await apiFetch('/api/tags');
+        const data = raw?.tags ?? raw ?? {};
+        set({ tags: { data, fetchedAt: Date.now() } });
+        return data;
       } catch {
         // tags fetch failed
         set({ tags: { data: {}, fetchedAt: Date.now() } });
@@ -546,6 +549,22 @@ export const useDataStore = create<DataState>((set, get) => ({
     } catch {
       return [];
     }
+  },
+
+  deleteProperty: async (propId: string) => {
+    const res = await apiFetch(`/api/props/${encodeURIComponent(propId)}`, { method: 'DELETE' });
+    // Cascade: clear all caches since property deletion affects everything
+    set({
+      cockpit: null, transactions: null, tags: null, categoryTags: null, merchantMemory: null,
+      props: null, icalEvents: null, icalFeeds: null, plBookings: null,
+      invGroups: null, analytics: null, lastError: null,
+    });
+    return res;
+  },
+
+  deleteIcalFeed: async (feedKey: string) => {
+    await apiFetch(`/api/ical/feeds/${encodeURIComponent(feedKey)}`, { method: 'DELETE' });
+    set({ icalEvents: null, icalFeeds: null });
   },
 
   clearError: () => set({ lastError: null }),

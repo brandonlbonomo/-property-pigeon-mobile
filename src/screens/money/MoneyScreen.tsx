@@ -692,7 +692,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
           <View key={p} style={{ width: SCREEN_W, flex: 1 }}>
             <ScrollView
               contentContainerStyle={styles.content}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
               onTouchStart={dismissAllChartTooltips}
             >
               {renderPeriodContent(p)}

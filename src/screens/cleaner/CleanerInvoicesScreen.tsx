@@ -588,7 +588,7 @@ export function CleanerInvoicesScreen() {
               key={tabKey}
               style={{ width: SCREEN_W }}
               contentContainerStyle={styles.content}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
             >
               {error && (
                 <View style={styles.errorBanner}>

@@ -949,7 +949,7 @@ export function CleanerMoneyScreen() {
         <ScrollView
           style={{ width: SCREEN_W }}
           contentContainerStyle={styles.content}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
           onTouchStart={dismissAllChartTooltips}
         >
           <RevenueTab

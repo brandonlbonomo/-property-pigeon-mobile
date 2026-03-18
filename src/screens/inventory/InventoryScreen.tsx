@@ -580,7 +580,7 @@ export function InventoryScreen() {
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.green} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
       >
         {/* ── iCal Banner ── */}
         {!groups.some(g => getGroupFeedCount(g) > 0) && groups.length > 0 && (

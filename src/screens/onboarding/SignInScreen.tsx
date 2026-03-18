@@ -294,7 +294,7 @@ const styles = StyleSheet.create({
   forgotBtn: { alignSelf: 'flex-end', marginTop: Spacing.sm },
   forgotText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '500' },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center', marginTop: Spacing.xl,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

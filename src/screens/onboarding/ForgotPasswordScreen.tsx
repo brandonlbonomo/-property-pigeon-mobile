@@ -187,7 +187,7 @@ const styles = StyleSheet.create({
   hero: { alignItems: 'center', marginBottom: Spacing.xl },
   iconCircle: {
     width: 70, height: 70, borderRadius: 35,
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     alignItems: 'center', justifyContent: 'center',
     marginBottom: Spacing.md,
   },
@@ -205,7 +205,7 @@ const styles = StyleSheet.create({
   passwordInput: { flex: 1, fontSize: FontSize.md, color: Colors.text, paddingVertical: 0 },
   eyeBtn: { paddingLeft: Spacing.sm, paddingVertical: 4 },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center', marginTop: Spacing.xl,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

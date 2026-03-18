@@ -213,6 +213,7 @@ export function BarChart({
 const styles = StyleSheet.create({
   container: {
     marginTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
   },
   chartArea: {
     position: 'relative',
@@ -234,7 +235,8 @@ const styles = StyleSheet.create({
   },
   labelRow: {
     flexDirection: 'row',
-    marginTop: 2,
+    marginTop: 14,
+    paddingBottom: 4,
   },
   labelCol: {
     flex: 1,

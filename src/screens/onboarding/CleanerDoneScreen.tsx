@@ -121,7 +121,7 @@ const styles = StyleSheet.create({
   content: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl, position: 'absolute', top: 0, left: 0, right: 0 },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
   checkCircle: {
     width: 96, height: 96, borderRadius: 48, backgroundColor: Colors.green,
     alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.lg,
@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
   title: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.sm },
   subtitle: { fontSize: FontSize.md, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center', marginBottom: Spacing.lg,
     flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm,
     ...Platform.select({

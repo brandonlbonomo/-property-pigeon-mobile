@@ -1832,15 +1832,55 @@ def run_sync():
                 n = normalize(tx)
                 if n["id"]:
                     existing = tx_store.get(n["id"], {})
-                    if existing.get("user_date"):  # preserve user-edited date through sync
-                        n["date"] = existing["user_date"]
-                        n["user_date"] = existing["user_date"]
+                    # Preserve all user-edited fields through Plaid sync
+                    for ufield, field in [("user_date", "date"), ("user_amount", "amount"),
+                                          ("user_name", "name"), ("user_category", "category")]:
+                        if existing.get(ufield) is not None:
+                            n[field] = existing[ufield]
+                            n[ufield] = existing[ufield]
                     tx_store[n["id"]] = n
+
+            # Carry tags forward when pending txs settle (removed + re-added with new ID).
+            # Build lookup of removed tagged transactions for matching.
+            tags = store.get("tags", {})
+            cat_tags = store.get("category_tags", {})
+            removed_tagged = []
             for r in removed:
                 rid = r.get("transaction_id")
                 if rid and rid in tx_store:
+                    if rid in tags or rid in cat_tags:
+                        removed_tagged.append({
+                            "id": rid,
+                            "payee": tx_store[rid].get("payee", ""),
+                            "amount": tx_store[rid].get("amount", 0),
+                            "tag": tags.get(rid),
+                            "cat_tag": cat_tags.get(rid),
+                        })
                     del tx_store[rid]
                     all_removed_ids.append(rid)
+
+            # Match removed tagged txs to newly added txs by payee+amount
+            if removed_tagged:
+                for rt in removed_tagged:
+                    for a in added:
+                        na = normalize(a)
+                        if (na["id"]
+                                and na["payee"] == rt["payee"]
+                                and abs(na["amount"] - rt["amount"]) < 0.01):
+                            if rt["tag"] and na["id"] not in tags:
+                                tags[na["id"]] = rt["tag"]
+                            if rt["cat_tag"] and na["id"] not in cat_tags:
+                                cat_tags[na["id"]] = rt["cat_tag"]
+                            logger.info("Tags carried forward: %s → %s (%s)",
+                                        rt["id"], na["id"], rt["payee"])
+                            break
+                    # Clean up orphaned tags from removed tx
+                    if rt["id"] in tags:
+                        del tags[rt["id"]]
+                    if rt["id"] in cat_tags:
+                        del cat_tags[rt["id"]]
+                store["tags"] = tags
+                store["category_tags"] = cat_tags
 
             all_added    += [normalize(t) for t in added]
             all_modified += [normalize(t) for t in modified]
@@ -2127,6 +2167,11 @@ def update_transaction():
         store["tags"] = tags
     store["transactions"] = tx_store
     save_store(store)
+    # Invalidate caches so the next GET returns fresh data with the tag
+    uid = getattr(g, 'user_id', None)
+    _invalidate_cache("transactions", uid)
+    _invalidate_cache("tags", uid)
+    _invalidate_cache("cockpit", uid)
     return jsonify({"ok": True})
 
 
@@ -2594,6 +2639,104 @@ def save_props():
     _invalidate_cache("props", getattr(g, 'user_id', None))
     return jsonify({"ok": True})
 
+@app.route("/api/props/<prop_id>", methods=["DELETE"])
+def delete_property_cascade(prop_id):
+    """Delete a property and cascade-remove ALL associated data:
+    iCal feeds, calendar events, transaction tags, category tags,
+    inventory groups, merchant memory, and manual income."""
+    store = load_store()
+    uid = getattr(g, 'user_id', None)
+
+    # 1. Remove property from custom_props
+    props = store.get("custom_props", [])
+    store["custom_props"] = [p for p in props if (p.get("id") or p.get("name")) != prop_id]
+
+    # 2. Remove iCal feeds for this property and collect their feed_keys
+    ical_urls = store.get("ical_urls", [])
+    removed_feed_keys = set()
+    kept_feeds = []
+    for feed in ical_urls:
+        if feed.get("propId") == prop_id:
+            fk = feed.get("feed_key") or feed.get("key")
+            if fk:
+                removed_feed_keys.add(fk)
+        else:
+            kept_feeds.append(feed)
+    store["ical_urls"] = kept_feeds
+    feeds_removed = len(ical_urls) - len(kept_feeds)
+
+    # 3. Remove iCal events from those feeds
+    events = store.get("ical_events", [])
+    store["ical_events"] = [e for e in events if e.get("feed_key") not in removed_feed_keys]
+    events_removed = len(events) - len(store["ical_events"])
+
+    # 4. Remove transaction tags (property_tag) pointing to this property
+    tags = store.get("tags", {})
+    tag_keys_to_remove = [tid for tid, pid in tags.items() if pid == prop_id]
+    for tid in tag_keys_to_remove:
+        del tags[tid]
+    store["tags"] = tags
+
+    # 5. Remove category tags for transactions that were tagged to this property
+    # (category tags are per-transaction, not per-property, so keep them)
+
+    # 6. Remove inventory groups linked to this property
+    inv_groups = store.get("inv_groups", [])
+    store["inv_groups"] = [g for g in inv_groups if g.get("propertyId") != prop_id]
+    inv_removed = len(inv_groups) - len(store["inv_groups"])
+
+    # 7. Remove merchant memory entries mapping to this property
+    merchant_mem = store.get("merchant_memory", {})
+    store["merchant_memory"] = {k: v for k, v in merchant_mem.items() if v != prop_id}
+
+    # 8. Remove manual income entries for this property
+    manual_income = store.get("manual_income", {})
+    if prop_id in manual_income:
+        del manual_income[prop_id]
+    store["manual_income"] = manual_income
+
+    save_store(store)
+
+    # Invalidate all caches
+    for cache_key in ["props", "tags", "transactions", "cockpit", "ical_events", "ical_feeds"]:
+        _invalidate_cache(cache_key, uid)
+
+    logger.info("Cascade delete property %s: feeds=%d, events=%d, tags=%d, inv=%d",
+                prop_id, feeds_removed, events_removed, len(tag_keys_to_remove), inv_removed)
+
+    return jsonify({
+        "ok": True,
+        "deleted": {
+            "feeds": feeds_removed,
+            "events": events_removed,
+            "tags": len(tag_keys_to_remove),
+            "inv_groups": inv_removed,
+        },
+    })
+
+
+@app.route("/api/ical/feeds/<feed_key>", methods=["DELETE"])
+def delete_ical_feed(feed_key):
+    """Delete a single iCal feed and all its calendar events."""
+    store = load_store()
+    uid = getattr(g, 'user_id', None)
+
+    # Remove the feed
+    ical_urls = store.get("ical_urls", [])
+    store["ical_urls"] = [f for f in ical_urls if (f.get("feed_key") or f.get("key")) != feed_key]
+
+    # Remove all events from this feed
+    events = store.get("ical_events", [])
+    store["ical_events"] = [e for e in events if e.get("feed_key") != feed_key]
+    events_removed = len(events) - len(store["ical_events"])
+
+    save_store(store)
+    _invalidate_cache("ical_events", uid)
+    _invalidate_cache("ical_feeds", uid)
+
+    return jsonify({"ok": True, "events_removed": events_removed})
+
+
 @app.route("/api/tags", methods=["GET"])
 def get_tags():
     uid = getattr(g, 'user_id', None)
@@ -2638,7 +2781,7 @@ def save_category_tag():
     store["category_tags"] = cat_tags
     save_store(store)
     uid = getattr(g, 'user_id', None)
-    _invalidate_cache("cockpit:", uid)  # category tags affect financial calculations
+    _invalidate_cache("cockpit", uid)  # category tags affect financial calculations
     _invalidate_cache("transactions", uid)  # category_tag is merged into transaction objects
     return jsonify({"ok": True})
 

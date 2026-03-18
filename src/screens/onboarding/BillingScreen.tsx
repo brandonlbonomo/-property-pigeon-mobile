@@ -207,11 +207,11 @@ const styles = StyleSheet.create({
   backText: { fontSize: FontSize.md, color: Colors.primary },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
   hero: { alignItems: 'center', marginBottom: Spacing.lg },
   iconCircle: {
     width: 72, height: 72, borderRadius: 36,
-    backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
     marginBottom: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
@@ -226,7 +226,7 @@ const styles = StyleSheet.create({
     flex: 1, padding: Spacing.md, borderRadius: Radius.lg,
     borderWidth: 2, borderColor: Colors.border, alignItems: 'center',
   },
-  planOptionActive: { borderColor: Colors.primary, backgroundColor: Colors.primary },
+  planOptionActive: { borderColor: Colors.green, backgroundColor: Colors.green },
   planLabel: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
   planLabelActive: { color: '#fff' },
   planPrice: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.text, marginTop: 2 },
@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
   featureText: { fontSize: FontSize.md, color: Colors.text, flex: 1 },
   buttons: { gap: Spacing.sm },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

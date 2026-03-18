@@ -76,12 +76,12 @@ const styles = StyleSheet.create({
   backText: { fontSize: FontSize.md, color: Colors.primary },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
 
   hero: { alignItems: 'center', marginBottom: Spacing.xl },
   iconCircle: {
     width: 80, height: 80, borderRadius: 40,
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     alignItems: 'center', justifyContent: 'center',
     marginBottom: Spacing.md,
     ...Platform.select({
@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
 
   bottom: { marginTop: 'auto', gap: Spacing.sm, marginBottom: Spacing.lg },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm,
     ...Platform.select({

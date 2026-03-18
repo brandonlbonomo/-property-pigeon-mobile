@@ -169,15 +169,15 @@ const styles = StyleSheet.create({
   backText: { fontSize: FontSize.md, color: Colors.primary },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm, marginBottom: Spacing.xl },
   dot: { width: 8, height: 8, borderRadius: Radius.pill, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
+  dotActive: { backgroundColor: Colors.green, width: 24 },
   title: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
   subtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.lg, lineHeight: 20 },
 
   priceCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.lg,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.lg,
     padding: Spacing.md, marginBottom: Spacing.lg,
-    borderWidth: 1, borderColor: Colors.primary + '20',
+    borderWidth: 1, borderColor: Colors.green + '20',
   },
   priceTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
   priceDesc: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
   connectedSub: { fontSize: FontSize.xs, color: Colors.green, marginTop: 2 },
 
   plaidBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm,
     ...Platform.select({
@@ -203,7 +203,7 @@ const styles = StyleSheet.create({
 
   bottom: { gap: Spacing.sm, marginBottom: Spacing.lg },
   primaryBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },
