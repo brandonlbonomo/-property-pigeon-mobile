@@ -36,7 +36,7 @@ function PageContent({ pageKey }: { pageKey: string }) {
     case 'profile': return <ProfileScreen />;
     case 'performance': return <MoneyScreen />;
     case 'projections': return <ProjectionsScreen />;
-    case 'calendar': return <CleaningsScreen />;
+    case 'calendar': return <CleaningsScreen />; // Calendar pill → CleaningsScreen (iCal events, check-ins, cleanings)
     case 'inventory': return <InventoryScreen />;
     default: return <View />;
   }

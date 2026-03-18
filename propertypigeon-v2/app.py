@@ -902,7 +902,26 @@ def auth_login():
         save_users(users)
     _cache_token(token, user["id"], user["token_issued_at"])
     logger.info("Login success: email=%s user=%s ip=%s", email, user["id"], ip)
-    return jsonify({"ok": True, "user_id": user["id"], "token": token, "email": email, "username": user.get("username", "")})
+    return jsonify({"ok": True, "user_id": user["id"], "token": token, "email": email, "username": user.get("username", ""), "role": user.get("role", "owner")})
+
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    """Return current user's profile info including role."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Not authenticated"}), 401
+    users = load_users()
+    for email, u in users.items():
+        if u.get("id") == uid:
+            return jsonify({
+                "ok": True,
+                "user_id": uid,
+                "email": email,
+                "username": u.get("username", ""),
+                "role": u.get("role", "owner"),
+            })
+    return jsonify({"error": "User not found"}), 404
+
 
 @app.route("/api/auth/delete", methods=["POST"])
 def auth_delete():

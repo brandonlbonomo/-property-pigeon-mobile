@@ -166,12 +166,18 @@ export function SignInScreen({ navigation }: any) {
       await SecureStore.setItemAsync('pp_email', res.email);
       if (res.username) await SecureStore.setItemAsync('pp_username', res.username);
 
-      const storedPortfolio = await SecureStore.getItemAsync('pp_portfolio_type') as 'str' | 'ltr' | 'both' | null;
+      // Determine account type from backend role (GAP 1/2/3 fix)
+      const role = res.role || 'owner';
+      const isCleaner = role === 'cleaner';
+      const storedPortfolio = isCleaner
+        ? null  // GAP 4: portfolioType is meaningless for cleaners
+        : (await SecureStore.getItemAsync('pp_portfolio_type') as 'str' | 'ltr' | 'both' | null);
 
       await setProfile({
         email: res.email,
         username: res.username || undefined,
-        portfolioType: storedPortfolio || 'str',
+        accountType: isCleaner ? 'cleaner' : 'owner',  // GAP 2/3: persist accountType
+        portfolioType: isCleaner ? undefined : (storedPortfolio || 'str'),
         properties: [],
         hasActivatedData: true,
       });
@@ -179,7 +185,7 @@ export function SignInScreen({ navigation }: any) {
       // Prompt biometric enrollment before completing (so user sees it)
       await promptBiometricEnrollment();
 
-      await complete(storedPortfolio);
+      await complete(isCleaner ? 'str' : storedPortfolio);
     } catch (err: any) {
       const msg = err.serverError || err.message || 'Sign in failed';
       Alert.alert('Error', msg);

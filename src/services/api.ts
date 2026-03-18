@@ -84,7 +84,7 @@ export async function apiRegister(
   return res;
 }
 
-export async function apiLogin(email: string, password: string): Promise<{ ok: boolean; token: string; user_id: number; email: string; username?: string }> {
+export async function apiLogin(email: string, password: string): Promise<{ ok: boolean; token: string; user_id: number; email: string; username?: string; role?: string }> {
   const res = await apiFetch('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),

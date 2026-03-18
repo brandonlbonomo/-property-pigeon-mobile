@@ -101,7 +101,7 @@ export function CleanerCreateAccountScreen({ navigation }: any) {
       username: username.trim(),
       email: email.trim().toLowerCase(),
       accountType: 'cleaner',
-      portfolioType: 'str',
+      // No portfolioType for cleaners — it's meaningless and must not influence routing
     });
 
     navigation.navigate('CleanerFollowOwner');

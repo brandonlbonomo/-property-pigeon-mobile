@@ -20,7 +20,7 @@ import { OnboardingNavigator } from './src/navigation/OnboardingNavigator';
 import { LoadingScreen } from './src/components/LoadingScreen';
 import { BiometricSplash } from './src/components/BiometricSplash';
 import { registerForPushNotifications, addNotificationResponseListener } from './src/services/notifications';
-import { onAuthExpired } from './src/services/api';
+import { onAuthExpired, apiFetch } from './src/services/api';
 import { Colors } from './src/constants/theme';
 import { configureRevenueCat, identifyUser, addCustomerInfoListener, hasEntitlement } from './src/services/revenueCat';
 
@@ -34,6 +34,8 @@ export default function App() {
   const fetchBillingStatus = useUserStore(s => s.fetchBillingStatus);
   const userHydrated = useUserStore(s => s.hydrated);
   const accountType = useUserStore(s => s.profile?.accountType);
+  const setProfile = useUserStore(s => s.setProfile);
+  const [accountTypeResolved, setAccountTypeResolved] = useState(false);
   const setPushToken = useNotificationStore(s => s.setPushToken);
   const fetchNotifications = useNotificationStore(s => s.fetchNotifications);
 
@@ -98,6 +100,25 @@ export default function App() {
       setAuthGate('authenticated');
     }
   }, [isLoading, userHydrated, hasCompleted, biometricEnabled]);
+
+  // GAP 5: If accountType is unknown after auth, fetch from backend before routing
+  useEffect(() => {
+    if (authGate !== 'authenticated') return;
+    if (accountType) {
+      setAccountTypeResolved(true);
+      return;
+    }
+    // accountType missing — fetch from backend
+    apiFetch('/api/auth/me').then(res => {
+      if (res?.role) {
+        setProfile({ accountType: res.role === 'cleaner' ? 'cleaner' : 'owner' });
+      }
+    }).catch(() => {
+      // Can't fetch — default to owner (existing behavior)
+    }).finally(() => {
+      setAccountTypeResolved(true);
+    });
+  }, [authGate, accountType]);
 
   // Identify user with RevenueCat when auth completes (e.g. after sign-in)
   useEffect(() => {
@@ -182,6 +203,18 @@ export default function App() {
         <SafeAreaProvider>
           <StatusBar style="light" backgroundColor={Colors.bg} />
           <OnboardingNavigator />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
+
+  // Wait for accountType to be resolved before routing
+  if (!accountTypeResolved) {
+    return (
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaProvider>
+          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <LoadingScreen />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     );
