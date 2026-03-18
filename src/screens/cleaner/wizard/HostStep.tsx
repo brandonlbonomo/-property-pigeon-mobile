@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
   },
   avatar: {
     width: 44, height: 44, borderRadius: 22,
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     alignItems: 'center', justifyContent: 'center',
     marginRight: Spacing.md,
   },

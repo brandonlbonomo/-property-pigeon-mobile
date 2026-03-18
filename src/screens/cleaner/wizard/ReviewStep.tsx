@@ -375,7 +375,7 @@ const styles = StyleSheet.create({
   totalValue: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.green },
   createBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingVertical: Spacing.md,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },
@@ -406,7 +406,7 @@ const modalStyles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.pill,
     backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder,
   },
-  typePillActive: { backgroundColor: Colors.primaryDim, borderColor: Colors.primary },
+  typePillActive: { backgroundColor: Colors.greenDim, borderColor: Colors.primary },
   typePillText: { fontSize: FontSize.xs, color: Colors.textDim, fontWeight: '500' },
   typePillTextActive: { color: Colors.primary, fontWeight: '600' },
   amountRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
@@ -419,7 +419,7 @@ const modalStyles = StyleSheet.create({
   cancelText: { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: '500' },
   addBtn: {
     flex: 1, alignItems: 'center', paddingVertical: Spacing.sm + 2,
-    borderRadius: Radius.md, backgroundColor: Colors.primary,
+    borderRadius: Radius.md, backgroundColor: Colors.green,
   },
   addText: { fontSize: FontSize.md, color: '#fff', fontWeight: '600' },
 });

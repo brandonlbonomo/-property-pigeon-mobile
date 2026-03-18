@@ -201,7 +201,7 @@ const styles = StyleSheet.create({
   },
   avatar: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.primary },
   userInfo: { flex: 1 },
@@ -216,7 +216,7 @@ const styles = StyleSheet.create({
   followBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: Spacing.sm, paddingVertical: 6,
-    borderRadius: Radius.pill, backgroundColor: Colors.primary,
+    borderRadius: Radius.pill, backgroundColor: Colors.green,
   },
   followBtnDone: {
     backgroundColor: Colors.greenDim, borderWidth: 1, borderColor: Colors.green,
@@ -230,7 +230,7 @@ const styles = StyleSheet.create({
   msgBtn: {
     width: 34, height: 34, borderRadius: 17,
     borderWidth: 1, borderColor: Colors.primary + '40',
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     alignItems: 'center', justifyContent: 'center',
   },
   errorBanner: {

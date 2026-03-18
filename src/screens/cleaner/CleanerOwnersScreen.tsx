@@ -314,7 +314,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     padding: Spacing.md, borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.primary + '40', borderStyle: 'dashed',
-    backgroundColor: Colors.primaryDim, marginBottom: Spacing.md,
+    backgroundColor: Colors.greenDim, marginBottom: Spacing.md,
   },
   addBtnText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.primary },
   ownerCard: {
@@ -330,7 +330,7 @@ const styles = StyleSheet.create({
   ownerHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   avatar: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.primary },
   ownerInfo: { flex: 1 },
@@ -363,7 +363,7 @@ const styles = StyleSheet.create({
   cancelBtnText: { color: Colors.textSecondary, fontSize: FontSize.sm },
   submitBtn: {
     flex: 1, padding: Spacing.sm, borderRadius: Radius.md,
-    backgroundColor: Colors.primary, alignItems: 'center',
+    backgroundColor: Colors.green, alignItems: 'center',
   },
   submitBtnText: { color: '#fff', fontSize: FontSize.sm, fontWeight: '600' },
   propRow: {
@@ -372,11 +372,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.glassHeavy, borderWidth: 0.5, borderColor: Colors.glassBorder,
     marginBottom: Spacing.xs,
   },
-  propRowActive: { backgroundColor: Colors.primaryDim, borderColor: Colors.primary },
+  propRowActive: { backgroundColor: Colors.greenDim, borderColor: Colors.primary },
   propLabel: { fontSize: FontSize.md, color: Colors.text },
   saveBtn: {
     padding: Spacing.md, borderRadius: Radius.md,
-    backgroundColor: Colors.primary, alignItems: 'center', marginTop: Spacing.md,
+    backgroundColor: Colors.green, alignItems: 'center', marginTop: Spacing.md,
   },
   saveBtnText: { color: '#fff', fontSize: FontSize.md, fontWeight: '600' },
   empty: {

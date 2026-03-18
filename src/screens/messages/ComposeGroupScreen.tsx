@@ -292,7 +292,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bg,
   },
   createBtn: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     borderRadius: Radius.lg,
     paddingVertical: Spacing.sm + 4,
     alignItems: 'center', justifyContent: 'center',

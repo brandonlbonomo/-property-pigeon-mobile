@@ -520,7 +520,7 @@ const styles = StyleSheet.create({
   ratePrefix: { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: '600' },
   rateInput: { fontSize: FontSize.md, color: Colors.text, width: 70, textAlign: 'right' },
   rateSaveBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md, alignItems: 'center', marginTop: Spacing.lg,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

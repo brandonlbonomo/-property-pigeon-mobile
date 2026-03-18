@@ -1189,7 +1189,7 @@ const styles = StyleSheet.create({
   refreshBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 10, paddingVertical: 5,
-    borderRadius: Radius.pill, backgroundColor: Colors.primaryDim,
+    borderRadius: Radius.pill, backgroundColor: Colors.greenDim,
   },
   refreshBtnText: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.primary },
 
@@ -1219,7 +1219,7 @@ const styles = StyleSheet.create({
   propOccInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   propOccName: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
   propOccPct: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
-  airbnbBadge: { backgroundColor: Colors.primaryDim, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
+  airbnbBadge: { backgroundColor: Colors.greenDim, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
   airbnbText: { fontSize: 9, fontWeight: '600', color: Colors.primary },
   propOccBarTrack: { height: 8, backgroundColor: Colors.border, borderRadius: 4, overflow: 'hidden', position: 'relative', marginBottom: 4 },
   propOccMarker: { position: 'absolute', top: -2, width: 2, height: 12, backgroundColor: Colors.textDim },
@@ -1323,7 +1323,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Colors.glassBorder,
   },
   cleaningDateText: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
-  todayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.primary },
+  todayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.green },
   cleaningBody: { padding: Spacing.md },
   cleaningBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 },
   cleaningBadge: {
@@ -1400,7 +1400,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Colors.glassBorder,
   },
-  yearDropdownItemActive: { backgroundColor: Colors.primaryDim },
+  yearDropdownItemActive: { backgroundColor: Colors.greenDim },
   yearDropdownText: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: '500', textAlign: 'center' },
   yearDropdownTextActive: { color: Colors.primary, fontWeight: '700' },
   costYearTotal: {
@@ -1456,7 +1456,7 @@ const styles = StyleSheet.create({
   },
   followIconCircle: {
     width: 56, height: 56, borderRadius: 28,
-    backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
     marginBottom: Spacing.md,
   },
   followTitle: {
@@ -1464,7 +1464,7 @@ const styles = StyleSheet.create({
   },
   followCodePill: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.pill,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm + 2,
     marginBottom: Spacing.md,
   },
@@ -1480,7 +1480,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
   },
   followDismissBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingHorizontal: Spacing.xl * 2, paddingVertical: Spacing.sm + 2,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 12 },
@@ -1509,7 +1509,7 @@ const styles = StyleSheet.create({
   },
   lockedBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm + 2,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 12 },

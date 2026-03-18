@@ -571,7 +571,7 @@ const styles = StyleSheet.create({
   // New Booking Banner
   newBookingBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.xl,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.xl,
     padding: Spacing.md, marginHorizontal: Spacing.md, marginTop: Spacing.sm,
     borderWidth: 0.5, borderColor: 'rgba(59,130,246,0.20)',
     ...Platform.select({
@@ -692,7 +692,7 @@ const styles = StyleSheet.create({
   eventTypeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   eventType: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   newBadge: {
-    backgroundColor: Colors.primary, borderRadius: Radius.pill,
+    backgroundColor: Colors.green, borderRadius: Radius.pill,
     paddingHorizontal: 5, paddingVertical: 1,
   },
   newBadgeText: { fontSize: 8, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },

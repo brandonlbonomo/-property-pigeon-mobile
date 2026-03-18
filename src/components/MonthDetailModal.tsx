@@ -400,7 +400,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill, borderWidth: 0.5,
     borderColor: Colors.glassBorder, backgroundColor: Colors.glassDark,
   },
-  tagPillActive: { backgroundColor: Colors.primaryDim, borderColor: Colors.primary },
+  tagPillActive: { backgroundColor: Colors.greenDim, borderColor: Colors.primary },
   tagPillText: { fontSize: FontSize.xs, color: Colors.textSecondary },
   tagPillTextActive: { color: Colors.primary, fontWeight: '600' },
   editBtns: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.xs },
@@ -412,7 +412,7 @@ const styles = StyleSheet.create({
   editCancelText: { color: Colors.textSecondary, fontSize: FontSize.sm },
   editSaveBtn: {
     flex: 1, padding: Spacing.sm, borderRadius: Radius.md,
-    backgroundColor: Colors.primary, alignItems: 'center',
+    backgroundColor: Colors.green, alignItems: 'center',
     flexDirection: 'row', justifyContent: 'center', gap: 4,
   },
   editSaveText: { color: '#fff', fontSize: FontSize.sm, fontWeight: '600' },

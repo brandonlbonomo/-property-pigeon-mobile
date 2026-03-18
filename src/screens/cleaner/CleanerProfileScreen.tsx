@@ -499,7 +499,7 @@ const styles = StyleSheet.create({
 
   ratesBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.md,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.md,
     borderWidth: 1, borderColor: 'rgba(59,130,246,0.15)',
     padding: Spacing.sm, paddingHorizontal: Spacing.md,
     marginBottom: Spacing.md,
@@ -513,7 +513,7 @@ const styles = StyleSheet.create({
   },
   avatarCircle: {
     width: 76, height: 76, borderRadius: 38,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     alignItems: 'center', justifyContent: 'center',
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 20 },

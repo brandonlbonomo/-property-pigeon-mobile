@@ -529,10 +529,10 @@ const styles = StyleSheet.create({
   propOccInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   propOccName: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
   propOccPct: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
-  airbnbBadge: { backgroundColor: Colors.primaryDim, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
+  airbnbBadge: { backgroundColor: Colors.greenDim, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
   airbnbText: { fontSize: 9, fontWeight: '600', color: Colors.primary },
   propOccBarTrack: { height: 8, backgroundColor: Colors.border, borderRadius: 4, overflow: 'hidden', position: 'relative', marginBottom: 4 },
-  propOccBarFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 4 },
+  propOccBarFill: { height: '100%', backgroundColor: Colors.green, borderRadius: 4 },
   propOccMarker: { position: 'absolute', top: -2, width: 2, height: 12, backgroundColor: Colors.textDim },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.border, marginVertical: Spacing.sm },
   occLegend: { flexDirection: 'row', gap: Spacing.lg, marginTop: Spacing.md, paddingTop: Spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderColor: Colors.border },
@@ -612,7 +612,7 @@ const styles = StyleSheet.create({
   calDayTextCheckin: { color: Colors.green, fontWeight: '600' },
   calDayTextCleaning: { color: Colors.yellow, fontWeight: '600' },
   calDayTextSelected: { fontWeight: '800' as const },
-  calDotToday: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.primary, marginTop: 2 },
+  calDotToday: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.green, marginTop: 2 },
   calDotCheckin: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.green, marginTop: 2 },
   calDotCleaning: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.yellow, marginTop: 2 },
   calLegend: {
@@ -647,7 +647,7 @@ const styles = StyleSheet.create({
   // Cleaning cards
   cleaningCard: { flexDirection: 'row', gap: Spacing.sm },
   cleaningDateCol: {
-    width: 48, backgroundColor: Colors.primaryDim, borderRadius: Radius.sm,
+    width: 48, backgroundColor: Colors.greenDim, borderRadius: Radius.sm,
     alignItems: 'center', paddingVertical: Spacing.xs,
   },
   cleaningMonth: { fontSize: 9, color: Colors.primary, fontWeight: '600' },

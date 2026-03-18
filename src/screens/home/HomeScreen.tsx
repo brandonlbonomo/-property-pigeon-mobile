@@ -359,7 +359,7 @@ export function HomeScreen() {
                           <Text style={styles.occLabel}>Market Avg</Text>
                           <Text style={styles.occValue}>{priceLabsOcc.marketAvg.toFixed(0)}%</Text>
                           <View style={styles.occBarTrack}>
-                            <View style={[styles.occBarFill, { width: `${Math.min(priceLabsOcc.marketAvg, 100)}%`, backgroundColor: Colors.primary }]} />
+                            <View style={[styles.occBarFill, { width: `${Math.min(priceLabsOcc.marketAvg, 100)}%`, backgroundColor: Colors.green }]} />
                           </View>
                         </View>
                       </>

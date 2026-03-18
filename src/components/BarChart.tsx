@@ -246,7 +246,7 @@ const styles = StyleSheet.create({
     width: 5,
     height: 5,
     borderRadius: 3,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     marginBottom: 1,
   },
   label: {

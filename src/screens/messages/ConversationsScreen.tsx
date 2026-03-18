@@ -335,7 +335,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarUnread: {
-    backgroundColor: Colors.primaryDim, borderColor: Colors.primary,
+    backgroundColor: Colors.greenDim, borderColor: Colors.primary,
   },
   avatarText: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.textSecondary },
   convoContent: { flex: 1 },
@@ -347,7 +347,7 @@ const styles = StyleSheet.create({
   convoPreviewUnread: { color: Colors.text, fontWeight: '500' },
   unreadBadge: {
     minWidth: 20, height: 20, borderRadius: 10,
-    backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.green, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 6,
   },
   unreadText: { fontSize: 10, fontWeight: '800', color: '#fff' },
@@ -375,7 +375,7 @@ const styles = StyleSheet.create({
   },
   fab: {
     width: 56, height: 56, borderRadius: 28,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     alignItems: 'center', justifyContent: 'center',
     ...Platform.select({
       ios: {

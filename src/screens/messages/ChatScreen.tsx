@@ -1032,7 +1032,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
   },
   bubbleMine: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     borderBottomRightRadius: 4,
   },
   bubbleTheirs: {
@@ -1132,7 +1132,7 @@ const styles = StyleSheet.create({
   },
   sendBtn: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     alignItems: 'center', justifyContent: 'center',
     marginBottom: Platform.OS === 'ios' ? 1 : 0,
   },

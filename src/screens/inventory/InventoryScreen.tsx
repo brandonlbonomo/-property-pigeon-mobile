@@ -889,7 +889,7 @@ const styles = StyleSheet.create({
   groupMetaText: { fontSize: FontSize.xs, color: Colors.textSecondary },
   linkBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3,
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.pill,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
     paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start',
   },
   linkBadgeText: { fontSize: 10, fontWeight: '600', color: Colors.primary },
@@ -914,7 +914,7 @@ const styles = StyleSheet.create({
   itemInfo: { flex: 1, marginRight: Spacing.sm },
   itemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   itemName: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
-  cleanerBadge: { backgroundColor: Colors.primaryDim, borderRadius: Radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
+  cleanerBadge: { backgroundColor: Colors.greenDim, borderRadius: Radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
   cleanerBadgeText: { fontSize: 9, fontWeight: '700', color: Colors.primary, letterSpacing: 0.5 },
   staticBadge: { backgroundColor: Colors.greenDim, borderRadius: Radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
   staticBadgeText: { fontSize: 9, fontWeight: '700', color: Colors.green, letterSpacing: 0.5 },
@@ -983,7 +983,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: Colors.glass,
   },
-  cleanerCheckActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  cleanerCheckActive: { backgroundColor: Colors.green, borderColor: Colors.primary },
   cleanerToggleText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
   cleanerToggleHint: { fontSize: FontSize.xs, color: Colors.textDim },
 
@@ -993,7 +993,7 @@ const styles = StyleSheet.create({
     borderWidth: 0.5, borderColor: Colors.glassBorder, alignItems: 'center',
     backgroundColor: Colors.glass,
   },
-  unitBtnActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryDim },
+  unitBtnActive: { borderColor: Colors.primary, backgroundColor: Colors.greenDim },
   unitBtnText: { fontSize: FontSize.xs, color: Colors.textSecondary },
   unitBtnTextActive: { color: Colors.primary, fontWeight: '600' },
   addItemBtns: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
@@ -1076,7 +1076,7 @@ const styles = StyleSheet.create({
   // Restock modal
   restockSaveBtn: {
     flex: 1, padding: Spacing.md, borderRadius: Radius.pill,
-    backgroundColor: Colors.primary, alignItems: 'center',
+    backgroundColor: Colors.green, alignItems: 'center',
     flexDirection: 'row', justifyContent: 'center', gap: 6,
   },
   restockCurrent: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.md },

@@ -535,7 +535,7 @@ const styles = StyleSheet.create({
   },
   lockedBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

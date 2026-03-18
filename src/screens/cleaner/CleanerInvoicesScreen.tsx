@@ -665,7 +665,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder,
   },
   periodPillActive: {
-    backgroundColor: Colors.primaryDim, borderColor: Colors.primary,
+    backgroundColor: Colors.greenDim, borderColor: Colors.primary,
   },
   periodPillText: { fontSize: FontSize.sm, color: Colors.textDim, fontWeight: '500' },
   periodPillTextActive: { color: Colors.primary, fontWeight: '600' },
@@ -706,7 +706,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.glassDark,
   },
   typeTagTappable: {
-    backgroundColor: Colors.primaryDim, borderWidth: 0.5, borderColor: 'rgba(59,130,246,0.2)',
+    backgroundColor: Colors.greenDim, borderWidth: 0.5, borderColor: 'rgba(59,130,246,0.2)',
   },
   typeTagText: { fontSize: FontSize.xs, fontWeight: '500', color: Colors.text },
   lineAmount: { fontSize: FontSize.md, fontWeight: '600', color: Colors.green },
@@ -741,7 +741,7 @@ const styles = StyleSheet.create({
 
   sendBtn: {
     flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: Colors.primary, borderRadius: Radius.md,
+    backgroundColor: Colors.green, borderRadius: Radius.md,
     paddingVertical: Spacing.sm,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 12 },
@@ -752,7 +752,7 @@ const styles = StyleSheet.create({
   // Create button
   createBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingVertical: Spacing.md, marginBottom: Spacing.md,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },
@@ -795,7 +795,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder,
   },
   typePillActive: {
-    backgroundColor: Colors.primaryDim, borderColor: Colors.primary,
+    backgroundColor: Colors.greenDim, borderColor: Colors.primary,
   },
   typePillText: { fontSize: FontSize.xs, color: Colors.textDim, fontWeight: '500' },
   typePillTextActive: { color: Colors.primary, fontWeight: '600' },
@@ -811,7 +811,7 @@ const styles = StyleSheet.create({
   modalCancelText: { fontSize: FontSize.md, color: Colors.textSecondary, fontWeight: '500' },
   modalSave: {
     flex: 1, alignItems: 'center', paddingVertical: Spacing.sm + 2,
-    borderRadius: Radius.md, backgroundColor: Colors.primary,
+    borderRadius: Radius.md, backgroundColor: Colors.green,
   },
   modalSaveText: { fontSize: FontSize.md, color: '#fff', fontWeight: '600' },
 
@@ -837,7 +837,7 @@ const styles = StyleSheet.create({
   },
   lockedBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },

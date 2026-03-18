@@ -289,7 +289,7 @@ const styles = StyleSheet.create({
     }),
   },
   cardUnread: {
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     borderColor: 'rgba(59,130,246,0.15)',
   },
   iconCircle: {
@@ -318,11 +318,11 @@ const styles = StyleSheet.create({
   cardTime: { fontSize: 10, color: Colors.textDim, marginTop: 2 },
   unreadDot: {
     width: 7, height: 7, borderRadius: 3.5,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
   },
 
   followBackBtn: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     paddingHorizontal: Spacing.sm + 2,
     paddingVertical: 5,
     borderRadius: Radius.pill,

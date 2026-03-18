@@ -149,7 +149,7 @@ const styles = StyleSheet.create({
   },
   avatar: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.primary },
   headerInfo: { flex: 1 },

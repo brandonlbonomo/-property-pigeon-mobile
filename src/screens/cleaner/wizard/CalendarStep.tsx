@@ -278,7 +278,7 @@ export function CalendarStep({
           <Text style={styles.legendText}>Available</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendSwatch, { backgroundColor: Colors.primary, borderColor: Colors.primary }]} />
+          <View style={[styles.legendSwatch, { backgroundColor: Colors.green, borderColor: Colors.primary }]} />
           <Text style={styles.legendText}>Selected</Text>
         </View>
         <View style={styles.legendItem}>
@@ -404,7 +404,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: 'rgba(245,158,11,0.25)',
   },
   daySelected: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8 },
     }),
@@ -415,7 +415,7 @@ const styles = StyleSheet.create({
   },
   halfDot: {
     width: 5, height: 5, borderRadius: 2.5,
-    backgroundColor: Colors.primary, marginTop: 1,
+    backgroundColor: Colors.green, marginTop: 1,
   },
   eventDot: {
     width: 5, height: 5, borderRadius: 2.5,
@@ -435,7 +435,7 @@ const styles = StyleSheet.create({
   cartBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     alignSelf: 'center',
-    backgroundColor: Colors.primary, borderRadius: Radius.pill,
+    backgroundColor: Colors.green, borderRadius: Radius.pill,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm + 2,
     marginTop: Spacing.sm,
     ...Platform.select({
@@ -481,7 +481,7 @@ const styles = StyleSheet.create({
   },
   invoicedText: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.textDim },
   sheetDoneBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.lg,
+    backgroundColor: Colors.green, borderRadius: Radius.lg,
     paddingVertical: Spacing.sm + 2, alignItems: 'center',
     marginTop: Spacing.md,
   },

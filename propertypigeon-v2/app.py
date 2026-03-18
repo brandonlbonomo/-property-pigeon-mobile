@@ -490,12 +490,16 @@ def _set_cached_response(endpoint, user_id, data):
         _response_cache[(endpoint, user_id)] = {"data": data, "ts": _time.time()}
 
 def _invalidate_cache(endpoint, user_id=None):
-    """Invalidate cache for an endpoint, optionally for a specific user."""
+    """Invalidate cache for an endpoint, optionally for a specific user.
+    Supports prefix matching: _invalidate_cache("cockpit") clears "cockpit", "cockpit:2026-03", etc."""
     with _response_cache_lock:
         if user_id:
-            _response_cache.pop((endpoint, user_id), None)
+            keys = [k for k in _response_cache if k[0] == endpoint or k[0].startswith(endpoint + ":")]
+            keys = [k for k in keys if k[1] == user_id]
+            for k in keys:
+                del _response_cache[k]
         else:
-            keys = [k for k in _response_cache if k[0] == endpoint]
+            keys = [k for k in _response_cache if k[0] == endpoint or k[0].startswith(endpoint + ":")]
             for k in keys:
                 del _response_cache[k]
 

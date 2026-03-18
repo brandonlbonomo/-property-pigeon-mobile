@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: Radius.sm,
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     alignItems: 'center',
     justifyContent: 'center',
   },

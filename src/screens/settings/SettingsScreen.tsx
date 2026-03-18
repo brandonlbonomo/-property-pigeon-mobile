@@ -782,7 +782,7 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
           {/* STR-only: show Airbnb label */}
           {isSTR && (
             <View style={styles.incomeTypeLabel}>
-              <View style={[styles.incomeTypeDot, { backgroundColor: Colors.primary }]} />
+              <View style={[styles.incomeTypeDot, { backgroundColor: Colors.green }]} />
               <Text style={styles.incomeTypeLabelText}>Airbnb Income (total deposit)</Text>
             </View>
           )}
@@ -1459,7 +1459,7 @@ export function SettingsScreen() {
                 />
                 <TouchableOpacity
                   activeOpacity={0.7}
-                  style={{ backgroundColor: Colors.primary, borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 2 }}
+                  style={{ backgroundColor: Colors.green, borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 2 }}
                   onPress={() => {
                     const num = unitsPerYearDraft === '' ? undefined : parseInt(unitsPerYearDraft) || 0;
                     setUserProfile({ unitsPerYear: num });
@@ -2550,7 +2550,7 @@ const styles = StyleSheet.create({
     }),
   },
   row: { flexDirection: 'row', alignItems: 'center', padding: Spacing.md, gap: Spacing.sm },
-  rowIconWrap: { width: 30, height: 30, borderRadius: 7, backgroundColor: Colors.primaryDim, alignItems: 'center', justifyContent: 'center' },
+  rowIconWrap: { width: 30, height: 30, borderRadius: 7, backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center' },
   rowText: { flex: 1 },
   rowLabel: { fontSize: FontSize.md, color: Colors.text },
   rowSub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 1 },
@@ -2566,12 +2566,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     padding: Spacing.md, borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.primary + '40', borderStyle: 'dashed',
-    backgroundColor: Colors.primaryDim, marginBottom: Spacing.md,
+    backgroundColor: Colors.greenDim, marginBottom: Spacing.md,
   },
   addBtnText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.primary },
   syncBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    padding: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.primary, marginBottom: Spacing.md,
+    padding: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.green, marginBottom: Spacing.md,
   },
   syncBtnText: { fontSize: FontSize.sm, fontWeight: '700', color: '#fff' },
   btnRow: { gap: Spacing.sm },
@@ -2598,11 +2598,11 @@ const styles = StyleSheet.create({
   modalBtns: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.md },
   modalCancelBtn: { flex: 1, padding: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.glassDark, alignItems: 'center', borderWidth: 0.5, borderColor: Colors.glassBorder },
   modalCancelText: { color: Colors.textSecondary, fontSize: FontSize.md },
-  modalSaveBtn: { flex: 1, padding: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.primary, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  modalSaveBtn: { flex: 1, padding: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.green, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
   modalSaveText: { color: '#fff', fontSize: FontSize.md, fontWeight: '600' },
   typeToggleRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
   typeBtn: { flex: 1, padding: Spacing.sm, borderRadius: Radius.md, borderWidth: 0.5, borderColor: Colors.glassBorder, alignItems: 'center', backgroundColor: Colors.glassDark },
-  typeBtnActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryDim },
+  typeBtnActive: { borderColor: Colors.primary, backgroundColor: Colors.greenDim },
   typeBtnText: { fontSize: FontSize.sm, color: Colors.textSecondary },
   typeBtnTextActive: { color: Colors.primary, fontWeight: '600' },
   tagPillGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginBottom: Spacing.md },
@@ -2611,12 +2611,12 @@ const styles = StyleSheet.create({
   tagRulePayee: { fontSize: FontSize.md, fontWeight: '500', color: Colors.text },
   propPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginBottom: Spacing.md },
   propPill: { paddingHorizontal: Spacing.sm, paddingVertical: 6, borderRadius: Radius.pill, borderWidth: 0.5, borderColor: Colors.glassBorder, backgroundColor: Colors.glassDark },
-  propPillActive: { backgroundColor: Colors.primaryDim, borderColor: Colors.primary },
+  propPillActive: { backgroundColor: Colors.greenDim, borderColor: Colors.primary },
   propPillText: { fontSize: FontSize.xs, color: Colors.textSecondary },
   propPillTextActive: { color: Colors.primary, fontWeight: '600' },
   incomeTypeLabel: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.md,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.md,
     padding: Spacing.sm, paddingHorizontal: Spacing.md, marginBottom: Spacing.md,
   },
   incomeTypeDot: { width: 8, height: 8, borderRadius: 4 },
@@ -2628,7 +2628,7 @@ const styles = StyleSheet.create({
   },
   selectedUserChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: Colors.primaryDim, borderRadius: Radius.pill,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
     paddingHorizontal: Spacing.md, paddingVertical: 8, marginBottom: Spacing.sm,
     alignSelf: 'flex-start',
   },

@@ -1453,7 +1453,7 @@ const propModalStyles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
     padding: Spacing.sm,
     borderWidth: 1.5, borderColor: Colors.primary + '40', borderStyle: 'dashed',
-    borderRadius: Radius.md, backgroundColor: Colors.primaryDim,
+    borderRadius: Radius.md, backgroundColor: Colors.greenDim,
   },
   addPhotoText: {
     fontSize: FontSize.sm, color: Colors.primary, fontWeight: '500',
@@ -1516,7 +1516,7 @@ const propModalStyles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.xs,
     marginTop: Spacing.xs, paddingVertical: 6,
     borderWidth: 1.5, borderColor: Colors.primary + '40', borderStyle: 'dashed',
-    borderRadius: Radius.md, backgroundColor: Colors.primaryDim,
+    borderRadius: Radius.md, backgroundColor: Colors.greenDim,
   },
 });
 
@@ -1542,7 +1542,7 @@ const modalStyles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.md, gap: Spacing.sm,
   },
   iconWrap: {
-    width: 30, height: 30, borderRadius: 7, backgroundColor: Colors.primaryDim,
+    width: 30, height: 30, borderRadius: 7, backgroundColor: Colors.greenDim,
     alignItems: 'center', justifyContent: 'center',
   },
   reorderBtns: {
@@ -1553,7 +1553,7 @@ const modalStyles = StyleSheet.create({
   desc: { fontSize: FontSize.xs, color: Colors.textDim, marginTop: 1 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.border, marginLeft: 42 },
   doneBtn: {
-    marginTop: Spacing.lg, backgroundColor: Colors.primary, borderRadius: Radius.md,
+    marginTop: Spacing.lg, backgroundColor: Colors.green, borderRadius: Radius.md,
     padding: Spacing.md, alignItems: 'center',
   },
   doneText: { fontSize: FontSize.md, fontWeight: '600', color: '#fff' },
@@ -1577,7 +1577,7 @@ const styles = StyleSheet.create({
   },
   avatarCircle: {
     width: 76, height: 76, borderRadius: 38,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     alignItems: 'center', justifyContent: 'center',
     ...Platform.select({
       ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 20 },
@@ -1721,7 +1721,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   quarterRowCurrent: {
-    backgroundColor: Colors.primaryDim,
+    backgroundColor: Colors.greenDim,
     marginHorizontal: -Spacing.md,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.md,
@@ -1737,7 +1737,7 @@ const styles = StyleSheet.create({
   },
   currentBadge: {
     fontSize: 9, fontWeight: '600', color: Colors.primary,
-    backgroundColor: Colors.primary + '18', paddingHorizontal: 6, paddingVertical: 1,
+    backgroundColor: Colors.green + '18', paddingHorizontal: 6, paddingVertical: 1,
     borderRadius: 4, overflow: 'hidden',
   },
   quarterMetrics: { flexDirection: 'row' },
@@ -1833,7 +1833,7 @@ const txStyles = StyleSheet.create({
     backgroundColor: Colors.glassDark, borderWidth: 1, borderColor: Colors.glassBorder,
   },
   tagPillActive: {
-    backgroundColor: Colors.primary + '18', borderColor: Colors.primary,
+    backgroundColor: Colors.green + '18', borderColor: Colors.primary,
   },
   tagPillText: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary },
   tagPillTextActive: { color: Colors.primary },

@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
     }),
   },
   dotDone: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.green,
     borderColor: Colors.primary,
   },
   stepContent: { flex: 1 },
