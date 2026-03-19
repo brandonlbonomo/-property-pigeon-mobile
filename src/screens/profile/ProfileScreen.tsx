@@ -1279,26 +1279,57 @@ export function ProfileScreen() {
                     ? `Split ${fmt$(splitData.total_amount)} based on ${splitData.splits.reduce((s: number, sp: any) => s + sp.nights, 0)} booking nights`
                     : `No iCal bookings found — adjust split manually`}
                 </Text>
-                <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
-                  {(splitData.splits || []).map((sp: any) => (
-                    <View key={sp.prop_id} style={[tagSheetStyles.option, { flexDirection: 'column', alignItems: 'stretch', gap: 4 }]}>
+                <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                  {(splitData.splits || []).map((sp: any, idx: number) => (
+                    <View key={sp.prop_id} style={[tagSheetStyles.option, { flexDirection: 'column', alignItems: 'stretch', gap: 6 }]}>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
                           <Ionicons name="home" size={14} color={Colors.green} />
                           <Text style={tagSheetStyles.optionLabel}>{sp.prop_label}</Text>
                         </View>
                         <Text style={{ color: Colors.green, fontSize: FontSize.md, fontWeight: '700' }}>
-                          {fmt$(sp.amount)}
+                          {fmt$(splitData.total_amount * (sp.pct / 100))}
                         </Text>
                       </View>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Text style={{ color: Colors.textDim, fontSize: FontSize.xs }}>
                           {sp.nights > 0 ? `${sp.nights} nights` : 'Manual'}
                         </Text>
-                        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.xs }}>{sp.pct}%</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <TextInput
+                            style={{
+                              backgroundColor: Colors.bg, borderWidth: 1, borderColor: Colors.border,
+                              borderRadius: Radius.sm, paddingHorizontal: 8, paddingVertical: 4,
+                              color: Colors.text, fontSize: FontSize.sm, fontWeight: '600',
+                              width: 55, textAlign: 'right',
+                            }}
+                            value={String(sp.pct)}
+                            onChangeText={(val) => {
+                              const num = parseFloat(val) || 0;
+                              const newSplits = [...splitData.splits];
+                              newSplits[idx] = { ...newSplits[idx], pct: num, amount: splitData.total_amount * (num / 100) };
+                              setSplitData({ ...splitData, splits: newSplits });
+                            }}
+                            keyboardType="decimal-pad"
+                            maxLength={5}
+                          />
+                          <Text style={{ color: Colors.textSecondary, fontSize: FontSize.sm }}>%</Text>
+                        </View>
                       </View>
                     </View>
                   ))}
+                  {/* Show total percentage */}
+                  {(() => {
+                    const totalPct = (splitData.splits || []).reduce((s: number, sp: any) => s + (sp.pct || 0), 0);
+                    const isValid = Math.abs(totalPct - 100) < 0.5;
+                    return (
+                      <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingVertical: 4, paddingHorizontal: Spacing.sm }}>
+                        <Text style={{ color: isValid ? Colors.green : Colors.red, fontSize: FontSize.xs, fontWeight: '600' }}>
+                          Total: {totalPct.toFixed(1)}%{!isValid ? ' (must equal 100%)' : ''}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                 </ScrollView>
 
                 <TouchableOpacity

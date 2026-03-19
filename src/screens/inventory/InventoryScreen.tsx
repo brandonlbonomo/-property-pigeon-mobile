@@ -19,9 +19,16 @@ import {
 type UnitType = 'count' | 'oz' | 'gal';
 const UNIT_LABELS: Record<UnitType, string> = { count: '', oz: 'oz', gal: 'gal' };
 
-/** Count iCal feeds for a property — uses property.icalFeeds array or falls back to dataStore feeds. */
-function countFeedsForProperty(property: any): number {
-  return (property.icalFeeds || []).length;
+/** Count iCal feeds for a property — checks both local icalFeeds and dataStore feeds. */
+function countFeedsForProperty(property: any, allFeeds?: any[]): number {
+  const localCount = (property.icalFeeds || []).length;
+  if (localCount > 0) return localCount;
+  // Fallback: count feeds from dataStore that match this property's ID
+  if (allFeeds) {
+    const pid = property.id || property.name;
+    return allFeeds.filter((f: any) => f.propId === pid).length;
+  }
+  return 0;
 }
 
 // ── Add Group Modal (tap a property or city to instantly create) ──
@@ -32,12 +39,17 @@ function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
   existingGroupIds: Set<string>;
 }) {
   const properties = useUserStore(s => s.profile?.properties) || [];
+  const { fetchIcalFeeds } = useDataStore();
+  const [feeds, setFeeds] = useState<any[]>([]);
+  React.useEffect(() => {
+    if (visible) fetchIcalFeeds().then(f => setFeeds(f || [])).catch(() => {});
+  }, [visible]);
 
   // Group properties by market/city
   const airbnbProps = properties.filter((p: any) => p.isAirbnb);
   const cities = [...new Set(airbnbProps.map((p: any) => p.market).filter(Boolean))] as string[];
 
-  const icalCountByProp = (p: any) => countFeedsForProperty(p);
+  const icalCountByProp = (p: any) => countFeedsForProperty(p, feeds);
 
   // Check if group already exists for this property/city
   const hasGroup = (id: string) => existingGroupIds.has(id);
@@ -436,7 +448,7 @@ function AddItemForm({ onAdd, onCancel }: {
 // ══════════════════════════════════════
 
 export function InventoryScreen() {
-  const { fetchInvGroups } = useDataStore();
+  const { fetchInvGroups, fetchIcalFeeds } = useDataStore();
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -444,24 +456,30 @@ export function InventoryScreen() {
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [addingItemGroup, setAddingItemGroup] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [icalFeeds, setIcalFeeds] = useState<any[]>([]);
 
   const properties = useUserStore(s => s.profile?.properties) || [];
+
+  // Fetch iCal feeds for accurate feed count
+  useEffect(() => {
+    fetchIcalFeeds().then(f => setIcalFeeds(f || [])).catch(() => {});
+  }, []);
 
   // Count iCal feeds linked to a group
   const getGroupFeedCount = useCallback((group: any) => {
     if (group.linkType === 'property' && group.propertyId) {
       const prop = properties.find((p: any) => (p.id || p.name) === group.propertyId);
       if (!prop) return 0;
-      return countFeedsForProperty(prop);
+      return countFeedsForProperty(prop, icalFeeds);
     } else if (group.linkType === 'city' && group.city) {
       const cityProps = properties.filter((p: any) =>
         p.isAirbnb && p.market?.toLowerCase() === group.city.toLowerCase()
       );
       return cityProps.reduce((sum: number, p: any) =>
-        sum + countFeedsForProperty(p), 0);
+        sum + countFeedsForProperty(p, icalFeeds), 0);
     }
     return 0;
-  }, [properties]);
+  }, [properties, icalFeeds]);
 
   const load = useCallback(async (force = false) => {
     try {

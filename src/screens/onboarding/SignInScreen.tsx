@@ -173,12 +173,14 @@ export function SignInScreen({ navigation }: any) {
         ? null  // GAP 4: portfolioType is meaningless for cleaners
         : (await SecureStore.getItemAsync('pp_portfolio_type') as 'str' | 'ltr' | 'both' | null);
 
+      // Preserve existing properties — don't wipe them on login
+      const existingProps = useUserStore.getState().profile?.properties;
       await setProfile({
         email: res.email,
         username: res.username || undefined,
-        accountType: isCleaner ? 'cleaner' : 'owner',  // GAP 2/3: persist accountType
+        accountType: isCleaner ? 'cleaner' : 'owner',
         portfolioType: isCleaner ? undefined : (storedPortfolio || 'str'),
-        properties: [],
+        ...(existingProps?.length ? {} : { properties: [] }), // Only set empty if no existing
         hasActivatedData: true,
       });
 
@@ -250,10 +252,15 @@ export function SignInScreen({ navigation }: any) {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.primaryBtn, (!email.trim() || !password.trim() || loading) && styles.btnDisabled]}
-          onPress={handleSignIn}
-          disabled={!email.trim() || !password.trim() || loading}
-          activeOpacity={0.8}
+          style={[styles.primaryBtn, loading && styles.btnDisabled]}
+          onPress={() => {
+            if (!email.trim() || !password.trim()) {
+              Alert.alert('Required', 'Enter your email and password');
+              return;
+            }
+            handleSignIn();
+          }}
+          activeOpacity={0.7}
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />

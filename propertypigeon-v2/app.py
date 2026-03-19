@@ -2728,6 +2728,12 @@ def get_props():
 def save_props():
     store = load_store()
     props_data = request.json.get("props", [])
+    # Safety: never overwrite existing properties with an empty array
+    # This prevents accidental wipes from login or app restarts
+    existing = store.get("properties", []) or store.get("custom_props", [])
+    if not props_data and existing:
+        logger.warning("Blocked attempt to overwrite %d properties with empty array", len(existing))
+        return jsonify({"ok": True, "blocked": True})
     store["custom_props"] = props_data
     store["properties"] = props_data  # Keep both keys in sync
     save_store(store)

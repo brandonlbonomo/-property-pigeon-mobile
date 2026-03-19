@@ -216,9 +216,12 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const projectionStyle = profile?.projectionStyle || 'normal';
   const totalInvestment = profile?.totalInvestment;
 
-  const { fetchCockpit, fetchProps } = useDataStore();
+  const { fetchCockpit } = useDataStore();
   const [cockpit, setCockpit] = useState<any>(null);
-  const [props, setProps] = useState<any[]>([]);
+  // Properties from Manage Properties — single source of truth
+  const props = useMemo(() => (profile?.properties || []).map((p: any) => ({
+    id: p.id || p.name, prop_id: p.id || p.name, label: p.label || p.name,
+  })), [profile?.properties]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -243,14 +246,12 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const load = useCallback(async (force = false) => {
     try {
       setError('');
-      const [c, pr, txs, catTags] = await Promise.all([
+      const [c, txs, catTags] = await Promise.all([
         fetchCockpit(force),
-        fetchProps(force),
         fetchTransactions(force),
         fetchCategoryTags(force),
       ]);
       setCockpit(c);
-      setProps(pr || []);
 
       // Compute actual monthly revenue/expenses from tagged transactions
       const actuals: Record<string, { revenue: number; expenses: number }> = {};
@@ -286,7 +287,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchCockpit, fetchProps, fetchTransactions, fetchCategoryTags]);
+  }, [fetchCockpit, fetchTransactions, fetchCategoryTags]);
 
   useEffect(() => { load(); }, []);
 
