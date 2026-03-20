@@ -643,6 +643,7 @@ PUBLIC_PREFIXES = (
     "/api/referral/validate",
     "/privacy", "/terms",
     "/api/messages/files/",
+    "/api/pricelabs/diagnose",
 )
 
 @app.before_request
@@ -1333,7 +1334,6 @@ def batch_init():
         "transactions": txs,
         "tags": tags,
         "props": store.get("custom_props", []),
-        "ical_events": store.get("ical_events", []),
         "inv_groups": store.get("inv_groups", []),
         "settings": store.get("settings", {}),
         "manual_income": store.get("manual_income", {}),
@@ -2552,105 +2552,10 @@ def import_csv_universal():
         }), 422
 
 
-@app.route("/api/pricelabs/bookings")
+@app.route("/api/pl-bookings")
 def get_pl_bookings():
-    """
-    Returns stored PriceLabs/Airbnb booking records + monthly revenue imports.
-    Aggregated by month and by prop:month for use in Calendar and Money views.
-    Monthly revenue CSV data (pl_monthly_revenue) is merged into by_month.
-    """
-    import datetime as _dt
-    store    = load_store()
-    bookings = store.get("pl_bookings", [])
-
-    # ── Retroactively fix any bookings with prop_id = None ──────────────────
-    repaired = 0
-    fixed_bookings = []
-    for b in bookings:
-        if not b.get("prop_id") and b.get("listing_name"):
-            pid = _infer_prop_from_listing(b["listing_name"])
-            if pid:
-                b = dict(b, prop_id=pid)
-                repaired += 1
-        fixed_bookings.append(b)
-    if repaired:
-        bookings = fixed_bookings
-        store["pl_bookings"] = bookings
-        save_store(store)
-        logger.info("[Bookings] Repaired prop_id for %s bookings", repaired)
-
-    by_month       = {}
-    by_prop_month  = {}
-    total_revenue  = 0.0
-
-    # 1. Aggregate from individual booking records
-    for b in bookings:
-        mo  = (b.get("check_in") or "")[:7]
-        if not mo:
-            continue
-        rev = float(b.get("rental_revenue") or 0)
-        pid = b.get("prop_id") or "unknown"
-        by_month[mo]            = round(by_month.get(mo, 0) + rev, 2)
-        key                     = f"{pid}:{mo}"
-        by_prop_month[key]      = round(by_prop_month.get(key, 0) + rev, 2)
-        total_revenue          += rev
-
-    # 2. Merge monthly revenue CSV data (Revenue on the Books report)
-    #    Only fills months not already covered by individual bookings
-    monthly_rev = store.get("pl_monthly_revenue", {})
-    for key, rev in monthly_rev.items():
-        if ':' in key:
-            pid, mo = key.split(':', 1)
-            if mo not in by_month:
-                by_month[mo] = round(by_month.get(mo, 0) + rev, 2)
-                total_revenue += rev
-            if key not in by_prop_month:
-                by_prop_month[key] = round(by_prop_month.get(key, 0) + rev, 2)
-        else:
-            mo = key
-            if mo not in by_month:
-                by_month[mo] = round(by_month.get(mo, 0) + rev, 2)
-                total_revenue += rev
-
-    # Rolling 30-day windows
-    today    = _dt.date.today().isoformat()
-    d30ago   = (_dt.date.today() - _dt.timedelta(days=30)).isoformat()
-    d30fwd   = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
-
-    rev_past_30 = sum(
-        float(b.get("rental_revenue") or 0)
-        for b in bookings
-        if d30ago <= (b.get("check_in") or "") <= today
-    )
-    rev_next_30 = sum(
-        float(b.get("rental_revenue") or 0)
-        for b in bookings
-        if today < (b.get("check_in") or "") <= d30fwd
-    )
-
-    # Per-prop rolling 30-day
-    by_prop_past_30 = {}
-    by_prop_next_30 = {}
-    for b in bookings:
-        ci  = b.get("check_in") or ""
-        rev = float(b.get("rental_revenue") or 0)
-        pid = b.get("prop_id") or "unknown"
-        if d30ago <= ci <= today:
-            by_prop_past_30[pid] = round(by_prop_past_30.get(pid, 0) + rev, 2)
-        if today < ci <= d30fwd:
-            by_prop_next_30[pid] = round(by_prop_next_30.get(pid, 0) + rev, 2)
-
-    return jsonify({
-        "bookings":         bookings,
-        "count":            len(bookings),
-        "total_revenue":    round(total_revenue, 2),
-        "by_month":         by_month,
-        "by_prop_month":    by_prop_month,
-        "rev_past_30":      round(rev_past_30, 2),
-        "rev_next_30":      round(rev_next_30, 2),
-        "by_prop_past_30":  by_prop_past_30,
-        "by_prop_next_30":  by_prop_next_30,
-    })
+    """Legacy stub — PriceLabs bookings removed. Returns empty."""
+    return jsonify({"bookings": [], "count": 0})
 
 
 # ── Get all stored transactions (called on page load) ─────────
@@ -2743,8 +2648,8 @@ def save_props():
 @app.route("/api/props/<prop_id>", methods=["DELETE"])
 def delete_property_cascade(prop_id):
     """Delete a property and cascade-remove ALL associated data:
-    iCal feeds, calendar events, transaction tags, category tags,
-    inventory groups, merchant memory, and manual income."""
+    transaction tags, category tags, inventory groups, merchant memory,
+    and manual income."""
     store = load_store()
     uid = getattr(g, 'user_id', None)
 
@@ -2752,135 +2657,51 @@ def delete_property_cascade(prop_id):
     props = store.get("custom_props", [])
     store["custom_props"] = [p for p in props if (p.get("id") or p.get("name")) != prop_id]
 
-    # 2. Remove iCal feeds for this property and collect their feed_keys
-    ical_urls = store.get("ical_urls", [])
-    removed_feed_keys = set()
-    kept_feeds = []
-    for feed in ical_urls:
-        if feed.get("propId") == prop_id:
-            fk = feed.get("feed_key") or feed.get("key")
-            if fk:
-                removed_feed_keys.add(fk)
-        else:
-            kept_feeds.append(feed)
-    store["ical_urls"] = kept_feeds
-    feeds_removed = len(ical_urls) - len(kept_feeds)
-
-    # 3. Remove iCal events from those feeds
-    events = store.get("ical_events", [])
-    store["ical_events"] = [e for e in events if e.get("feed_key") not in removed_feed_keys]
-    events_removed = len(events) - len(store["ical_events"])
-
-    # 4. Remove transaction tags (property_tag) pointing to this property
+    # 2. Remove transaction tags (property_tag) pointing to this property
     tags = store.get("tags", {})
     tag_keys_to_remove = [tid for tid, pid in tags.items() if pid == prop_id]
     for tid in tag_keys_to_remove:
         del tags[tid]
     store["tags"] = tags
 
-    # 5. Remove category tags for transactions that were tagged to this property
+    # 3. Remove category tags for transactions that were tagged to this property
     # (category tags are per-transaction, not per-property, so keep them)
 
-    # 6. Remove inventory groups linked to this property
+    # 4. Remove inventory groups linked to this property
     inv_groups = store.get("inv_groups", [])
     store["inv_groups"] = [g for g in inv_groups if g.get("propertyId") != prop_id]
     inv_removed = len(inv_groups) - len(store["inv_groups"])
 
-    # 7. Remove merchant memory entries mapping to this property
+    # 5. Remove merchant memory entries mapping to this property
     merchant_mem = store.get("merchant_memory", {})
     store["merchant_memory"] = {k: v for k, v in merchant_mem.items() if v != prop_id}
 
-    # 8. Remove manual income entries for this property
+    # 6. Remove manual income entries for this property
     manual_income = store.get("manual_income", {})
     if prop_id in manual_income:
         del manual_income[prop_id]
     store["manual_income"] = manual_income
 
+    # 7. Remove iCal events for this property
+    ical_events = store.get("ical_events", [])
+    store["ical_events"] = [e for e in ical_events if e.get("prop_id") != prop_id]
+
     save_store(store)
 
     # Invalidate all caches
-    for cache_key in ["props", "tags", "transactions", "cockpit", "ical_events", "ical_feeds"]:
+    for cache_key in ["props", "tags", "transactions", "cockpit"]:
         _invalidate_cache(cache_key, uid)
 
-    logger.info("Cascade delete property %s: feeds=%d, events=%d, tags=%d, inv=%d",
-                prop_id, feeds_removed, events_removed, len(tag_keys_to_remove), inv_removed)
+    logger.info("Cascade delete property %s: tags=%d, inv=%d",
+                prop_id, len(tag_keys_to_remove), inv_removed)
 
     return jsonify({
         "ok": True,
         "deleted": {
-            "feeds": feeds_removed,
-            "events": events_removed,
             "tags": len(tag_keys_to_remove),
             "inv_groups": inv_removed,
         },
     })
-
-
-@app.route("/api/ical/feeds/<feed_key>", methods=["DELETE"])
-def delete_ical_feed(feed_key):
-    """Delete a single iCal feed and all its calendar events."""
-    store = load_store()
-    uid = getattr(g, 'user_id', None)
-
-    # Remove the feed
-    ical_urls = store.get("ical_urls", [])
-    store["ical_urls"] = [f for f in ical_urls if (f.get("feed_key") or f.get("key")) != feed_key]
-
-    # Remove all events from this feed
-    events = store.get("ical_events", [])
-    store["ical_events"] = [e for e in events if e.get("feed_key") != feed_key]
-    events_removed = len(events) - len(store["ical_events"])
-
-    save_store(store)
-    _invalidate_cache("ical_events", uid)
-    _invalidate_cache("ical_feeds", uid)
-
-    return jsonify({"ok": True, "events_removed": events_removed})
-
-
-@app.route("/api/ical/cleanup-orphans", methods=["POST"])
-def cleanup_orphan_ical():
-    """Remove iCal feeds and events that belong to properties no longer in the user's list."""
-    store = load_store()
-    uid = getattr(g, 'user_id', None)
-
-    # Get valid property IDs
-    props = store.get("custom_props", [])
-    # Also check user's properties stored under "properties" key
-    user_props = store.get("properties", [])
-    valid_ids = set()
-    for p in props + user_props:
-        pid = p.get("id") or p.get("prop_id") or p.get("name")
-        if pid:
-            valid_ids.add(pid)
-
-    # Find orphaned feeds (propId not in any valid property)
-    ical_urls = store.get("ical_urls", [])
-    orphan_feed_keys = set()
-    kept_feeds = []
-    for feed in ical_urls:
-        prop_id = feed.get("propId")
-        if prop_id and prop_id not in valid_ids:
-            fk = feed.get("feed_key") or feed.get("key")
-            if fk:
-                orphan_feed_keys.add(fk)
-        else:
-            kept_feeds.append(feed)
-
-    feeds_removed = len(ical_urls) - len(kept_feeds)
-    store["ical_urls"] = kept_feeds
-
-    # Remove events from orphaned feeds
-    events = store.get("ical_events", [])
-    store["ical_events"] = [e for e in events if e.get("feed_key") not in orphan_feed_keys]
-    events_removed = len(events) - len(store["ical_events"])
-
-    save_store(store)
-    _invalidate_cache("ical_events", uid)
-    _invalidate_cache("ical_feeds", uid)
-
-    logger.info("Orphan cleanup: removed %d feeds, %d events", feeds_removed, events_removed)
-    return jsonify({"ok": True, "feeds_removed": feeds_removed, "events_removed": events_removed})
 
 
 @app.route("/api/tags", methods=["GET"])
@@ -3396,239 +3217,159 @@ def save_city_list():
     return jsonify({"ok": True, "cities": cities})
 
 
-# ── iCal helpers ─────────────────────────────────────────────────
-def _parse_ics(ics_text, prop_id, feed_key="", pl_id=None):
-    """Pure-text VEVENT parser — extracts guest name, rate, check-in/out.
-    feed_key: short hash of the iCal URL (stable ID for this feed).
-    pl_id: Airbnb/PriceLabs listing ID extracted from the iCal URL.
-    """
-    events, in_event, current = [], False, {}
-    for line in ics_text.splitlines():
-        line = line.strip()
-        if line == "BEGIN:VEVENT":
-            in_event = True; current = {}
-        elif line == "END:VEVENT" and in_event:
-            in_event = False
-            def _dt(v):
-                v = v.split(";")[-1].split(":")[-1][:8]
-                return f"{v[:4]}-{v[4:6]}-{v[6:8]}"
-            start = _dt(current.get("DTSTART","")) if "DTSTART" in current else None
-            end   = _dt(current.get("DTEND",""))   if "DTEND"   in current else None
-            if start and end:
-                from datetime import date as _date
-                s,e = _date.fromisoformat(start), _date.fromisoformat(end)
-                summary = current.get("SUMMARY","").replace("\\n"," ").strip()
-                desc    = current.get("DESCRIPTION","").replace("\\n","\n").strip()
+# ── iCal Feed Parser & Sync ──────────────────────────────────────────────────
 
-                # Extract guest name from DESCRIPTION (Airbnb embeds FIRST/LAST NAME)
-                guest_name = None
-                m_first = re.search(r'FIRST NAME:\s*(.+)', desc, re.I)
-                m_last  = re.search(r'LAST NAME:\s*(.+)',  desc, re.I)
-                if m_first or m_last:
-                    first = (m_first.group(1).strip() if m_first else "")
-                    last  = (m_last.group(1).strip()  if m_last  else "")
-                    guest_name = f"{first} {last}".strip() or None
-                # Fallback: use SUMMARY if it looks like a guest name (not "Reserved" etc.)
-                if not guest_name and summary and not re.match(
-                        r'^(reserved|airbnb|not available|unavailable|blocked)', summary, re.I):
-                    guest_name = summary
+def _parse_ical_feed(text):
+    """Pure string-split iCal parser. Extracts bookings from Airbnb VCALENDAR feeds.
+    Returns list of dicts: {check_in, check_out, nights, guest_name, summary}."""
+    events = []
+    blocks = text.split("BEGIN:VEVENT")
+    for block in blocks[1:]:  # skip preamble before first VEVENT
+        end = block.find("END:VEVENT")
+        if end >= 0:
+            block = block[:end]
+        fields = {}
+        for line in block.splitlines():
+            line = line.strip()
+            if ":" in line:
+                key, _, val = line.partition(":")
+                # Handle properties with params like DTSTART;VALUE=DATE:20260301
+                key = key.split(";")[0].upper()
+                fields[key] = val.strip()
 
-                # Extract nightly rate from DESCRIPTION
-                nightly_rate = None
-                m_rate = re.search(r'NIGHTLY RATE:\s*\$?([\d.]+)', desc, re.I)
-                if not m_rate:
-                    m_rate = re.search(r'\$\s*([\d.]+)\s*/\s*night', desc, re.I)
-                if m_rate:
-                    try: nightly_rate = float(m_rate.group(1))
-                    except (ValueError, TypeError): pass
-
-                # Extract check-in / check-out times (from DESCRIPTION first)
-                checkin_time  = None
-                checkout_time = None
-                m_ci = re.search(r'CHECK.?IN(?:\s+TIME)?:\s*(.+)',  desc, re.I)
-                m_co = re.search(r'CHECK.?OUT(?:\s+TIME)?:\s*(.+)', desc, re.I)
-                if m_ci: checkin_time  = m_ci.group(1).strip()[:20]
-                if m_co: checkout_time = m_co.group(1).strip()[:20]
-                # Fallback: extract time from DTSTART/DTEND if datetime (not date-only)
-                def _extract_time(dt_raw):
-                    val = dt_raw.split(":")[-1]
-                    if "T" in val and len(val) >= 13:
-                        t = val[9:13]
-                        if len(t) == 4 and t.isdigit():
-                            h, m = int(t[:2]), int(t[2:])
-                            if h == 0:   return f"12:{m:02d} AM"
-                            if h < 12:   return f"{h}:{m:02d} AM"
-                            if h == 12:  return f"12:{m:02d} PM"
-                            return       f"{h-12}:{m:02d} PM"
-                    return None
-                if not checkin_time:
-                    checkin_time = _extract_time(current.get("DTSTART",""))
-                if not checkout_time:
-                    checkout_time = _extract_time(current.get("DTEND",""))
-
-                # Extract number of guests
-                num_guests = None
-                m_guests = re.search(r'(?:NUMBER OF GUESTS|TOTAL GUESTS|GUESTS|ADULTS):\s*(\d+)', desc, re.I)
-                if m_guests:
-                    try: num_guests = int(m_guests.group(1))
-                    except (ValueError, TypeError): pass
-
-                # Extract booking source
-                booking_source = None
-                m_src = re.search(r'(?:SOURCE|BOOKED VIA|PLATFORM|BOOKED ON|BOOKING SOURCE):\s*(.+)', desc, re.I)
-                if m_src:
-                    booking_source = m_src.group(1).strip()[:40]
-                if not booking_source:
-                    uid_lower = current.get("UID","").lower()
-                    desc_lower = desc.lower()
-                    if "airbnb" in uid_lower or "airbnb" in desc_lower:
-                        booking_source = "Airbnb"
-                    elif "vrbo" in uid_lower or "vrbo" in desc_lower or "homeaway" in uid_lower:
-                        booking_source = "VRBO"
-                    elif "booking.com" in desc_lower:
-                        booking_source = "Booking.com"
-
-                events.append({
-                    "uid":            current.get("UID", f"{prop_id}-{start}"),
-                    "propId":         prop_id,
-                    "feed_key":       feed_key,   # stable hash of iCal URL — identifies the unit
-                    "pl_id":          pl_id,       # Airbnb/PriceLabs listing ID from URL
-                    "start":          start,
-                    "end":            end,
-                    "summary":        summary,
-                    "nights":         (e-s).days,
-                    "guest_name":     guest_name,
-                    "nightly_rate":   nightly_rate,
-                    "checkin_time":   checkin_time,
-                    "checkout_time":  checkout_time,
-                    "num_guests":     num_guests,
-                    "booking_source": booking_source,
-                })
-        elif in_event and ":" in line:
-            k,_,v = line.partition(":")
-            current[k.split(";")[0]] = v
-    return events
-def _ical_feed_key(url):
-    """Stable 8-char hash of the iCal URL — identifies a specific unit feed."""
-    return hashlib.md5(url.encode()).hexdigest()[:8]
-
-def _airbnb_listing_id(url):
-    """Extract Airbnb listing ID from iCal URL: /calendar/ical/LISTING_ID.ics"""
-    m = re.search(r'/calendar/ical/(\d+)\.ics', url)
-    return m.group(1) if m else None
-
-def _sync_ical(store):
-    import urllib.request
-    feeds = store.get("ical_urls", [])
-    # Backward compat: migrate old {propId: url} dict to array
-    if isinstance(feeds, dict):
-        feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
-    all_events = []
-    ical_start = _time.time()
-    ICAL_WALL_CLOCK_LIMIT = 45  # seconds
-    for feed in feeds:
-        # Phase 6: wall-clock cap to prevent starvation
-        if _time.time() - ical_start > ICAL_WALL_CLOCK_LIMIT:
-            logger.warning("iCal sync: %ss wall-clock limit reached, skipping remaining %s feeds",
-                  ICAL_WALL_CLOCK_LIMIT, len(feeds) - feeds.index(feed))
-            break
-        prop_id = feed.get("propId", "")
-        url = feed.get("url", "")
-        if not url: continue
-        if not _is_safe_url(url):
-            logger.warning("iCal sync: blocked unsafe URL for %s", prop_id)
+        summary = fields.get("SUMMARY", "")
+        # Skip owner blocks
+        if "not available" in summary.lower() or not summary:
             continue
-        feed_key = _ical_feed_key(url)
-        pl_id    = _airbnb_listing_id(url)
-        try:
-            with urllib.request.urlopen(url, timeout=10) as r:
-                ics = r.read().decode("utf-8", errors="replace")
-            all_events.extend(_parse_ics(ics, prop_id, feed_key, pl_id))
-        except Exception as e:
-            logger.error("iCal sync failed for %s (%s): %s", prop_id, feed_key, e)
-    return all_events
 
-@app.route("/api/ical/urls", methods=["GET","POST"])
-def ical_urls_route():
-    store = load_store()
-    if request.method == "POST":
-        raw_feeds = request.json.get("feeds", [])
-        # Validate all URLs before saving
-        safe_feeds = [f for f in raw_feeds if _is_safe_url(f.get("url", ""))]
-        store["ical_urls"] = safe_feeds
-        save_store(store); return jsonify({"ok": True})
-    feeds = store.get("ical_urls", [])
-    if isinstance(feeds, dict):
-        feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
-    # Enrich each feed with stable feed_key, pl_id, and canonical short name from PriceLabs
-    short_names = store.get("pricelabs_short_names", {})  # {pl_id: "Lockwood 1"}
-    enriched = []
-    for f in feeds:
-        url      = f.get("url", "")
-        feed_key = _ical_feed_key(url) if url else ""
-        pl_id    = _airbnb_listing_id(url) if url else None
-        canon    = short_names.get(pl_id, "") if pl_id else ""
-        enriched.append({**f, "feed_key": feed_key, "pl_id": pl_id, "canonical_name": canon})
-    return jsonify({"feeds": enriched})
+        dtstart = fields.get("DTSTART", "").split("T")[0][:10]
+        dtend = fields.get("DTEND", "").split("T")[0][:10]
+        if not dtstart:
+            continue
 
-# Alias: frontend calls /api/ical/feeds
-@app.route("/api/ical/feeds", methods=["GET", "POST"])
-def ical_feeds_alias():
-    return ical_urls_route()
+        # Normalise dates: 20260301 → 2026-03-01
+        if len(dtstart) == 8 and "-" not in dtstart:
+            dtstart = f"{dtstart[:4]}-{dtstart[4:6]}-{dtstart[6:8]}"
+        if len(dtend) == 8 and "-" not in dtend:
+            dtend = f"{dtend[:4]}-{dtend[4:6]}-{dtend[6:8]}"
+
+        # Calculate nights
+        nights = 0
+        if dtstart and dtend:
+            try:
+                from datetime import date as _d
+                d1 = _d.fromisoformat(dtstart)
+                d2 = _d.fromisoformat(dtend)
+                nights = (d2 - d1).days
+            except Exception:
+                pass
+
+        # Extract guest name from summary (Airbnb format: "Guest Name - XXXXXX" or just name)
+        guest_name = summary.split(" - ")[0].strip() if " - " in summary else summary
+        if guest_name.lower() in ("reserved", "airbnb"):
+            guest_name = None
+
+        events.append({
+            "check_in": dtstart,
+            "check_out": dtend,
+            "nights": nights,
+            "guest_name": guest_name,
+            "summary": summary,
+        })
+    return events
+
 
 @app.route("/api/ical/sync", methods=["POST"])
-@rate_limit(5, 60)  # 5 per minute — expensive external fetch
-def ical_sync_route():
+def ical_sync():
+    """Fetch all Airbnb iCal feeds for user's properties, parse, and full-replace ical_events."""
     store = load_store()
-    new_events = _sync_ical(store)
-    existing = {e["uid"]: e for e in store.get("ical_events", [])}
-    for e in new_events:
-        existing[e["uid"]] = e
-    merged = list(existing.values())
-    store["ical_events"] = merged
-    save_store(store); return jsonify({"events": merged, "count": len(merged)})
-
-@app.route("/api/ical/events", methods=["GET"])
-def ical_events_route():
     uid = getattr(g, 'user_id', None)
-    cached = _get_cached_response("ical_events", uid, 30) if uid else None
+
+    # Read properties from store (synced by frontend)
+    props = store.get("custom_props", [])
+    all_events = []
+    errors = []
+
+    for prop in props:
+        ical_urls = prop.get("icalUrls") or []
+        prop_id = prop.get("id") or prop.get("name") or ""
+        prop_name = prop.get("label") or prop.get("name") or prop_id
+
+        for unit_idx, url in enumerate(ical_urls):
+            if not url or not url.strip():
+                continue
+            url = url.strip()
+            unit_label = f"{prop_name} Unit {unit_idx + 1}" if len(ical_urls) > 1 else prop_name
+            try:
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                parsed = _parse_ical_feed(resp.text)
+                for ev in parsed:
+                    all_events.append({
+                        "check_in": ev["check_in"],
+                        "check_out": ev["check_out"],
+                        "nights": ev["nights"],
+                        "guest_name": ev["guest_name"],
+                        "summary": ev["summary"],
+                        "prop_id": prop_id,
+                        "unit_index": unit_idx,
+                        "listing_name": unit_label,
+                        "feed_key": f"{prop_id}_{unit_idx}",
+                        "booking_source": "airbnb",
+                        "event_type": "booking",
+                    })
+            except Exception as e:
+                errors.append(f"{prop_name} unit {unit_idx}: {str(e)[:100]}")
+                logger.warning("iCal fetch failed for %s unit %d: %s", prop_name, unit_idx, e)
+
+    # Full replace — no merging, no dedup, no orphans
+    store["ical_events"] = all_events
+    save_store(store)
+    if uid:
+        _invalidate_cache("calendar_events", uid)
+
+    logger.info("iCal sync: %d events from %d properties (%d errors)", len(all_events), len(props), len(errors))
+    return jsonify({"ok": True, "events_count": len(all_events), "errors": errors})
+
+
+@app.route("/api/calendar/events", methods=["GET"])
+def calendar_events():
+    """Return calendar events from iCal feed data."""
+    uid = getattr(g, 'user_id', None)
+    cached = _get_cached_response("calendar_events", uid, 30) if uid else None
     if cached is not None:
         return jsonify(cached)
+
     store = load_store()
-    # Only return events whose feed belongs to a property that still exists
-    valid_prop_ids = set(_get_str_properties())
-    valid_feed_keys = set()
-    orphan_feed_keys = set()
-    for feed in store.get("ical_urls", []):
-        fk = feed.get("feed_key") or feed.get("key")
-        prop_id = feed.get("propId")
-        if fk and prop_id and prop_id in valid_prop_ids:
-            valid_feed_keys.add(fk)
-        elif fk:
-            orphan_feed_keys.add(fk)
+    ical_events = store.get("ical_events", [])
 
-    # Auto-delete orphaned feeds and their events from the store
-    if orphan_feed_keys:
-        store["ical_urls"] = [f for f in store.get("ical_urls", [])
-                              if (f.get("feed_key") or f.get("key")) not in orphan_feed_keys]
-        store["ical_events"] = [e for e in store.get("ical_events", [])
-                                if e.get("feed_key") not in orphan_feed_keys]
-        save_store(store)
-        logger.info("Auto-purged %d orphaned feeds", len(orphan_feed_keys))
+    events = []
+    for ev in ical_events:
+        ci = ev.get("check_in", "")
+        co = ev.get("check_out", "")
+        if not ci:
+            continue
+        events.append({
+            "check_in": ci,
+            "check_out": co,
+            "prop_id": ev.get("prop_id", ""),
+            "feed_key": ev.get("feed_key", ev.get("prop_id", "")),
+            "nights": ev.get("nights", 0),
+            "booking_source": ev.get("booking_source", "airbnb"),
+            "guest_name": ev.get("guest_name"),
+            "listing_name": ev.get("listing_name", ""),
+            "summary": ev.get("summary", ""),
+            "event_type": ev.get("event_type", "booking"),
+        })
 
-    all_events = store.get("ical_events", [])
-    if valid_feed_keys:
-        events = [e for e in all_events if e.get("feed_key") in valid_feed_keys]
-    else:
-        events = []  # No valid feeds = no events
-    result = {"events": events}
+    result = {"events": events, "count": len(events), "source": "ical"}
     if uid:
-        _set_cached_response("ical_events", uid, result)
+        _set_cached_response("calendar_events", uid, result)
     return jsonify(result)
 
 # ══════════════════════════════════════════════════════════════
 # STR Analytics Engine
-# Data sources: iCal events, per-property income, PriceLabs API
+# Data sources: PriceLabs bookings, per-property income, PriceLabs API
 # ══════════════════════════════════════════════════════════════
 
 # Dynamic STR property IDs — loaded from user store, no more hardcoded lists
@@ -3641,8 +3382,34 @@ def _get_str_properties():
 STR_PROPERTIES = []  # Legacy — use _get_str_properties() instead
 
 
+def _ical_to_events(store):
+    """Convert iCal events to the event format used by analytics functions."""
+    events = []
+    for b in store.get("ical_events", []):
+        ci = b.get("check_in", "")
+        co = b.get("check_out", "")
+        if not ci:
+            continue
+        prop_id = b.get("prop_id", "")
+        guest = b.get("guest_name", "")
+        summary = guest or b.get("summary", "Reserved")
+        nights = b.get("nights") or 0
+        events.append({
+            "propId": prop_id,
+            "start": ci[:10],
+            "end": co[:10] if co else ci[:10],
+            "summary": summary,
+            "guest_name": guest,
+            "nights": nights,
+            "nightly_rate": None,
+            "booking_source": b.get("booking_source", "airbnb"),
+            "pl_id": "",
+        })
+    return events
+
+
 def _is_block_event(ev):
-    """True if an iCal event is an owner-block / maintenance hold, not a guest stay."""
+    """True if a calendar event is an owner-block / maintenance hold, not a guest stay."""
     summary = (ev.get("summary") or "").lower().strip()
     guest   = (ev.get("guest_name") or "").strip()
     _BLOCK_EXACT = {
@@ -3661,7 +3428,7 @@ def _is_block_event(ev):
 def _compute_listing_analytics(events, prop_id, start_date_str, end_date_str):
     """
     Compute occupancy and performance metrics for a single listing over a date range.
-    events            — full list of parsed iCal events (all properties)
+    events            — full list of calendar events (all properties)
     prop_id           — property identifier string
     start/end_date_str — ISO date strings (inclusive start, exclusive end)
     """
@@ -3794,7 +3561,7 @@ def _compute_listing_analytics(events, prop_id, start_date_str, end_date_str):
 
 
 def _compute_portfolio_analytics(events, start_date_str, end_date_str):
-    """Aggregate analytics across all STR properties that have iCal events."""
+    """Aggregate analytics across all STR properties that have calendar events."""
     # Discover which prop_ids actually have events (union of STR_PROPERTIES + any in feed)
     active_props = list({ev["propId"] for ev in events
                          if ev.get("propId") and ev["propId"] in STR_PROPERTIES})
@@ -3837,80 +3604,6 @@ def _compute_portfolio_analytics(events, start_date_str, end_date_str):
     }
 
 
-# ── PriceLabs API wrapper ─────────────────────────────────────────────────────
-# Docs: https://pricelabs.co/api-docs
-# Auth: X-API-Key header; per-user key stored encrypted in user store
-
-PRICELABS_BASE = "https://api.pricelabs.co/v1"
-
-
-def _pricelabs_get(path, params=None):
-    """GET request to PriceLabs API. Returns parsed JSON or raises RuntimeError."""
-    import urllib.request, urllib.parse
-    raw_key = load_store().get("pricelabs_api_key", "")
-    if not raw_key:
-        raise RuntimeError("PriceLabs API key not configured. Add it in Settings → PriceLabs.")
-    try:
-        api_key = _decrypt(raw_key)
-    except Exception:
-        api_key = raw_key  # backward compat: legacy plaintext keys
-    url = PRICELABS_BASE + path
-    if params:
-        url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "X-API-Key": api_key,
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"PriceLabs {e.code}: {body[:400]}")
-
-
-def _fetch_pricelabs_listing(prop_id, start_date_str, end_date_str):
-    """
-    Fetch PriceLabs recommended prices and min-stay rules for one listing.
-    Mapping between prop_id ↔ PriceLabs listing_id is stored in
-    store["pricelabs_mapping"] = {prop_id: pl_listing_id}.
-    """
-    store   = load_store()
-    mapping = store.get("pricelabs_mapping", {})
-    pl_id   = mapping.get(prop_id)
-    if not pl_id:
-        return {
-            "error": (
-                f"No PriceLabs listing mapped to '{prop_id}'. "
-                f"POST /api/analytics/pricelabs/map with "
-                f'body {{"mapping": {{"{prop_id}": "<pl_listing_id>"}}}}'
-            )
-        }
-    try:
-        prices       = _pricelabs_get("/listing_prices", {
-            "listing_id": pl_id,
-            "start_date": start_date_str,
-            "end_date":   end_date_str,
-        })
-        try:
-            listing_info = _pricelabs_get("/listings", {"listing_id": pl_id})
-        except Exception:
-            listing_info = {}
-        return {
-            "prop_id":        prop_id,
-            "pl_listing_id":  pl_id,
-            "period":         {"start": start_date_str, "end": end_date_str},
-            "prices":         prices,
-            "listing_info":   listing_info,
-        }
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-
-
 # ── Analytics API routes ──────────────────────────────────────────────────────
 
 def _analytics_range(req):
@@ -3926,7 +3619,7 @@ def _analytics_range(req):
 def analytics_listing(prop_id):
     """Per-listing occupancy, ADR, orphan gaps, monthly breakdown."""
     store  = load_store()
-    events = store.get("ical_events", [])
+    events = _ical_to_events(store)
     start, end = _analytics_range(request)
     return jsonify(_compute_listing_analytics(events, prop_id, start, end))
 
@@ -3943,7 +3636,7 @@ def analytics_portfolio():
         if cached is not None:
             return jsonify(cached)
     store  = load_store()
-    events = store.get("ical_events", [])
+    events = _ical_to_events(store)
     start, end = _analytics_range(request)
     result_data = _compute_portfolio_analytics(events, start, end)
     if uid:
@@ -3953,30 +3646,185 @@ def analytics_portfolio():
 
 @app.route("/api/pricelabs/config", methods=["POST"])
 def pricelabs_config():
-    """Save PriceLabs API key and property→listing mapping from the Settings UI."""
+    """Save PriceLabs API key and property→listing mapping from the Settings UI.
+    Validates the API key before saving by testing a listings fetch."""
     body    = request.json or {}
     store   = load_store()
-    if body.get("api_key"):
-        store["pricelabs_api_key"] = _encrypt(body["api_key"].strip())
+    api_key = body.get("api_key", "").strip()
+    validated = False
+    if api_key:
+        # Validate key by attempting a listings fetch
+        try:
+            import urllib.request, urllib.parse
+            test_url = "https://api.pricelabs.co/v1/listings"
+            req = urllib.request.Request(test_url, headers={
+                "X-API-Key": api_key,
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    validated = True
+        except Exception as e:
+            logger.warning("[PriceLabs] API key validation failed: %s", e)
+            return jsonify({"ok": False, "error": "Invalid PriceLabs API key — could not connect. Check the key and try again."}), 400
+        # Store key encrypted if ENCRYPTION_KEY is stable, otherwise plaintext
+        if os.environ.get("ENCRYPTION_KEY"):
+            store["pricelabs_api_key"] = _encrypt(api_key)
+        else:
+            store["pricelabs_api_key"] = api_key
     if body.get("mapping"):
         mapping = store.get("pricelabs_mapping", {})
         mapping.update(body["mapping"])
         store["pricelabs_mapping"] = mapping
     save_store(store)
-    return jsonify({"ok": True})
+    # After saving key, refresh listings + reservations in background
+    if validated:
+        def _bg_refresh():
+            try:
+                import urllib.request
+                with app.test_request_context():
+                    pricelabs_listings()          # refresh listings cache
+                    s = load_store()
+                    _sync_pricelabs_reservations(s)  # pull reservation data
+            except Exception as ex:
+                logger.error("[PriceLabs] Post-config refresh failed: %s", ex)
+        threading.Thread(target=_bg_refresh, daemon=True).start()
+    return jsonify({"ok": True, "validated": validated})
+
+
+def _sync_pricelabs_reservations(store=None):
+    """Fetch reservation data from PriceLabs API for all known listings and store as pl_bookings.
+    Merges with existing bookings, deduplicating by (listing_id, check_in, check_out)."""
+    import datetime as _dt
+    if store is None:
+        store = load_store()
+    listings = store.get("pricelabs_listings_raw", [])
+    if not listings:
+        logger.info("[PL Reservations] No listings cached — skipping reservation sync")
+        return 0
+    listing_ids = [str(l.get("id") or "") for l in listings if l.get("id")]
+    if not listing_ids:
+        return 0
+    # Build name lookup: pl_id → canonical_name
+    name_by_id = store.get("pricelabs_short_names", {})
+    today = _dt.date.today()
+    start = (today - _dt.timedelta(days=90)).isoformat()
+    end   = (today + _dt.timedelta(days=365)).isoformat()
+    new_bookings = []
+    # Try fetching reservation_data for all listings at once, then per-listing fallback
+    try:
+        data = _pricelabs_get("/reservation_data", {
+            "listing_ids": ",".join(listing_ids),
+            "start_date": start,
+            "end_date": end,
+        })
+        reservations = data if isinstance(data, list) else (data.get("reservations") or data.get("data") or [])
+        for r in reservations:
+            lid = str(r.get("listing_id") or r.get("id") or "")
+            listing_name = name_by_id.get(lid, "")
+            pid = _infer_prop_from_listing(listing_name) or _infer_prop_from_listing(r.get("listing_name", ""))
+            ci = (r.get("check_in") or r.get("checkin") or r.get("start_date") or "")[:10]
+            co = (r.get("check_out") or r.get("checkout") or r.get("end_date") or "")[:10]
+            if not ci:
+                continue
+            nights = r.get("nights") or r.get("length_of_stay") or 0
+            if not nights and ci and co:
+                try:
+                    nights = (_dt.date.fromisoformat(co) - _dt.date.fromisoformat(ci)).days
+                except Exception:
+                    pass
+            new_bookings.append({
+                "listing_id":   lid,
+                "listing_name": listing_name or r.get("listing_name", ""),
+                "prop_id":      pid,
+                "check_in":     ci,
+                "check_out":    co,
+                "nights":       nights,
+                "guest_name":   r.get("guest_name") or r.get("guest") or "",
+                "channel":      r.get("channel") or r.get("source") or r.get("booking_source") or "",
+                "status":       r.get("status") or "confirmed",
+                "revenue":      r.get("revenue") or r.get("total_price") or r.get("payout") or 0,
+                "source":       "pricelabs_api",
+            })
+        logger.info("[PL Reservations] Fetched %s reservations for %s listings", len(new_bookings), len(listing_ids))
+    except RuntimeError as e:
+        logger.warning("[PL Reservations] Bulk fetch failed (%s), trying per-listing", e)
+        for lid in listing_ids:
+            try:
+                data = _pricelabs_get("/reservation_data", {
+                    "listing_id": lid,
+                    "start_date": start,
+                    "end_date": end,
+                })
+                items = data if isinstance(data, list) else (data.get("reservations") or data.get("data") or [])
+                listing_name = name_by_id.get(lid, "")
+                pid = _infer_prop_from_listing(listing_name)
+                for r in items:
+                    ci = (r.get("check_in") or r.get("checkin") or r.get("start_date") or "")[:10]
+                    co = (r.get("check_out") or r.get("checkout") or r.get("end_date") or "")[:10]
+                    if not ci:
+                        continue
+                    nights = r.get("nights") or r.get("length_of_stay") or 0
+                    if not nights and ci and co:
+                        try:
+                            nights = (_dt.date.fromisoformat(co) - _dt.date.fromisoformat(ci)).days
+                        except Exception:
+                            pass
+                    new_bookings.append({
+                        "listing_id":   lid,
+                        "listing_name": listing_name or r.get("listing_name", ""),
+                        "prop_id":      pid,
+                        "check_in":     ci,
+                        "check_out":    co,
+                        "nights":       nights,
+                        "guest_name":   r.get("guest_name") or r.get("guest") or "",
+                        "channel":      r.get("channel") or r.get("source") or r.get("booking_source") or "",
+                        "status":       r.get("status") or "confirmed",
+                        "revenue":      r.get("revenue") or r.get("total_price") or r.get("payout") or 0,
+                        "source":       "pricelabs_api",
+                    })
+            except Exception as ex:
+                logger.warning("[PL Reservations] Failed for listing %s: %s", lid, ex)
+    if not new_bookings:
+        return 0
+    # Merge with existing bookings, dedup by (listing_id, check_in, check_out)
+    existing = store.get("pl_bookings", [])
+    seen = set()
+    for b in existing:
+        key = (b.get("listing_id", ""), b.get("check_in", ""), b.get("check_out", ""))
+        seen.add(key)
+    added = 0
+    for b in new_bookings:
+        key = (b.get("listing_id", ""), b.get("check_in", ""), b.get("check_out", ""))
+        if key not in seen:
+            seen.add(key)
+            existing.append(b)
+            added += 1
+        else:
+            # Update existing booking with fresh data
+            for i, ex in enumerate(existing):
+                ex_key = (ex.get("listing_id", ""), ex.get("check_in", ""), ex.get("check_out", ""))
+                if ex_key == key:
+                    existing[i] = {**ex, **b}
+                    break
+    store["pl_bookings"] = existing
+    save_store(store)
+    logger.info("[PL Reservations] %s new, %s updated, %s total bookings", added, len(new_bookings) - added, len(existing))
+    return len(new_bookings)
 
 
 def _pl_canonical_short(short_label, prop_id):
     """
     Generate the canonical short name shown everywhere in the app UI.
-    'Unit 1' + lockwood  → 'Lockwood 1'
-    '22 B'  + bstreet   → '22 B'
+    Generic: if short_label is a generic 'Unit N' pattern, prefix with prop_id title.
+    Otherwise return short_label as-is.
     """
-    if prop_id == 'lockwood':
-        m = re.search(r'\d+', short_label)
-        if m:
-            return f"Lockwood {m.group()}"
-    return short_label   # 22 B, 24 B, 26 B, etc. stay as-is
+    m = re.search(r'^(?:unit\s+)?(\d+)$', short_label.strip(), re.IGNORECASE)
+    if m and prop_id:
+        # Generic unit label — prefix with property name for clarity
+        return f"{prop_id.replace('_', ' ').title()} {m.group(1)}"
+    return short_label
 
 
 def _pl_parse_name(raw):
@@ -3995,60 +3843,71 @@ def _pl_parse_name(raw):
     return raw, raw
 
 
-# City name → prop_id auto-mapping (covers the case where no manual mapping exists)
-_PL_CITY_TO_PROP = {
-    "houston":        "lockwood",
-    "niagara falls":  "bstreet",
-    "niagara-on-the-lake": "bstreet",
-    "everton":        "everton",
-}
-
-# Name keyword → prop_id fallback (applied when city mapping fails)
+# Dynamic per-user property mapping (no hardcoded constants)
 import re as _re
-_PL_NAME_KEYWORDS = [
-    (_re.compile(r"gorge\s*getaway",           _re.I), "gorge"),
-    (_re.compile(r"river\s*[&and]+\s*falls",   _re.I), "river_falls"),
-    (_re.compile(r"riverstone",                 _re.I), "riverstone"),
-]
+
+# Empty — kept for backward compat but unused; per-user mapping is built dynamically
+_PL_CITY_TO_PROP = {}
 
 
-def _pl_prop_from_name(raw_name):
-    """Return prop_id based on listing name keywords, or None if no match."""
-    for pattern, pid in _PL_NAME_KEYWORDS:
-        if pattern.search(raw_name):
-            return pid
+def _get_user_properties(store=None):
+    """Return list of user property dicts from store."""
+    if store is None:
+        store = load_store()
+    return store.get("custom_props", []) + store.get("properties", [])
+
+
+def _build_city_to_prop(store=None):
+    """Build city→prop_id mapping from the user's own properties."""
+    props = _get_user_properties(store)
+    city_map = {}
+    for p in props:
+        pid = p.get("id") or p.get("name")
+        if not pid:
+            continue
+        # Use city/address fields if available
+        for field in ("city", "location", "address"):
+            val = (p.get(field) or "").lower().strip()
+            if val and val not in city_map:
+                city_map[val] = pid
+    return city_map
+
+
+def _pl_prop_from_name(raw_name, store=None):
+    """Return prop_id by matching listing name against user's property labels/ids/names."""
+    if not raw_name:
+        return None
+    props = _get_user_properties(store)
+    name_lower = raw_name.lower()
+    for p in props:
+        pid = p.get("id") or p.get("name")
+        if not pid:
+            continue
+        # Check if prop id, label, or name appears in the listing name
+        for field in ("id", "name", "label", "short_label"):
+            val = (p.get(field) or "").lower().strip()
+            if val and len(val) >= 3 and val in name_lower:
+                return pid
     return None
 
 
-_LISTING_PROP_KEYWORDS = [
-    # Gorge / River / Riverstone first (more specific)
-    (_re.compile(r"gorge\s*getaway",         _re.I), "gorge"),
-    (_re.compile(r"river\s*[&and]+\s*falls", _re.I), "river_falls"),
-    (_re.compile(r"riverstone",              _re.I), "riverstone"),
-    # Houston EaDo / Lockwood = lockwood
-    (_re.compile(r"eado|e\.?a\.?do",         _re.I), "lockwood"),
-    (_re.compile(r"\bunit\s*[1-4]\b",        _re.I), "lockwood"),
-    (_re.compile(r"\blockwood\b",            _re.I), "lockwood"),
-    # Everton
-    (_re.compile(r"everton",                 _re.I), "everton"),
-    # B Street / Niagara (not already matched above)
-    (_re.compile(r"b\s*street",              _re.I), "bstreet"),
-    (_re.compile(r"niagara",                 _re.I), "bstreet"),
-    # Pierce
-    (_re.compile(r"pierce",                  _re.I), "pierce"),
-]
-
-
-def _infer_prop_from_listing(name):
-    """Extended prop_id mapping from any listing/property name string."""
+def _infer_prop_from_listing(name, store=None):
+    """Dynamic prop_id mapping: checks user properties, then pricelabs_mapping reverse lookup."""
     if not name:
         return None
-    pid = _pl_prop_from_name(name)
+    if store is None:
+        store = load_store()
+    # 1) Match against user property labels/ids/names
+    pid = _pl_prop_from_name(name, store)
     if pid:
         return pid
-    for pattern, p in _LISTING_PROP_KEYWORDS:
-        if pattern.search(name):
-            return p
+    # 2) Reverse lookup from pricelabs_mapping (listing_id → prop_id)
+    mapping = store.get("pricelabs_mapping", {})
+    rev = {str(v): k for k, v in mapping.items()}
+    # Check if name matches any mapped listing
+    for listing_id, prop_id in rev.items():
+        if listing_id in name:
+            return prop_id
     return None
 
 
@@ -4481,8 +4340,9 @@ def pricelabs_listings():
             short, full = _pl_parse_name(raw_name)
             city     = (l.get("city_name") or "").lower().strip()
 
-            # Determine prop_id: manual mapping wins, then city auto-map, then name keywords
-            pid = rev.get(lid) or _PL_CITY_TO_PROP.get(city) or _pl_prop_from_name(raw_name)
+            # Determine prop_id: manual mapping wins, then city auto-map, then name match
+            city_map = _build_city_to_prop(store)
+            pid = rev.get(lid) or city_map.get(city) or _pl_prop_from_name(raw_name, store)
 
             # Canonical short name for UI ("Lockwood 1", "22 B", etc.)
             canonical = _pl_canonical_short(short, pid) if pid else short
@@ -4539,12 +4399,12 @@ def pricelabs_listings():
         # flat_names: {prop_id: "Lockwood 1, Lockwood 2, Lockwood 3, Lockwood 4"}
         flat_names   = {pid: ", ".join(sorted(names, key=lambda n: int(re.search(r'\d+',n).group()) if re.search(r'\d+',n) else 999))
                         for pid, names in name_by_prop.items()}
-        # short_names: {pl_id: "Lockwood 1"}  — used by iCal URL enrichment
+        # short_names: {pl_id: "Lockwood 1"}  — canonical unit display names
         short_names  = name_by_plid
 
         store["pricelabs_listing_names"]       = flat_names
         store["pricelabs_listing_names_by_id"] = short_names    # {pl_id: "Lockwood 1"}
-        store["pricelabs_short_names"]         = short_names    # alias for ical_urls_route
+        store["pricelabs_short_names"]         = short_names
         store["pricelabs_listings_raw"]        = result
         save_store(store)
 
@@ -4554,6 +4414,111 @@ def pricelabs_listings():
         return jsonify({"error": msg, "listings": []})
 
 
+@app.route("/api/pricelabs/diagnose")
+def pricelabs_diagnose():
+    """Diagnostic: show what PriceLabs data we have and can fetch."""
+    # Try authenticated store first, fall back to scanning for any store with PL key
+    store = load_store()
+    if not store.get("pricelabs_api_key"):
+        base = "/data" if _os.path.isdir("/data") else "."
+        for f in sorted(_os.listdir(base)):
+            if f.startswith("store_") and f.endswith(".json"):
+                try:
+                    with open(f"{base}/{f}") as fh:
+                        s = json.load(fh)
+                        if s.get("pricelabs_api_key"):
+                            store = s
+                            break
+                except Exception:
+                    continue
+    diag = {
+        "api_key_set": bool(store.get("pricelabs_api_key")),
+        "listings_cached": len(store.get("pricelabs_listings_raw", [])),
+        "pl_bookings_count": len(store.get("pl_bookings", [])),
+        "short_names": store.get("pricelabs_short_names", {}),
+        "mapping": store.get("pricelabs_mapping", {}),
+    }
+    # Resolve API key from this store
+    import urllib.request, urllib.parse, datetime as _dt
+    raw_key = store.get("pricelabs_api_key", "")
+    api_key = None
+    if raw_key:
+        try:
+            api_key = _decrypt(raw_key)
+            diag["key_decrypted"] = True
+        except Exception:
+            if raw_key.startswith("gAAA"):
+                diag["key_decrypted"] = False
+                diag["key_error"] = "Encrypted key unrecoverable — re-save in Settings"
+            else:
+                api_key = raw_key
+                diag["key_decrypted"] = "plaintext"
+    if not api_key:
+        diag["error"] = "No usable API key"
+        return jsonify(diag)
+    headers = {"X-API-Key": api_key, "Accept": "application/json",
+               "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    # Test /listings
+    listings = store.get("pricelabs_listings_raw", [])
+    if not listings:
+        try:
+            url = PRICELABS_BASE + "/listings"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as r:
+                raw_listings = json.loads(r.read().decode())
+            ls = raw_listings if isinstance(raw_listings, list) else (raw_listings.get("listings") or raw_listings.get("data") or [])
+            diag["listings_live"] = {"count": len(ls), "sample_keys": list(ls[0].keys()) if ls else []}
+            listings = ls
+        except Exception as e:
+            diag["listings_live"] = {"error": str(e)}
+    # Test /reservation_data with first listing
+    if listings:
+        lid = str(listings[0].get("id") or listings[0].get("listing_id") or "")
+        today = _dt.date.today()
+        start = (today - _dt.timedelta(days=30)).isoformat()
+        end = (today + _dt.timedelta(days=60)).isoformat()
+        for params in [
+            {"listing_id": lid, "start_date": start, "end_date": end},
+            {"listing_ids": lid, "start_date": start, "end_date": end},
+            {"start_date": start, "end_date": end},
+        ]:
+            label = "res_" + list(params.keys())[0]
+            try:
+                url = PRICELABS_BASE + "/reservation_data?" + urllib.parse.urlencode(params)
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    body = json.loads(r.read().decode())
+                diag[label] = {
+                    "status": "ok",
+                    "type": type(body).__name__,
+                    "keys": list(body.keys()) if isinstance(body, dict) else None,
+                    "len": len(body) if isinstance(body, list) else None,
+                    "sample": json.dumps(body)[:600],
+                }
+            except urllib.error.HTTPError as e:
+                diag[label] = {"http_error": e.code, "body": e.read().decode()[:300]}
+            except Exception as e:
+                diag[label] = {"error": str(e)}
+    # Show existing pl_bookings
+    bks = store.get("pl_bookings", [])
+    if bks:
+        diag["sample_bookings"] = bks[:3]
+    return jsonify(diag)
+
+
+@app.route("/api/pricelabs/sync-reservations", methods=["POST"])
+def pricelabs_sync_reservations():
+    """Trigger a reservation data sync from PriceLabs API. Stores results as pl_bookings."""
+    try:
+        store = load_store()
+        count = _sync_pricelabs_reservations(store)
+        bookings = store.get("pl_bookings", [])
+        return jsonify({"ok": True, "fetched": count, "total_bookings": len(bookings)})
+    except Exception as e:
+        msg, _ = _safe_error(e, "PriceLabs reservation sync")
+        return jsonify({"ok": False, "error": msg}), 500
+
+
 @app.route("/api/pricelabs/raw/reservation_data")
 def pricelabs_raw_reservation_data():
     """
@@ -4561,15 +4526,18 @@ def pricelabs_raw_reservation_data():
     """
     import urllib.request, urllib.parse
 
-    LISTING_IDS = [
-        "1523546771998151986","1523560635012518611","1540191077806734253",
-        "1544826815980232108","1546750681335776815","1596469950428197209","1597959000664656537"
-    ]
+    store   = load_store()
+    # Dynamic: read listing IDs from user's cached PriceLabs listings
+    cached_listings = store.get("pricelabs_listings_raw", [])
+    LISTING_IDS = [str(l.get("id") or "") for l in cached_listings if l.get("id")]
+    if not LISTING_IDS:
+        return jsonify({"error": "No PriceLabs listings cached — sync listings first"}), 400
     START = "2025-10-01"
     END   = "2026-12-31"
-
-    store   = load_store()
-    api_key = os.environ.get("PRICELABS_API_KEY","") or store.get("pricelabs_api_key","")
+    try:
+        api_key = _resolve_pl_key(store)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
     HEADERS = {
         "X-API-Key":    api_key,
         "Accept":       "application/json",
@@ -4626,7 +4594,7 @@ def pricelabs_config_get():
     api_key = ""
     if raw_key:
         try:
-            api_key = _decrypt(raw_key)
+            api_key = _resolve_pl_key(store)
         except Exception:
             api_key = raw_key  # backward compat: legacy plaintext keys
     preview = ""
@@ -4736,9 +4704,10 @@ def raw_pricelabs_listings():
     return the exact JSON the API sends back. Also prints to server logs.
     """
     import urllib.request, urllib.error
-    api_key = os.environ.get("PRICELABS_API_KEY", "") or load_store().get("pricelabs_api_key", "")
-    if not api_key:
-        return jsonify({"error": "PRICELABS_API_KEY not configured"}), 400
+    try:
+        api_key = _resolve_pl_key()
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
 
     url = "https://api.pricelabs.co/v1/listings"
     req = urllib.request.Request(url, headers={
@@ -4908,17 +4877,23 @@ def upload_income_csv():
         except Exception:
             return 0.0
 
-    _PROP_LABELS = {
-        "lockwood":   "lockwood",
-        "everton":    "everton",
-        "b street":   "bstreet",
-        "bstreet":    "bstreet",
-        "b_street":   "bstreet",
-        "pierce":     "pierce",
-        "pierce ave": "pierce",
-        "llc":        "llc",
-        "general llc":"llc",
-    }
+    # Build dynamic prop label mapping from user's properties
+    _user_props = _get_user_properties(store)
+    _prop_labels = {}
+    for _p in _user_props:
+        _pid = _p.get("id") or _p.get("name")
+        if not _pid:
+            continue
+        # Map various forms of the property name/label/id to its canonical id
+        for _field in ("id", "name", "label", "short_label"):
+            _val = (_p.get(_field) or "").lower().strip()
+            if _val and _val not in _prop_labels:
+                _prop_labels[_val] = _pid
+        # Also map with underscores/spaces normalized
+        _pid_lower = _pid.lower()
+        _prop_labels[_pid_lower] = _pid
+        _prop_labels[_pid_lower.replace("_", " ")] = _pid
+        _prop_labels[_pid_lower.replace(" ", "_")] = _pid
 
     entries = []
     errors  = []
@@ -4929,7 +4904,7 @@ def upload_income_csv():
         clean_raw = _col(row, "cleaning_fees", "cleaning_fee", "cleaning")
         pay_raw   = _col(row, "payout_total", "payout", "net", "total_payout", "total")
 
-        prop_id = _PROP_LABELS.get(prop_raw.lower().strip())
+        prop_id = _prop_labels.get(prop_raw.lower().strip())
         month   = _parse_month(month_raw)
 
         if not prop_id:
@@ -5315,7 +5290,7 @@ def _generate_insight_cards(base, booked_adr, expected_adr, pricing_mismatches, 
 def analytics_listing_extended(prop_id):
     """Extended per-listing analytics: revenue, PriceLabs comparison, insight cards."""
     store  = load_store()
-    events = store.get("ical_events", [])
+    events = _ical_to_events(store)
     start, end = _analytics_range(request)
     return jsonify(_compute_extended_analytics(events, store, prop_id, start, end))
 
@@ -5324,7 +5299,7 @@ def analytics_listing_extended(prop_id):
 def analytics_portfolio_extended():
     """Extended portfolio analytics across all STR listings."""
     store  = load_store()
-    events = store.get("ical_events", [])
+    events = _ical_to_events(store)
     start, end = _analytics_range(request)
 
     listings = {}
@@ -5484,28 +5459,33 @@ def cockpit_data():
 
         total_rev_r = round(total_rev, 2)
         total_exp   = round(expenses, 2)
-        return {
+        result = {
             "total_revenue":  total_rev_r,
             "total_expenses": total_exp,
             "net_income":     round(total_rev_r - total_exp, 2),
-            "airbnb": {
-                "revenue":   total_rev_r,
-                "tx_ids":    revenue_tx_ids,
-                "is_manual": is_manual,
-            },
-            "pierce": {
-                "revenue":   0.0,
-                "tx_ids":    [],
-            },
             "expenses": {
                 "total":       total_exp,
                 "by_property": {k: round(v, 2) for k, v in expense_by_prop.items()},
                 "tx_ids":      expense_tx_ids,
             },
             "revenue": {
+                "total":       total_rev_r,
+                "tx_ids":      revenue_tx_ids,
+                "is_manual":   is_manual,
                 "by_property": {k: round(v, 2) for k, v in revenue_by_prop.items()},
             },
         }
+        # Backward compat: include "airbnb" and "pierce" keys with dynamic data
+        result["airbnb"] = {
+            "revenue":   total_rev_r,
+            "tx_ids":    revenue_tx_ids,
+            "is_manual": is_manual,
+        }
+        result["pierce"] = {
+            "revenue":   0.0,
+            "tx_ids":    [],
+        }
+        return result
 
     def _safe_pct(cur_val, prev_val):
         """Return % change only when prior month is non-zero (no fabricated comparisons)."""
@@ -5547,36 +5527,30 @@ def cockpit_data():
 # Defines primary (Airbnb STR) vs secondary ("Other Properties") groupings.
 # Drives the app restructure: Airbnb is the main focus; Pierce is secondary.
 
-_DEFAULT_PROP_CONFIG = {
-    "primary_group": {
-        "id":          "airbnb",
-        "label":       "Airbnb Portfolio",
-        "prop_ids":    ["lockwood", "everton", "bstreet"],
-        "description": "Short-term rental properties — main app focus",
-    },
-    "secondary_groups": [
-        {
-            "id":          "other",
-            "label":       "Other Properties",
-            "prop_ids":    ["pierce"],
-            "description": "Section 8 / long-term rentals",
+def _build_default_prop_config(store=None):
+    """Build default property config dynamically from the user's actual properties."""
+    props = _get_user_properties(store)
+    all_ids = [p.get("id") or p.get("name") for p in props if p.get("id") or p.get("name")]
+    return {
+        "primary_group": {
+            "id":          "portfolio",
+            "label":       "Property Portfolio",
+            "prop_ids":    all_ids,
+            "description": "All user properties",
         },
-        {
-            "id":          "llc",
-            "label":       "General LLC",
-            "prop_ids":    ["llc"],
-            "description": "LLC-level expenses not tied to a specific property",
-        },
-    ],
-    "excluded_from_analytics": ["transfer", "deleted"],
-}
+        "secondary_groups": [],
+        "excluded_from_analytics": ["transfer", "deleted"],
+    }
+
+# Kept for backward compat — will be overridden by store or dynamic builder
+_DEFAULT_PROP_CONFIG = _build_default_prop_config()
 
 
 @app.route("/api/properties/config", methods=["GET"])
 def get_properties_config():
     """Return property grouping: primary (Airbnb STR) and secondary (Other)."""
     store  = load_store()
-    config = store.get("properties_config") or _DEFAULT_PROP_CONFIG
+    config = store.get("properties_config") or _build_default_prop_config(store)
     return jsonify(config)
 
 
@@ -5585,7 +5559,7 @@ def save_properties_config():
     """Update property grouping configuration."""
     body   = request.json or {}
     store  = load_store()
-    config = store.get("properties_config") or dict(_DEFAULT_PROP_CONFIG)
+    config = store.get("properties_config") or _build_default_prop_config(store)
     for k in ("primary_group", "secondary_groups", "excluded_from_analytics"):
         if k in body:
             config[k] = body[k]
@@ -6080,8 +6054,8 @@ def _compute_portfolio_score(user_id, user_data=None):
         elif prop_count >= 1:
             score += 3
 
-        ical_feeds = s.get("ical_feeds", s.get("ical_urls", []))
-        if len(ical_feeds) > 0:
+        pl_listings = s.get("pricelabs_listings_raw", [])
+        if len(pl_listings) > 0:
             score += 4
 
         if u.get("username"):
@@ -6363,33 +6337,32 @@ def cleaner_schedule():
                 owner_name = u.get("username", email.split("@")[0])
                 break
 
-        # Load owner's ical events
+        # Load owner's PriceLabs bookings
         try:
             owner_store = _load_store_for_user(owner_id)
-            owner_events = owner_store.get("ical_events", [])
+            owner_bookings = owner_store.get("ical_events", [])
             owner_props = owner_store.get("properties", [])
             prop_labels = {p.get("id", ""): p.get("label", p.get("id", "")) for p in owner_props}
 
             short_names = owner_store.get("pricelabs_short_names", {})
 
-            for ev in owner_events:
-                prop_id = ev.get("prop_id", "")
+            for b in owner_bookings:
+                prop_id = b.get("prop_id", "")
                 if selected_props and prop_id not in selected_props:
                     continue
-                feed_key = ev.get("feed_key", "")
-                pl_id = ev.get("pl_id", "")
+                pl_id = str(b.get("listing_id") or b.get("pl_id") or "")
                 unit_name = short_names.get(pl_id, "") if pl_id else ""
                 events.append({
-                    "check_in": ev.get("check_in") or ev.get("start", ""),
-                    "check_out": ev.get("check_out") or ev.get("end", ""),
+                    "check_in": b.get("check_in", ""),
+                    "check_out": b.get("check_out", ""),
                     "prop_id": prop_id,
                     "prop_name": prop_labels.get(prop_id, prop_id),
                     "owner": owner_name,
                     "owner_id": owner_id,
-                    "uid": ev.get("uid", ""),
-                    "feed_key": feed_key,
+                    "uid": b.get("uid", ""),
+                    "pl_id": pl_id,
                     "unit_name": unit_name,
-                    "guest_name": ev.get("guest_name", ev.get("summary", "")),
+                    "guest_name": b.get("guest_name", ""),
                 })
         except Exception as e:
             logger.error("Error loading schedule for owner %s: %s", owner_id, e)
@@ -6414,13 +6387,11 @@ def cleaner_owner_properties(owner_id):
     try:
         owner_store = _load_store_for_user(owner_id)
         props = owner_store.get("properties", [])
-        feeds = owner_store.get("ical_urls", [])
-        if isinstance(feeds, dict):
-            feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
-        feed_prop_ids = set(f.get("propId", "") for f in feeds)
-        # Only return properties with at least one iCal feed
+        pl_listings = owner_store.get("pricelabs_listings_raw", [])
+        pl_prop_ids = set(l.get("prop_id", "") for l in pl_listings if l.get("prop_id"))
+        # Only return properties with at least one PriceLabs listing
         result = [{"id": p.get("id",""), "label": p.get("label", p.get("id",""))}
-                  for p in props if p.get("id","") in feed_prop_ids]
+                  for p in props if p.get("id","") in pl_prop_ids]
         return jsonify({"properties": result})
     except Exception:
         logger.warning("Failed to load owner store for %s", owner_id)
@@ -6428,7 +6399,7 @@ def cleaner_owner_properties(owner_id):
 
 @app.route("/api/cleaner/owner-units/<owner_id>", methods=["GET"])
 def cleaner_owner_units(owner_id):
-    """Returns properties with per-unit breakdown (one unit per iCal feed URL)."""
+    """Returns properties with per-unit breakdown from PriceLabs listings."""
     uid = getattr(g, 'user_id', None)
     if not uid:
         return jsonify({"ok": False, "error": "Not authenticated"}), 401
@@ -6443,29 +6414,25 @@ def cleaner_owner_units(owner_id):
     try:
         owner_store = _load_store_for_user(owner_id)
         props = owner_store.get("properties", [])
-        feeds = owner_store.get("ical_urls", [])
-        if isinstance(feeds, dict):
-            feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
         short_names = owner_store.get("pricelabs_short_names", {})
+        pl_listings = owner_store.get("pricelabs_listings_raw", [])
 
         result = []
         for p in props:
             pid = p.get("id", "")
             plabel = p.get("label", p.get("id", ""))
-            # Find all iCal feeds for this property
-            prop_feeds = [f for f in feeds if f.get("propId", "") == pid]
+            # Find PriceLabs listings mapped to this property
+            prop_listings = [l for l in pl_listings if l.get("prop_id") == pid]
             units = []
-            for f in prop_feeds:
-                url = f.get("url", "")
-                fk = _ical_feed_key(url) if url else ""
-                pl_id = _airbnb_listing_id(url) if url else None
-                uname = short_names.get(pl_id, f.get("listingName", "")) if pl_id else f.get("listingName", "")
+            for l in prop_listings:
+                lid = str(l.get("id", ""))
+                uname = short_names.get(lid, l.get("short_label", ""))
                 if not uname:
                     uname = plabel
-                units.append({"feed_key": fk, "unit_name": uname})
-            # If no feeds, still include the property with an empty unit
+                units.append({"pl_id": lid, "unit_name": uname})
+            # If no listings, still include the property with an empty unit
             if not units:
-                units.append({"feed_key": "", "unit_name": plabel})
+                units.append({"pl_id": "", "unit_name": plabel})
             result.append({"prop_id": pid, "prop_label": plabel, "units": units})
         return jsonify({"properties": result})
     except Exception as e:
@@ -6485,24 +6452,10 @@ def scheduled_sync():
 scheduler = BackgroundScheduler(daemon=True)
 # Plaid fallback sync every 6 hours
 scheduler.add_job(scheduled_sync, IntervalTrigger(hours=6), id="periodic_sync", replace_existing=True)
-def _bg_ical_sync():
-    store = load_store()
-    new_events = _sync_ical(store)
-    existing = {e["uid"]: e for e in store.get("ical_events", [])}
-    for e in new_events:
-        existing[e["uid"]] = e
-    store["ical_events"] = list(existing.values())
-    save_store(store)
-    # Invalidate caches after iCal sync
-    _invalidate_cache("portfolio")
-    _invalidate_cache("ical_events")
-    logger.info("iCal bg sync done — %s total events stored", len(store['ical_events']))
-
-scheduler.add_job(_bg_ical_sync, IntervalTrigger(hours=6), id='ical_sync', replace_existing=True)
 # Phase 3: periodic rate limit cleanup
 scheduler.add_job(_cleanup_rate_buckets, IntervalTrigger(minutes=30), id='rate_limit_cleanup', replace_existing=True)
 scheduler.start()
-logger.info("Scheduler started: Plaid + iCal syncs every 6 hours")
+logger.info("Scheduler started: Plaid sync every 6 hours")
 
 # Phase 1: warm token cache on startup
 _warm_token_cache()
@@ -6529,82 +6482,7 @@ threading.Thread(target=startup_sync, daemon=True).start()
 logger.info("Startup sync scheduled (runs in background after 4s)")
 
 
-def startup_pl_ical():
-    """
-    On startup: refresh PriceLabs listings (canonical names + occupancy)
-    then immediately re-sync iCal so events get tagged with feed_key.
-    Runs in background 8s after boot so gunicorn is fully up first.
-    """
-    _time.sleep(8)
-    api_key = os.environ.get("PRICELABS_API_KEY", "")
-    store   = load_store()
-    if not api_key:
-        api_key = store.get("pricelabs_api_key", "")
-
-    if api_key:
-        try:
-            data = _pricelabs_get("/listings")
-            listings = data.get("listings") or data.get("data") or (data if isinstance(data, list) else [])
-            mapping  = store.get("pricelabs_mapping", {})
-            rev      = {str(v): k for k, v in mapping.items()}
-            result, name_by_plid, name_by_prop = [], {}, {}
-            for l in listings:
-                lid      = str(l.get("id") or "")
-                raw_name = (l.get("name") or lid).strip()
-                short, full = _pl_parse_name(raw_name)
-                city   = (l.get("city_name") or "").lower().strip()
-                pid    = rev.get(lid) or _PL_CITY_TO_PROP.get(city) or _pl_prop_from_name(raw_name)
-                canonical = _pl_canonical_short(short, pid) if pid else short
-                name_by_plid[lid] = canonical
-                if pid:
-                    name_by_prop.setdefault(pid, []).append(canonical)
-                result.append({
-                    "id": lid, "short_label": short, "name": full,
-                    "city": l.get("city_name",""), "state": l.get("state",""),
-                    "bedrooms": l.get("no_of_bedrooms"), "pms": l.get("pms"),
-                    "base_price": l.get("base"), "recommended_base": l.get("recommended_base_price"),
-                    "min_price": l.get("min"), "cleaning_fee": l.get("cleaning_fees"),
-                    "occ_next_30": l.get("occupancy_next_30"), "occ_next_60": l.get("occupancy_next_60"),
-                    "occ_past_30": l.get("occupancy_past_30"), "occ_past_60": l.get("occupancy_past_60"),
-                    "market_occ_next_30": l.get("market_occupancy_next_30"),
-                    "market_occ_past_30": l.get("market_occupancy_past_30"),
-                    "booking_pickup_60": l.get("booking_pickup_past_60"),
-                    "push_enabled": l.get("push_enabled"), "last_pushed": l.get("last_date_pushed"),
-                    "canonical_name": canonical, "prop_id": pid,
-                })
-            def _sk(r):
-                m = re.search(r'\d+', r.get("canonical_name",""))
-                return (r.get("prop_id",""), int(m.group()) if m else 999)
-            result.sort(key=_sk)
-            flat_names = {p: ", ".join(sorted(ns, key=lambda n: int(re.search(r'\d+',n).group()) if re.search(r'\d+',n) else 999))
-                          for p, ns in name_by_prop.items()}
-            store["pricelabs_listing_names"]       = flat_names
-            store["pricelabs_listing_names_by_id"] = name_by_plid
-            store["pricelabs_short_names"]         = name_by_plid
-            store["pricelabs_listings_raw"]        = result
-            save_store(store)
-            logger.info("Startup PriceLabs refresh: %s listings, canonical names stored", len(result))
-        except Exception as e:
-            logger.error("Startup PriceLabs refresh failed (non-fatal): %s", e)
-    else:
-        logger.info("ℹ No PriceLabs API key — skipping startup PL refresh")
-
-    # Always re-sync iCal so events get tagged with feed_key
-    try:
-        store   = load_store()
-        new_evs = _sync_ical(store)
-        existing = {e["uid"]: e for e in store.get("ical_events", [])}
-        for e in new_evs:
-            existing[e["uid"]] = e
-        store["ical_events"] = list(existing.values())
-        save_store(store)
-        logger.info("Startup iCal re-sync: %s total events (feed_key tagged)", len(store['ical_events']))
-    except Exception as e:
-        logger.error("Startup iCal sync failed: %s", e)
-
-
-threading.Thread(target=startup_pl_ical, daemon=True).start()
-logger.info("Startup PriceLabs+iCal refresh scheduled (8s)")
+# PriceLabs startup refresh removed — calendar now uses Airbnb iCal feeds
 
 # ── /cleaner — Public turnover page for cleaning crew ─────────────────────────
 
@@ -6625,50 +6503,38 @@ def _get_cleaner_feeds():
 
 
 def _fetch_cleaner_data():
-    """Fetch & parse all cleaner iCal feeds. Returns list of checkout/checkin events."""
-    import urllib.request
+    """Return cleaner schedule events from iCal booking data."""
     from datetime import date, timedelta
     events_out = []
     today_d = date.today()
     cutoff  = today_d + timedelta(days=60)
-    for feed in _get_cleaner_feeds():
-        if not _is_safe_url(feed.get("url", "")):
-            logger.warning("Cleaner: blocked unsafe URL for %s", feed.get('name'))
+    store = load_store()
+    ical_events = store.get("ical_events", [])
+    for b in ical_events:
+        b_ci = b.get("check_in", "")
+        b_co = b.get("check_out", "")
+        if not b_ci:
             continue
         try:
-            req = urllib.request.Request(
-                feed["url"], headers={"User-Agent": "PortfolioPigeon/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                ics_text = r.read().decode("utf-8", errors="replace")
-            bookings = _parse_ics(ics_text, prop_id="cleaner", feed_key="")
-            for b in bookings:
-                summary = (b.get("summary") or "").strip()
-                # Skip blocked / unavailable calendar entries
-                if re.match(r'^(airbnb|not available|unavailable|blocked)', summary, re.I):
-                    continue
-                try:
-                    ci_d = date.fromisoformat(b["start"])
-                    co_d = date.fromisoformat(b["end"])
-                except Exception:
-                    continue
-                guest  = (b.get("guest_name") or "").strip()
-                nights = b.get("nights", 0)
-                # Checkout event on DTEND date (day guest leaves)
-                if today_d <= co_d <= cutoff:
-                    events_out.append({
-                        "type": "checkout", "date": b["end"],
-                        "unit": feed["name"], "guest_name": guest,
-                        "nights": nights, "time": "10:00 AM",
-                    })
-                # Check-in event on DTSTART date (day guest arrives)
-                if today_d <= ci_d <= cutoff:
-                    events_out.append({
-                        "type": "checkin", "date": b["start"],
-                        "unit": feed["name"], "guest_name": guest,
-                        "nights": nights, "time": "3:00 PM",
-                    })
-        except Exception as e:
-            logger.error("Cleaner iCal fetch failed for %s: %s", feed['name'], e)
+            ci_d = date.fromisoformat(b_ci[:10])
+            co_d = date.fromisoformat(b_co[:10]) if b_co else ci_d + timedelta(days=int(b.get("nights") or 1))
+        except Exception:
+            continue
+        guest = (b.get("guest_name") or "").strip()
+        nights = int(b.get("nights") or (co_d - ci_d).days)
+        unit_name = b.get("listing_name", "")
+        if today_d <= co_d <= cutoff:
+            events_out.append({
+                "type": "checkout", "date": b_co[:10],
+                "unit": unit_name, "guest_name": guest,
+                "nights": nights, "time": "10:00 AM",
+            })
+        if today_d <= ci_d <= cutoff:
+            events_out.append({
+                "type": "checkin", "date": b_ci[:10],
+                "unit": unit_name, "guest_name": guest,
+                "nights": nights, "time": "3:00 PM",
+            })
     return events_out
 
 
@@ -7471,26 +7337,26 @@ def messages_cleanings(other_user_id):
                 break
         try:
             owner_store = _load_store_for_user(owner_id)
-            owner_events = owner_store.get("ical_events", [])
+            owner_bookings = owner_store.get("ical_events", [])
             owner_props = owner_store.get("properties", [])
             prop_labels = {p.get("id", ""): p.get("label", p.get("id", "")) for p in owner_props}
             short_names = owner_store.get("pricelabs_short_names", {})
-            for ev in owner_events:
-                prop_id = ev.get("prop_id", "")
+            for b in owner_bookings:
+                prop_id = b.get("prop_id", "")
                 if selected_props and prop_id not in selected_props:
                     continue
-                check_out = ev.get("check_out") or ev.get("end", "")
+                check_out = b.get("check_out", "")
                 if check_out < today:
                     continue
-                pl_id = ev.get("pl_id", "")
+                pl_id = str(b.get("listing_id") or b.get("pl_id") or "")
                 unit_name = short_names.get(pl_id, "") if pl_id else ""
                 events.append({
-                    "check_in": ev.get("check_in") or ev.get("start", ""),
+                    "check_in": b.get("check_in", ""),
                     "check_out": check_out,
                     "prop_id": prop_id,
                     "prop_name": prop_labels.get(prop_id, prop_id),
                     "unit_name": unit_name,
-                    "guest_name": ev.get("guest_name", ev.get("summary", "")),
+                    "guest_name": b.get("guest_name", ""),
                 })
         except Exception:
             pass
@@ -8158,9 +8024,9 @@ def property_valuation(prop_id):
 @app.route("/api/income/split-suggest", methods=["POST"])
 def income_split_suggest():
     """Given a transaction ID tagged as Airbnb income, suggest a per-property split
-    based on iCal booking nights in the payout period.
-    Returns: { splits: [{prop_id, prop_label, nights, pct, amount}], has_ical: bool }
-    If no iCal data, returns has_ical: false so frontend can ask user for manual split."""
+    based on PriceLabs booking nights in the payout period.
+    Returns: { splits: [{prop_id, prop_label, nights, pct, amount}], has_data: bool }
+    If no booking data, returns has_data: false so frontend can ask user for manual split."""
     body = request.json or {}
     tx_ids = body.get("tx_ids", [])
     if isinstance(tx_ids, str):
@@ -8170,7 +8036,7 @@ def income_split_suggest():
 
     store = load_store()
     txs = store.get("transactions", {})
-    events = store.get("ical_events", [])
+    pl_bookings = store.get("ical_events", [])
     props = store.get("properties", []) + store.get("custom_props", [])
 
     # Dedupe props
@@ -8210,26 +8076,25 @@ def income_split_suggest():
         end_date = _d.today()
         start_date = end_date - _td(days=35)
 
-    # Count nights per property from iCal events in the payout window
+    # Count nights per property from PriceLabs bookings in the payout window
     nights_by_prop = {}
-    for ev in events:
-        prop_id = ev.get("propId")
+
+    for b in pl_bookings:
+        prop_id = b.get("prop_id")
         if not prop_id:
             continue
-        ev_start = ev.get("start", "")
-        ev_end = ev.get("end", "")
-        if not ev_start or not ev_end:
+        status = (b.get("status") or "").lower()
+        if "cancel" in status:
             continue
-        # Skip blocked/owner events
-        summary = (ev.get("summary") or "").lower()
-        if summary in ("reserved", "not available", "unavailable", "blocked"):
+        b_ci = b.get("check_in", "")
+        b_co = b.get("check_out", "")
+        if not b_ci:
             continue
         try:
-            es = _d.fromisoformat(ev_start)
-            ee = _d.fromisoformat(ev_end)
+            es = _d.fromisoformat(b_ci[:10])
+            ee = _d.fromisoformat(b_co[:10]) if b_co else es + _td(days=int(b.get("nights") or 1))
         except Exception:
             continue
-        # Check overlap with payout window
         overlap_start = max(es, start_date)
         overlap_end = min(ee, end_date)
         overlap_nights = max(0, (overlap_end - overlap_start).days)
@@ -8237,9 +8102,9 @@ def income_split_suggest():
             nights_by_prop[prop_id] = nights_by_prop.get(prop_id, 0) + overlap_nights
 
     total_nights = sum(nights_by_prop.values())
-    has_ical = total_nights > 0
+    has_data = total_nights > 0
 
-    if has_ical:
+    if has_data:
         # Proportional split based on nights
         splits = []
         for pid, nights in sorted(nights_by_prop.items(), key=lambda x: -x[1]):
@@ -8253,7 +8118,7 @@ def income_split_suggest():
                 "amount": round(total_amount * pct, 2),
             })
     else:
-        # No iCal data — return all STR properties with equal split for user to adjust
+        # No booking data — return all STR properties with equal split for user to adjust
         str_props = [p for p in unique_props if p.get("isAirbnb")]
         if not str_props:
             str_props = unique_props
@@ -8268,7 +8133,7 @@ def income_split_suggest():
 
     return jsonify({
         "splits": splits,
-        "has_ical": has_ical,
+        "has_data": has_data,
         "total_amount": round(total_amount, 2),
         "tx_ids": tx_ids,
         "window": {"start": str(start_date), "end": str(end_date)},
@@ -8490,24 +8355,10 @@ def inventory_update():
     save_store(store)
     return jsonify({"ok": True})
 
-# ── Combined sync (iCal + transactions) ──────────────────────
+# ── Combined sync (transactions) ──────────────────────────────
 @app.route("/api/sync", methods=["POST"])
 def combined_sync():
     results = {}
-    # iCal sync
-    try:
-        store = load_store()
-        new_events = _sync_ical(store)
-        existing = {e["uid"]: e for e in store.get("ical_events", [])}
-        for e in new_events:
-            existing[e["uid"]] = e
-        merged = list(existing.values())
-        store["ical_events"] = merged
-        save_store(store)
-        results["ical"] = {"ok": True, "count": len(merged)}
-    except Exception as e:
-        msg, _ = _safe_error(e, "iCal sync")
-        results["ical"] = {"ok": False, "error": msg}
     # Transactions sync
     try:
         tx_result = run_sync()
@@ -8741,37 +8592,6 @@ def _update_system_message(user_a, user_b, message_id, updates):
             break
     _save_conv(cid, conv)
 
-@app.route("/api/host/ical-properties", methods=["GET"])
-def host_ical_properties():
-    """Returns the host's own iCal-linked properties with per-unit breakdown."""
-    uid = getattr(g, 'user_id', None)
-    if not uid:
-        return jsonify({"error": "Not authenticated"}), 401
-    store = _load_store_for_user(uid)
-    props = store.get("properties", [])
-    feeds = store.get("ical_urls", [])
-    if isinstance(feeds, dict):
-        feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
-    short_names = store.get("pricelabs_short_names", {})
-    result = []
-    for p in props:
-        pid = p.get("id", "")
-        plabel = p.get("label", pid)
-        prop_feeds = [f for f in feeds if f.get("propId", "") == pid]
-        if not prop_feeds:
-            continue  # skip properties without iCal feeds
-        units = []
-        for f in prop_feeds:
-            url = f.get("url", "")
-            fk = _ical_feed_key(url) if url else ""
-            pl_id = _airbnb_listing_id(url) if url else None
-            uname = short_names.get(pl_id, f.get("listingName", "")) if pl_id else f.get("listingName", "")
-            if not uname:
-                uname = plabel
-            units.append({"feed_key": fk, "unit_name": uname})
-        result.append({"id": pid, "label": plabel, "units": units})
-    return jsonify({"properties": result})
-
 @app.route("/api/property-request/create", methods=["POST"])
 def property_request_create():
     """Create a property link request (cleaner→host) or invite (host→cleaner)."""
@@ -8797,45 +8617,33 @@ def property_request_create():
         host_id = uid
         cleaner_id = target_user_id
 
-    # Validate properties belong to host and have iCal feeds
+    # Validate properties belong to host and have PriceLabs listings
     host_store = _load_store_for_user(host_id)
     host_props = host_store.get("properties", [])
-    feeds = host_store.get("ical_urls", [])
-    if isinstance(feeds, dict):
-        feeds = [{"propId": k, "url": v} for k, v in feeds.items()]
-    feed_prop_ids = set(f.get("propId", "") for f in feeds)
+    pl_listings = host_store.get("pricelabs_listings_raw", [])
+    pl_prop_ids = set(l.get("prop_id", "") for l in pl_listings if l.get("prop_id"))
     host_prop_ids = set(p.get("id", "") for p in host_props)
 
     valid_ids = []
     valid_labels = []
     for pid in property_ids:
-        if pid in host_prop_ids and pid in feed_prop_ids:
+        if pid in host_prop_ids and pid in pl_prop_ids:
             valid_ids.append(pid)
             label = next((p.get("label", pid) for p in host_props if p.get("id") == pid), pid)
             valid_labels.append(label)
 
     if not valid_ids:
-        return jsonify({"error": "No valid iCal-linked properties found"}), 400
+        return jsonify({"error": "No valid PriceLabs-linked properties found"}), 400
 
     # Build unit labels for display if feed_keys provided
     unit_labels = []
     if feed_keys:
         short_names = host_store.get("pricelabs_short_names", {})
         for fk in feed_keys:
-            matched = False
-            for f in feeds:
-                url = f.get("url", "")
-                if _ical_feed_key(url) == fk:
-                    pl_id = _airbnb_listing_id(url)
-                    uname = short_names.get(pl_id, f.get("listingName", "")) if pl_id else f.get("listingName", "")
-                    if not uname:
-                        pid = f.get("propId", "")
-                        uname = next((p.get("label", pid) for p in host_props if p.get("id") == pid), fk[:8])
-                    unit_labels.append(uname)
-                    matched = True
-                    break
-            if not matched:
-                unit_labels.append(fk[:8])
+            uname = short_names.get(fk, "")
+            if not uname:
+                uname = fk[:8]
+            unit_labels.append(uname)
 
     display_labels = unit_labels if unit_labels else valid_labels
 
