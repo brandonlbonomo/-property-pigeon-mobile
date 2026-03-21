@@ -4,7 +4,7 @@ import { Colors, FontSize, Radius, Spacing } from '../constants/theme';
 import { fmt$ } from '../utils/format';
 
 const SCREEN_W = Dimensions.get('window').width;
-const TOOLTIP_W = 100;
+const TOOLTIP_W = 110;
 
 export interface TooltipData {
   value: number;
@@ -80,7 +80,12 @@ export function ChartTooltip({ data, chartLeft }: Props) {
         {isPercent ? `${value.toFixed(1)}%` : fmt$(value)}
       </Text>
 
-      {/* Delta % */}
+      {/* Delta — show prior label if available (e.g. "Projected: $1,200") */}
+      {hasDelta && data.priorLabel && priorValue != null && (
+        <Text style={styles.priorLine}>
+          {data.priorLabel}: {isPercent ? `${priorValue.toFixed(1)}%` : fmt$(priorValue)}
+        </Text>
+      )}
       {hasDelta && (
         <Text style={[styles.delta, { color: deltaColor(deltaPct!) }]}>
           {deltaPct! >= 0 ? '+' : ''}{deltaPct!.toFixed(1)}%
@@ -133,6 +138,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: Colors.text,
     textAlign: 'center',
+  },
+  priorLine: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: Colors.textDim,
+    textAlign: 'center',
+    marginTop: 1,
   },
   delta: {
     fontSize: 12,

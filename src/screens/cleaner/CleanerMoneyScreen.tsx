@@ -283,7 +283,20 @@ function RevenueTab({
           .reduce((sum, e) => sum + (rates[e.prop_id] || 0), 0);
         priorLabel = MONTH_LABELS[priorIdx];
       }
-      return { label, value: rev, isActual: hasActualData || (!isFuture && !isCurrentMonth), isCurrent: isCurrentMonth, month: ym, priorValue, priorLabel };
+      // For current month: show projected as the bar, mark as current
+      // For past months: green if has data, grey if not
+      // For future months: grey (projected)
+      const isPast = !isFuture && !isCurrentMonth;
+      return {
+        label, value: rev,
+        isActual: isPast && rev > 0,
+        isCurrent: isCurrentMonth,
+        month: ym,
+        priorValue: isCurrentMonth ? projected : priorValue,
+        priorLabel: isCurrentMonth ? 'Projected' : priorLabel,
+        // Current month gets a projection background bar
+        projectedValue: isCurrentMonth ? projected : undefined,
+      };
     });
   }, [allEvents, rates, revYear, thisMonth, now, plaidRevByMonth]);
 
@@ -300,21 +313,6 @@ function RevenueTab({
       return { label, value: exp, isActual: !isFuture, isCurrent: isCurrentMonth };
     });
   }, [plaidTransactions, revYear, thisMonth, now]);
-
-  // Projected bars — only shows for current month as a paired grey bar
-  const projectedBars: BarData[] | undefined = useMemo(() => {
-    if (!isPlaidConnected) return undefined; // Only show paired bars when we have actual data
-    return MONTH_LABELS.map((label, i) => {
-      const ym = `${revYear}-${String(i + 1).padStart(2, '0')}`;
-      const isCurrentMonth = ym === thisMonth;
-      // Only show projected bar for current month
-      if (!isCurrentMonth) return { label, value: 0, isActual: false, isCurrent: false };
-      const projected = allEvents
-        .filter(e => (e.check_out || '').slice(0, 7) === ym)
-        .reduce((sum, e) => sum + (rates[e.prop_id] || 0), 0);
-      return { label, value: projected, isActual: false, isCurrent: true };
-    });
-  }, [allEvents, rates, revYear, thisMonth, isPlaidConnected]);
 
   // Quarterly revenue bars
   const quarterlyBars: BarData[] = useMemo(() => {
@@ -500,8 +498,6 @@ function RevenueTab({
         <BarChart
           bars={monthlyBars}
           overlayLine={{ data: monthlyExpBars, color: Colors.red }}
-          pairedBars={projectedBars}
-          pairedColorType="green"
           color={Colors.green}
           height={120}
           onDoubleTap={handleDoubleTap}

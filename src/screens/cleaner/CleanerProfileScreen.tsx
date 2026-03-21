@@ -10,7 +10,7 @@ import { useUserStore } from '../../store/userStore';
 import { useCleanerStore } from '../../store/cleanerStore';
 import { useDataStore } from '../../store/dataStore';
 import { Card } from '../../components/Card';
-import { BarChart, BarData } from '../../components/BarChart';
+import { BarChart, BarData, dismissAllChartTooltips } from '../../components/BarChart';
 import { fmt$, fmtDate , localDateStr } from '../../utils/format';
 import { SqftRates } from '../../navigation/CleanerNavigator';
 import { apiFetch } from '../../services/api';
@@ -243,6 +243,7 @@ export function CleanerProfileScreen({ sqftRates, onOpenRates }: { sqftRates?: S
       style={styles.container}
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
+      onTouchStart={dismissAllChartTooltips}
     >
       {error && (
         <View style={styles.errorBanner}>

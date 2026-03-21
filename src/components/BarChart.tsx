@@ -29,6 +29,8 @@ export interface BarData {
   month?: string;
   /** Year for drill-down */
   year?: number;
+  /** Projected value — renders a grey background bar behind the actual green bar */
+  projectedValue?: number;
 }
 
 interface Props {
@@ -104,7 +106,7 @@ export function BarChart({
   const hasOverlay = overlayLine && overlayLine.data.length === bars.length;
   // Bars and paired bars share the same scale; overlay line gets its own scale
   const barValues = [
-    ...bars.map(b => Math.abs(b.value)),
+    ...bars.map(b => Math.max(Math.abs(b.value), Math.abs(b.projectedValue || 0))),
     ...(hasPaired ? pairedBars!.map(b => Math.abs(b.value)) : []),
   ];
   const maxVal = Math.max(...barValues, 1);
@@ -161,6 +163,19 @@ export function BarChart({
       ]
     : bars.map((bar, i) => computeSvgBar(bar, i, 0));
 
+  // Compute projection background bars (grey bars behind the actual green ones)
+  const projBgBars = bars.map((bar, i) => {
+    if (!bar.projectedValue || bar.projectedValue <= 0) return null;
+    const projH = Math.max((bar.projectedValue / maxVal) * (hasNegative ? height / 2 : height) * 0.78, 2);
+    const centerX = colWidth * i + colWidth / 2 - singleBarWidth / 2;
+    return {
+      x: centerX,
+      y: totalChartHeight - projH,
+      width: singleBarWidth,
+      height: projH,
+    };
+  });
+
   // Compute overlay line points (own scale, centered on each column)
   const svgOverlayLine = hasOverlay && chartWidth > 0 ? {
     points: overlayLine!.data.map((bar, i) => {
@@ -213,6 +228,7 @@ export function BarChart({
             width={chartWidth}
             height={totalChartHeight}
             bars={svgBars}
+            projectionBars={projBgBars}
             overlayLine={svgOverlayLine}
           />
         )}

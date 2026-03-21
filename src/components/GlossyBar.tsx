@@ -20,6 +20,7 @@ interface GlossyBarProps {
     isNegative?: boolean;
     colorType?: 'green' | 'red';
   }[];
+  projectionBars?: ({ x: number; y: number; width: number; height: number } | null)[];
   overlayLine?: {
     points: OverlayLinePoint[];
     color: string;
@@ -28,7 +29,7 @@ interface GlossyBarProps {
 
 const R = 6;
 
-export function GlossyBarSvg({ width, height, bars, overlayLine }: GlossyBarProps) {
+export function GlossyBarSvg({ width, height, bars, projectionBars, overlayLine }: GlossyBarProps) {
   if (width <= 0 || height <= 0) return null;
 
   return (
@@ -59,19 +60,19 @@ export function GlossyBarSvg({ width, height, bars, overlayLine }: GlossyBarProp
             <Stop offset="1"    stopColor="#FEE2E2" stopOpacity="0.35" />
           </LinearGradient>
 
-          {/* Projected glass — frosted silver */}
+          {/* Projected glass — frosted silver with more contrast */}
           <LinearGradient id="gP" x1="0" y1="1" x2="0.05" y2="0">
-            <Stop offset="0"   stopColor="#9CA3AF" stopOpacity="0.55" />
-            <Stop offset="0.3" stopColor="#D1D5DB" stopOpacity="0.45" />
-            <Stop offset="0.6" stopColor="#E5E7EB" stopOpacity="0.35" />
-            <Stop offset="0.85" stopColor="#F3F4F6" stopOpacity="0.25" />
-            <Stop offset="1"   stopColor="#F9FAFB" stopOpacity="0.15" />
+            <Stop offset="0"   stopColor="#6B7280" stopOpacity="0.65" />
+            <Stop offset="0.3" stopColor="#9CA3AF" stopOpacity="0.55" />
+            <Stop offset="0.6" stopColor="#D1D5DB" stopOpacity="0.45" />
+            <Stop offset="0.85" stopColor="#E5E7EB" stopOpacity="0.35" />
+            <Stop offset="1"   stopColor="#F3F4F6" stopOpacity="0.25" />
           </LinearGradient>
           <LinearGradient id="gPN" x1="0" y1="0" x2="0.05" y2="1">
-            <Stop offset="0"   stopColor="#9CA3AF" stopOpacity="0.55" />
-            <Stop offset="0.3" stopColor="#D1D5DB" stopOpacity="0.45" />
-            <Stop offset="0.6" stopColor="#E5E7EB" stopOpacity="0.35" />
-            <Stop offset="0.85" stopColor="#F3F4F6" stopOpacity="0.25" />
+            <Stop offset="0"   stopColor="#6B7280" stopOpacity="0.65" />
+            <Stop offset="0.3" stopColor="#9CA3AF" stopOpacity="0.55" />
+            <Stop offset="0.6" stopColor="#D1D5DB" stopOpacity="0.45" />
+            <Stop offset="0.85" stopColor="#E5E7EB" stopOpacity="0.35" />
             <Stop offset="1"   stopColor="#F9FAFB" stopOpacity="0.15" />
           </LinearGradient>
 
@@ -79,13 +80,12 @@ export function GlossyBarSvg({ width, height, bars, overlayLine }: GlossyBarProp
               GLASS EFFECT LAYERS — iOS 26 liquid glass
               ══════════════════════════════════════════════ */}
 
-          {/* Top refraction — crisp highlight */}
+          {/* Top refraction — subtle highlight */}
           <LinearGradient id="hl" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0"    stopColor="white" stopOpacity="0.85" />
-            <Stop offset="0.06" stopColor="white" stopOpacity="0.5" />
-            <Stop offset="0.15" stopColor="white" stopOpacity="0.2" />
-            <Stop offset="0.3"  stopColor="white" stopOpacity="0.05" />
-            <Stop offset="0.5"  stopColor="white" stopOpacity="0" />
+            <Stop offset="0"    stopColor="white" stopOpacity="0.35" />
+            <Stop offset="0.08" stopColor="white" stopOpacity="0.15" />
+            <Stop offset="0.2"  stopColor="white" stopOpacity="0.05" />
+            <Stop offset="0.4"  stopColor="white" stopOpacity="0" />
           </LinearGradient>
 
           {/* Bottom inner glow */}
@@ -131,8 +131,8 @@ export function GlossyBarSvg({ width, height, bars, overlayLine }: GlossyBarProp
 
           {/* Caustic */}
           <RadialGradient id="cs" cx="50%" cy="18%" rx="40%" ry="20%">
-            <Stop offset="0"   stopColor="white" stopOpacity="0.35" />
-            <Stop offset="0.6" stopColor="white" stopOpacity="0.06" />
+            <Stop offset="0"   stopColor="white" stopOpacity="0.15" />
+            <Stop offset="0.6" stopColor="white" stopOpacity="0.03" />
             <Stop offset="1"   stopColor="white" stopOpacity="0" />
           </RadialGradient>
 
@@ -143,6 +143,18 @@ export function GlossyBarSvg({ width, height, bars, overlayLine }: GlossyBarProp
             <Stop offset="1"   stopColor="white" stopOpacity="0" />
           </RadialGradient>
         </Defs>
+
+        {/* ══════════════════════════════════════════════
+            PROJECTION BACKGROUND BARS — grey ghost behind actual
+            ══════════════════════════════════════════════ */}
+        {projectionBars && projectionBars.map((pb, i) => {
+          if (!pb || pb.height < 1) return null;
+          return (
+            <Rect key={`proj-${i}`}
+              x={pb.x} y={pb.y} width={pb.width} height={pb.height}
+              rx={R} ry={R} fill="url(#gP)" />
+          );
+        })}
 
         {/* ══════════════════════════════════════════════
             BARS — liquid glass layers
@@ -187,10 +199,10 @@ export function GlossyBarSvg({ width, height, bars, overlayLine }: GlossyBarProp
               {/* 9 — Top specular catch-light */}
               {h > 10 && (
                 <Rect
-                  x={x + w * 0.12} y={y + 2}
-                  width={w * 0.76} height={2}
-                  rx={1} ry={1}
-                  fill="white" opacity={0.55}
+                  x={x + w * 0.15} y={y + 2}
+                  width={w * 0.7} height={1.5}
+                  rx={0.75} ry={0.75}
+                  fill="white" opacity={0.25}
                 />
               )}
             </React.Fragment>
