@@ -132,14 +132,14 @@ export function PropertyPickerModal({
         </View>
 
         <Text style={styles.subtitle}>
-          Only properties with iCal feeds are shown. Tap to expand units.
+          Only properties with PriceLabs listings are shown. Tap to expand units.
         </Text>
 
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
           {properties.length === 0 ? (
             <View style={styles.empty}>
               <Ionicons name="home-outline" size={40} color={Colors.textDim} />
-              <Text style={styles.emptyText}>No iCal-linked properties found</Text>
+              <Text style={styles.emptyText}>No PriceLabs-linked properties found</Text>
             </View>
           ) : (
             properties.map(prop => {

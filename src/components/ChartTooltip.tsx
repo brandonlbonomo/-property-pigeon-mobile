@@ -4,7 +4,7 @@ import { Colors, FontSize, Radius, Spacing } from '../constants/theme';
 import { fmt$ } from '../utils/format';
 
 const SCREEN_W = Dimensions.get('window').width;
-const TOOLTIP_W = 160;
+const TOOLTIP_W = 90;
 
 export interface TooltipData {
   value: number;
@@ -29,51 +29,36 @@ export function ChartTooltip({ data, chartLeft }: Props) {
 
   // Entrance animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.85)).current;
-  const translateYAnim = useRef(new Animated.Value(8)).current;
+  const scaleAnim = useRef(new Animated.Value(0.9)).current;
 
   useEffect(() => {
     fadeAnim.setValue(0);
-    scaleAnim.setValue(0.85);
-    translateYAnim.setValue(8);
+    scaleAnim.setValue(0.9);
     Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        tension: 80,
-        friction: 10,
-        useNativeDriver: true,
-      }),
-      Animated.timing(translateYAnim, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
+      Animated.spring(scaleAnim, { toValue: 1, tension: 100, friction: 12, useNativeDriver: true }),
     ]).start();
   }, [data.barIndex]);
 
   // Delta vs prior bar
-  const delta = priorValue != null ? value - priorValue : null;
   const deltaPct = priorValue != null && priorValue !== 0
     ? ((value - priorValue) / Math.abs(priorValue)) * 100
     : null;
 
-  // Format value
-  const displayVal = isPercent ? `${value.toFixed(1)}%` : fmt$(value);
-
-  // Delta coloring with inversion support
+  // Delta coloring
   const deltaColor = (d: number) => {
     if (invertDelta) return d <= 0 ? Colors.green : Colors.red;
     return d >= 0 ? Colors.green : Colors.red;
   };
 
-  // Clamp tooltip position within screen bounds
+  // Only show delta if there's data
+  const hasDelta = deltaPct != null && isFinite(deltaPct);
+  const hasYoY = yoyValue != null && isFinite(yoyValue) && yoyValue !== 0;
+
+  // Clamp position
   const rawLeft = data.barX - TOOLTIP_W / 2;
   const clampedLeft = Math.max(4, Math.min(rawLeft, SCREEN_W - chartLeft - TOOLTIP_W - 4));
+  const clampedBottom = Math.min(data.barY + 6, 90);
 
   return (
     <Animated.View
@@ -82,36 +67,32 @@ export function ChartTooltip({ data, chartLeft }: Props) {
         styles.container,
         {
           left: clampedLeft,
-          bottom: data.barY + 8,
+          bottom: clampedBottom,
           width: TOOLTIP_W,
           opacity: fadeAnim,
-          transform: [
-            { scale: scaleAnim },
-            { translateY: translateYAnim },
-          ],
+          transform: [{ scale: scaleAnim }],
         },
       ]}
     >
-      {/* Inner shine bar */}
-      <View style={styles.shineBar} />
+      {/* Label */}
+      <Text style={styles.label}>{data.label}</Text>
 
-      <Text style={styles.value}>{displayVal}</Text>
-      {delta != null && (
-        <Text style={[styles.delta, { color: deltaColor(delta) }]}>
-          {delta >= 0 ? '+' : ''}
-          {isPercent ? `${delta.toFixed(1)}pp` : fmt$(delta)}
-          {deltaPct != null ? ` / ${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%` : ''}
-          {data.priorLabel ? ` vs ${data.priorLabel}` : ''}
+      {/* Delta % — primary info */}
+      {hasDelta && (
+        <Text style={[styles.delta, { color: deltaColor(deltaPct!) }]}>
+          {deltaPct! >= 0 ? '+' : ''}{deltaPct!.toFixed(1)}%
         </Text>
       )}
-      {yoyValue != null && (
-        <Text style={[styles.yoy, { color: deltaColor(yoyValue) }]}>
-          {yoyValue >= 0 ? '+' : ''}{yoyValue.toFixed(1)}% YoY
+
+      {/* YoY — only if data exists */}
+      {hasYoY && (
+        <Text style={[styles.yoy, { color: deltaColor(yoyValue!) }]}>
+          {yoyValue! >= 0 ? '+' : ''}{yoyValue!.toFixed(1)}% YoY
         </Text>
       )}
 
       {/* Arrow */}
-      <View style={[styles.arrow, { left: Math.max(8, Math.min(data.barX - clampedLeft - 5, TOOLTIP_W - 18)) }]} />
+      <View style={[styles.arrow, { left: Math.max(6, Math.min(data.barX - clampedLeft - 4, TOOLTIP_W - 14)) }]} />
     </Animated.View>
   );
 }
@@ -120,56 +101,46 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     backgroundColor: Colors.glassOverlay,
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     borderWidth: 0.5,
     borderColor: Colors.glassBorder,
-    borderTopColor: Colors.glassHighlight,
-    borderTopWidth: 1,
-    paddingHorizontal: Spacing.sm + 2,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
     zIndex: 100,
     overflow: 'hidden',
+    alignItems: 'center',
     ...Platform.select({
       ios: {
         shadowColor: Colors.glassShadow,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.35,
-        shadowRadius: 20,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
       },
-      android: { elevation: 8 },
+      android: { elevation: 4 },
     }),
   },
-  shineBar: {
-    position: 'absolute',
-    top: 1,
-    left: 1,
-    right: 1,
-    height: 1,
-    backgroundColor: Colors.glassShine,
-  },
-  value: {
-    fontSize: FontSize.md,
-    fontWeight: '700',
-    color: Colors.text,
+  label: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Colors.textDim,
     textAlign: 'center',
   },
   delta: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '800',
     textAlign: 'center',
-    marginTop: 2,
   },
   yoy: {
-    fontSize: FontSize.xs,
+    fontSize: 9,
     fontWeight: '600',
     textAlign: 'center',
     marginTop: 1,
   },
   arrow: {
     position: 'absolute',
-    bottom: -5,
-    width: 10,
-    height: 10,
+    bottom: -4,
+    width: 8,
+    height: 8,
     backgroundColor: Colors.glassOverlay,
     borderRightWidth: 0.5,
     borderBottomWidth: 0.5,

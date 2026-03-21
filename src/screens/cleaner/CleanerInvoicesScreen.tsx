@@ -14,7 +14,7 @@ import { useSubscriptionGate } from '../../hooks/useSubscriptionGate';
 import { useProCheckout } from '../../hooks/useProCheckout';
 import { Card } from '../../components/Card';
 import { SwipePills } from '../../components/SwipePills';
-import { fmt$ } from '../../utils/format';
+import { fmt$ , localDateStr } from '../../utils/format';
 
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -432,7 +432,7 @@ export function CleanerInvoicesScreen() {
   };
 
   const handleAddLine = (invoiceId: string) => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr();
     setEditLine({
       invoiceId,
       index: null,
@@ -584,11 +584,11 @@ export function CleanerInvoicesScreen() {
         {TABS.map((tabKey) => {
           const list = tabKey === 'Pending' ? pendingInvoices : tabKey === 'Sent' ? sentInvoices : allInvoices;
           return (
-            <ScrollView
+            <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
               key={tabKey}
               style={{ width: SCREEN_W }}
               contentContainerStyle={styles.content}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
             >
               {error && (
                 <View style={styles.errorBanner}>
@@ -646,7 +646,7 @@ export function CleanerInvoicesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl },
+  content: { padding: Spacing.md, paddingTop: 140, paddingBottom: Spacing.xl },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,

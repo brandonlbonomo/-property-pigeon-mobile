@@ -3295,11 +3295,16 @@ def ical_sync():
         prop_id = prop.get("id") or prop.get("name") or ""
         prop_name = prop.get("label") or prop.get("name") or prop_id
 
+        unit_labels = prop.get("unitLabels") or []
         for unit_idx, url in enumerate(ical_urls):
             if not url or not url.strip():
                 continue
             url = url.strip()
-            unit_label = f"{prop_name} Unit {unit_idx + 1}" if len(ical_urls) > 1 else prop_name
+            if len(ical_urls) > 1:
+                custom_label = unit_labels[unit_idx] if unit_idx < len(unit_labels) and unit_labels[unit_idx] else f"Unit {unit_idx + 1}"
+                unit_label = f"{prop_name} {custom_label}"
+            else:
+                unit_label = prop_name
             try:
                 resp = requests.get(url, timeout=15)
                 resp.raise_for_status()
@@ -6344,24 +6349,23 @@ def cleaner_schedule():
             owner_props = owner_store.get("properties", [])
             prop_labels = {p.get("id", ""): p.get("label", p.get("id", "")) for p in owner_props}
 
-            short_names = owner_store.get("pricelabs_short_names", {})
-
-            for b in owner_bookings:
+            for i, b in enumerate(owner_bookings):
                 prop_id = b.get("prop_id", "")
                 if selected_props and prop_id not in selected_props:
                     continue
-                pl_id = str(b.get("listing_id") or b.get("pl_id") or "")
-                unit_name = short_names.get(pl_id, "") if pl_id else ""
+                listing_name = b.get("listing_name", "")
+                # Generate stable uid from event data
+                uid = f"{owner_id}_{prop_id}_{b.get('check_in','')}_{b.get('check_out','')}_{i}"
                 events.append({
                     "check_in": b.get("check_in", ""),
                     "check_out": b.get("check_out", ""),
                     "prop_id": prop_id,
-                    "prop_name": prop_labels.get(prop_id, prop_id),
+                    "prop_name": listing_name or prop_labels.get(prop_id, prop_id),
                     "owner": owner_name,
                     "owner_id": owner_id,
-                    "uid": b.get("uid", ""),
-                    "pl_id": pl_id,
-                    "unit_name": unit_name,
+                    "uid": uid,
+                    "pl_id": "",
+                    "unit_name": listing_name,
                     "guest_name": b.get("guest_name", ""),
                 })
         except Exception as e:
@@ -6386,12 +6390,11 @@ def cleaner_owner_properties(owner_id):
         return jsonify({"ok": False, "error": "Not following this owner"}), 403
     try:
         owner_store = _load_store_for_user(owner_id)
-        props = owner_store.get("properties", [])
-        pl_listings = owner_store.get("pricelabs_listings_raw", [])
-        pl_prop_ids = set(l.get("prop_id", "") for l in pl_listings if l.get("prop_id"))
-        # Only return properties with at least one PriceLabs listing
-        result = [{"id": p.get("id",""), "label": p.get("label", p.get("id",""))}
-                  for p in props if p.get("id","") in pl_prop_ids]
+        props = owner_store.get("custom_props", []) or owner_store.get("properties", [])
+        # Return all Airbnb properties that have iCal data
+        ical_prop_ids = set(e.get("prop_id", "") for e in owner_store.get("ical_events", []))
+        result = [{"id": p.get("id",""), "label": p.get("label", p.get("name", p.get("id","")))}
+                  for p in props if p.get("isAirbnb") and (p.get("id","") in ical_prop_ids or not ical_prop_ids)]
         return jsonify({"properties": result})
     except Exception:
         logger.warning("Failed to load owner store for %s", owner_id)
@@ -6413,24 +6416,23 @@ def cleaner_owner_units(owner_id):
         return jsonify({"ok": False, "error": "Not following this owner"}), 403
     try:
         owner_store = _load_store_for_user(owner_id)
-        props = owner_store.get("properties", [])
-        short_names = owner_store.get("pricelabs_short_names", {})
-        pl_listings = owner_store.get("pricelabs_listings_raw", [])
+        props = owner_store.get("custom_props", []) or owner_store.get("properties", [])
+        ical_events = owner_store.get("ical_events", [])
 
         result = []
         for p in props:
+            if not p.get("isAirbnb"):
+                continue
             pid = p.get("id", "")
-            plabel = p.get("label", p.get("id", ""))
-            # Find PriceLabs listings mapped to this property
-            prop_listings = [l for l in pl_listings if l.get("prop_id") == pid]
-            units = []
-            for l in prop_listings:
-                lid = str(l.get("id", ""))
-                uname = short_names.get(lid, l.get("short_label", ""))
-                if not uname:
-                    uname = plabel
-                units.append({"pl_id": lid, "unit_name": uname})
-            # If no listings, still include the property with an empty unit
+            plabel = p.get("label", p.get("name", pid))
+            # Find iCal events for this property to discover units
+            prop_events = [e for e in ical_events if e.get("prop_id") == pid]
+            seen_feeds = {}
+            for e in prop_events:
+                fk = e.get("feed_key", "")
+                if fk and fk not in seen_feeds:
+                    seen_feeds[fk] = e.get("listing_name", plabel)
+            units = [{"pl_id": fk, "unit_name": name} for fk, name in seen_feeds.items()]
             if not units:
                 units.append({"pl_id": "", "unit_name": plabel})
             result.append({"prop_id": pid, "prop_label": plabel, "units": units})
@@ -7340,7 +7342,6 @@ def messages_cleanings(other_user_id):
             owner_bookings = owner_store.get("ical_events", [])
             owner_props = owner_store.get("properties", [])
             prop_labels = {p.get("id", ""): p.get("label", p.get("id", "")) for p in owner_props}
-            short_names = owner_store.get("pricelabs_short_names", {})
             for b in owner_bookings:
                 prop_id = b.get("prop_id", "")
                 if selected_props and prop_id not in selected_props:
@@ -7348,8 +7349,7 @@ def messages_cleanings(other_user_id):
                 check_out = b.get("check_out", "")
                 if check_out < today:
                     continue
-                pl_id = str(b.get("listing_id") or b.get("pl_id") or "")
-                unit_name = short_names.get(pl_id, "") if pl_id else ""
+                unit_name = b.get("listing_name", "")
                 events.append({
                     "check_in": b.get("check_in", ""),
                     "check_out": check_out,
@@ -8617,32 +8617,29 @@ def property_request_create():
         host_id = uid
         cleaner_id = target_user_id
 
-    # Validate properties belong to host and have PriceLabs listings
+    # Validate properties belong to host
     host_store = _load_store_for_user(host_id)
-    host_props = host_store.get("properties", [])
-    pl_listings = host_store.get("pricelabs_listings_raw", [])
-    pl_prop_ids = set(l.get("prop_id", "") for l in pl_listings if l.get("prop_id"))
+    host_props = host_store.get("custom_props", []) or host_store.get("properties", [])
     host_prop_ids = set(p.get("id", "") for p in host_props)
 
     valid_ids = []
     valid_labels = []
     for pid in property_ids:
-        if pid in host_prop_ids and pid in pl_prop_ids:
+        if pid in host_prop_ids:
             valid_ids.append(pid)
             label = next((p.get("label", pid) for p in host_props if p.get("id") == pid), pid)
             valid_labels.append(label)
 
     if not valid_ids:
-        return jsonify({"error": "No valid PriceLabs-linked properties found"}), 400
+        return jsonify({"error": "No valid properties found for this host"}), 400
 
-    # Build unit labels for display if feed_keys provided
+    # Build unit labels from iCal events
     unit_labels = []
     if feed_keys:
-        short_names = host_store.get("pricelabs_short_names", {})
+        ical_events = host_store.get("ical_events", [])
+        feed_to_name = {e.get("feed_key", ""): e.get("listing_name", "") for e in ical_events}
         for fk in feed_keys:
-            uname = short_names.get(fk, "")
-            if not uname:
-                uname = fk[:8]
+            uname = feed_to_name.get(fk, fk[:8] if fk else "")
             unit_labels.append(uname)
 
     display_labels = unit_labels if unit_labels else valid_labels

@@ -6,6 +6,7 @@ import {
   NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as SecureStore from 'expo-secure-store';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { useUserStore } from '../../store/userStore';
@@ -258,6 +259,20 @@ function RevenueTab({
     });
   }, [allEvents, rates, revYear, thisMonth, now]);
 
+  // Monthly expense bars (overlay line on revenue chart)
+  const monthlyExpBars: BarData[] = useMemo(() => {
+    return MONTH_LABELS.map((label, i) => {
+      const ym = `${revYear}-${String(i + 1).padStart(2, '0')}`;
+      const exp = plaidTransactions
+        .filter(t => (t.date || '').slice(0, 7) === ym && (t.amount ?? 0) < 0)
+        .reduce((sum: number, t: any) => sum + Math.abs(t.amount ?? 0), 0);
+      const isCurrentMonth = ym === thisMonth;
+      const monthDate = new Date(revYear, i + 1, 0);
+      const isFuture = monthDate > now && !isCurrentMonth;
+      return { label, value: exp, isActual: !isFuture, isCurrent: isCurrentMonth };
+    });
+  }, [plaidTransactions, revYear, thisMonth, now]);
+
   // Quarterly revenue bars
   const quarterlyBars: BarData[] = useMemo(() => {
     const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
@@ -419,12 +434,28 @@ function RevenueTab({
         </View>
       </Card>
 
-      {/* Revenue chart */}
+      {/* Revenue / Expenses chart */}
       <Card>
-        <Text style={styles.sectionLabel}>REVENUE — {revYear}</Text>
-        <Text style={styles.bigValue}>{fmt$(yearTotal)}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Text style={[styles.sectionLabel, { color: Colors.green }]}>REVENUE</Text>
+          <Text style={[styles.sectionLabel, { color: Colors.textDim }]}>/</Text>
+          <Text style={[styles.sectionLabel, { color: Colors.red }]}>EXPENSES</Text>
+          <Text style={[styles.sectionLabel, { color: Colors.textDim, marginLeft: 4 }]}>— {revYear}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+          <Text style={styles.bigValue}>{fmt$(yearTotal)}</Text>
+          <Text style={[styles.bigValue, { color: Colors.red, fontSize: FontSize.lg }]}>
+            {fmt$(monthlyExpBars.reduce((s, b) => s + b.value, 0))}
+          </Text>
+        </View>
         <YearTabs years={years} selected={revYear} onSelect={setRevYear} />
-        <BarChart bars={monthlyBars} color={Colors.green} height={120} onDoubleTap={handleDoubleTap} />
+        <BarChart
+          bars={monthlyBars}
+          overlayLine={{ data: monthlyExpBars, color: Colors.red }}
+          color={Colors.green}
+          height={120}
+          onDoubleTap={handleDoubleTap}
+        />
       </Card>
 
       {/* Quarterly Revenue */}
@@ -671,7 +702,7 @@ function ProjectionsTab({ allEvents, rates }: { allEvents: CleanerEvent[]; rates
   const projBars: BarData[] = projection.map((row, i) => ({
     label: i === 0 ? 'Now' : `Yr${row.yearOffset}`,
     value: row.netIncome,
-    isActual: i === 0,
+    isActual: true,
     isCurrent: i === 0,
   }));
 
@@ -906,29 +937,7 @@ export function CleanerMoneyScreen() {
 
   return (
     <View style={styles.outerContainer}>
-      {error && (
-        <View style={[styles.errorBanner, { marginHorizontal: Spacing.md, marginTop: Spacing.md }]}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />
-          <Text style={styles.errorBannerText}>{error}</Text>
-        </View>
-      )}
-
-      {/* Period Toggle — scroll-driven */}
-      <View style={{ paddingHorizontal: Spacing.md }}>
-        <SwipePills
-          compact
-          items={[
-            { key: 'Revenue' as Tab, label: 'Revenue' },
-            { key: 'Projections' as Tab, label: 'Projections' },
-          ]}
-          selected={tab}
-          onSelect={handlePillSelect}
-          scrollOffset={scrollX}
-          pageWidth={SCREEN_W}
-        />
-      </View>
-
-      {/* Horizontal paginated content */}
+      {/* Horizontal paginated content — scrolls behind sub-pill overlay */}
       <Animated.ScrollView
         ref={horizontalRef as any}
         horizontal
@@ -949,7 +958,7 @@ export function CleanerMoneyScreen() {
         <ScrollView
           style={{ width: SCREEN_W }}
           contentContainerStyle={styles.content}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
           onTouchStart={dismissAllChartTooltips}
         >
           <RevenueTab
@@ -971,13 +980,45 @@ export function CleanerMoneyScreen() {
           <ProjectionsTab allEvents={allEvents} rates={rates} />
         </ScrollView>
       </Animated.ScrollView>
+
+      {/* ── Frosted glass sub-pill overlay ── */}
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingTop: 150, paddingBottom: 25, paddingHorizontal: Spacing.md }} pointerEvents="box-none">
+        <LinearGradient
+          colors={[
+            'rgba(248,249,250,0.95)',
+            'rgba(248,249,250,0.85)',
+            'rgba(248,249,250,0.5)',
+            'rgba(248,249,250,0)',
+          ]}
+          locations={[0, 0.65, 0.85, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+        {error && (
+          <View style={[styles.errorBanner, { marginBottom: Spacing.sm }]}>
+            <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />
+            <Text style={styles.errorBannerText}>{error}</Text>
+          </View>
+        )}
+        <SwipePills
+          compact
+          items={[
+            { key: 'Revenue' as Tab, label: 'Revenue' },
+            { key: 'Projections' as Tab, label: 'Projections' },
+          ]}
+          selected={tab}
+          onSelect={handlePillSelect}
+          scrollOffset={scrollX}
+          pageWidth={SCREEN_W}
+        />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl },
+  content: { padding: Spacing.md, paddingTop: 200, paddingBottom: Spacing.xl },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -1115,7 +1156,7 @@ const styles = StyleSheet.create({
   // Locked
   lockedContainer: {
     alignItems: 'center', justifyContent: 'center',
-    paddingVertical: Spacing.xl * 2, paddingHorizontal: Spacing.xl,
+    paddingTop: 180, paddingBottom: Spacing.xl * 2, paddingHorizontal: Spacing.xl,
   },
   lockedCircle: {
     width: 80, height: 80, borderRadius: 40,

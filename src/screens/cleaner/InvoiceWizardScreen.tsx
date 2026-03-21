@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Alert, Platform,
+  View, Text, StyleSheet, TouchableOpacity, Alert, Platform, KeyboardAvoidingView,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as SecureStore from 'expo-secure-store';
@@ -180,7 +180,7 @@ export function InvoiceWizardScreen({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       {/* Header */}
       <View style={styles.header}>
         {step > 0 ? (
@@ -259,7 +259,7 @@ export function InvoiceWizardScreen({ navigation }: any) {
           />
         )}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
   nextText: { fontSize: FontSize.md, color: Colors.primary, fontWeight: '600' },
   dotsRow: {
     flexDirection: 'row', justifyContent: 'center', gap: 8,
-    paddingBottom: Spacing.sm,
+    paddingTop: Spacing.sm, paddingBottom: Spacing.md,
   },
   dot: {
     width: 8, height: 8, borderRadius: 4,

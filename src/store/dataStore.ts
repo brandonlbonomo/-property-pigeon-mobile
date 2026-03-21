@@ -44,8 +44,6 @@ interface DataState {
   merchantMemory: CacheEntry<Record<string, string>> | null;
   props: CacheEntry<any[]> | null;
   icalEvents: CacheEntry<any[]> | null;
-  icalFeeds: CacheEntry<any[]> | null;
-  plBookings: CacheEntry<any[]> | null;
   invGroups: CacheEntry<any[]> | null;
   analytics: CacheEntry<any> | null;
   customCategories: CacheEntry<any[]> | null;
@@ -61,9 +59,7 @@ interface DataState {
   saveCategoryTag: (txId: string, categoryId: string | null) => Promise<void>;
   saveMerchantMemory: (payee: string, propId: string) => Promise<void>;
   fetchProps: (force?: boolean) => Promise<any[]>;
-  fetchIcalEvents: (force?: boolean) => Promise<any[]>;
-  fetchIcalFeeds: (force?: boolean) => Promise<any[]>;
-  fetchPlBookings: (force?: boolean) => Promise<any[]>;
+  fetchCalendarEvents: (force?: boolean) => Promise<any[]>;
   fetchInvGroups: (force?: boolean) => Promise<any[]>;
   fetchAnalytics: (force?: boolean) => Promise<any>;
   fetchCustomCategories: (force?: boolean) => Promise<any[]>;
@@ -72,7 +68,6 @@ interface DataState {
   fetchTransactionsByMonth: (yearMonth: string, force?: boolean) => Promise<any[]>;
   fetchReceivedInvoices: (force?: boolean) => Promise<any[]>;
   deleteProperty: (propId: string) => Promise<any>;
-  deleteIcalFeed: (feedKey: string) => Promise<void>;
   clearError: () => void;
   invalidateAll: () => void;
 }
@@ -85,8 +80,6 @@ export const useDataStore = create<DataState>((set, get) => ({
   merchantMemory: null,
   props: null,
   icalEvents: null,
-  icalFeeds: null,
-  plBookings: null,
   invGroups: null,
   analytics: null,
   customCategories: null,
@@ -287,9 +280,9 @@ export const useDataStore = create<DataState>((set, get) => ({
     });
   },
 
-  // API returns: { events: [{ start, end, propId, ... }] }
-  // Normalize to: [{ check_in, check_out, prop_id, summary, nights, booking_source, guest_name }]
-  fetchIcalEvents: async (force = false) => {
+  // Fetch calendar events from Airbnb iCal feeds
+  // First sync is awaited so data appears immediately; subsequent syncs are background
+  fetchCalendarEvents: async (force = false) => {
     const cached = get().icalEvents;
     if (!force && isFresh(cached)) return cached!.data;
     if (!isDataActive()) {
@@ -298,64 +291,40 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
     return dedup('icalEvents', async () => {
       try {
-        const raw = await apiFetch('/api/ical/events');
+        const props = useUserStore.getState().profile?.properties || [];
+        const hasIcalUrls = props.some(p => p.icalUrls?.some(u => u));
+        if (hasIcalUrls) {
+          // Await sync when we have no cached events (first load / after invalidation).
+          // Background sync on subsequent refreshes so UI stays fast.
+          const hasCachedEvents = (get().icalEvents?.data?.length ?? 0) > 0;
+          if (hasCachedEvents && !force) {
+            apiFetch('/api/ical/sync', { method: 'POST' }).catch(() => {});
+          } else {
+            try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch {}
+          }
+        }
+        const raw = await apiFetch('/api/calendar/events');
         const events = Array.isArray(raw) ? raw : (raw?.events ?? []);
+
         const data = events.map((e: any) => ({
-          check_in: (e.start ?? e.check_in ?? '').slice(0, 10),
-          check_out: (e.end ?? e.check_out ?? '').slice(0, 10),
-          prop_id: e.propId ?? e.prop_id ?? '',
-          feed_key: e.feed_key ?? '',
+          check_in: (e.check_in ?? '').slice(0, 10),
+          check_out: (e.check_out ?? '').slice(0, 10),
+          prop_id: e.prop_id ?? '',
+          feed_key: e.feed_key ?? e.prop_id ?? '',
           summary: e.summary ?? '',
           nights: e.nights ?? 0,
           booking_source: e.booking_source ?? '',
           guest_name: e.guest_name ?? null,
+          listing_name: e.listing_name ?? '',
+          event_type: e.event_type ?? '',
         }));
-        set({ icalEvents: { data, fetchedAt: Date.now() } });
-        return data;
-      } catch {
-        // ical events fetch failed
-        set({ icalEvents: { data: [], fetchedAt: Date.now() }, lastError: 'Could not load calendar events. Pull down to retry.' });
-        return [];
-      }
-    });
-  },
 
-  // Fetch iCal feed metadata (feed_key → listingName mapping)
-  fetchIcalFeeds: async (force = false) => {
-    const cached = get().icalFeeds;
-    if (!force && isFresh(cached)) return cached!.data;
-    return dedup('icalFeeds', async () => {
-      try {
-        const raw = await apiFetch('/api/ical/feeds');
-        const feeds = Array.isArray(raw) ? raw : (raw?.feeds ?? []);
-        set({ icalFeeds: { data: feeds, fetchedAt: Date.now() } });
-        return feeds;
-      } catch {
-        set({ icalFeeds: { data: [], fetchedAt: Date.now() } });
+        set({ icalEvents: { data, fetchedAt: Date.now() }, lastError: null });
+        return data;
+      } catch (err: any) {
+        const msg = err?.message || 'Could not load calendar events. Pull down to retry.';
+        set({ icalEvents: { data: [], fetchedAt: Date.now() }, lastError: msg });
         return [];
-      }
-    });
-  },
-
-  // 404 — gracefully return empty array
-  fetchPlBookings: async (force = false) => {
-    const cached = get().plBookings;
-    if (!force && isFresh(cached)) return cached!.data;
-    if (!isDataActive()) {
-      set({ plBookings: { data: [], fetchedAt: Date.now() } });
-      return [];
-    }
-    return dedup('plBookings', async () => {
-      try {
-        const raw = await apiFetch('/api/pl-bookings');
-        const data = Array.isArray(raw) ? raw : (raw?.bookings ?? []);
-        set({ plBookings: { data, fetchedAt: Date.now() } });
-        return data;
-      } catch {
-        // pl-bookings unavailable
-        const data: any[] = [];
-        set({ plBookings: { data, fetchedAt: Date.now() } });
-        return data;
       }
     });
   },
@@ -367,10 +336,10 @@ export const useDataStore = create<DataState>((set, get) => ({
     if (!force && isFresh(cached)) return cached!.data;
     return dedup('invGroups', async () => {
       try {
-        // Fetch inventory + iCal events in parallel for depletion calc
+        // Fetch inventory + calendar events in parallel for depletion calc
         const [raw, icalEvents] = await Promise.all([
           apiFetch('/api/inv-groups'),
-          get().fetchIcalEvents().catch(() => [] as any[]),
+          get().fetchCalendarEvents().catch(() => [] as any[]),
         ]);
         const properties = useUserStore.getState().profile?.properties || [];
         const today = new Date();
@@ -563,22 +532,17 @@ export const useDataStore = create<DataState>((set, get) => ({
     // Cascade: clear all caches since property deletion affects everything
     set(s => ({
       cockpit: null, transactions: null, tags: null, categoryTags: null, merchantMemory: null,
-      props: null, icalEvents: null, icalFeeds: null, plBookings: null,
+      props: null, icalEvents: null,
       invGroups: null, analytics: null, lastError: null, dataVersion: s.dataVersion + 1,
     }));
     return res;
-  },
-
-  deleteIcalFeed: async (feedKey: string) => {
-    await apiFetch(`/api/ical/feeds/${encodeURIComponent(feedKey)}`, { method: 'DELETE' });
-    set({ icalEvents: null, icalFeeds: null });
   },
 
   clearError: () => set({ lastError: null }),
 
   invalidateAll: () => set(s => ({
     cockpit: null, transactions: null, tags: null, categoryTags: null, merchantMemory: null,
-    props: null, icalEvents: null, icalFeeds: null, plBookings: null,
+    props: null, icalEvents: null,
     invGroups: null, analytics: null, customCategories: null, lastError: null,
     dataVersion: s.dataVersion + 1,
   })),

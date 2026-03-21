@@ -21,12 +21,14 @@ export interface UserProperty {
   unitLabels?: string[];
   /** Per-unit photos keyed by unit label e.g. "22 B" */
   unitPhotos?: Record<string, string[]>;
-  /** iCal feeds owned by this property */
-  icalFeeds?: { url: string; listingName?: string }[];
   /** Valuation fields */
   purchasePrice?: number;
   purchaseDate?: string; // YYYY-MM-DD
   valuationOptOut?: boolean;
+  /** Down payment percentage (0-100) for cash-on-cash return calculation */
+  downPaymentPct?: number;
+  /** Per-unit Airbnb iCal feed URLs. icalUrls[0] = unit 0's feed. */
+  icalUrls?: string[];
 }
 
 /** Generate a stable ID for a property from its name */
@@ -39,7 +41,6 @@ export interface UserProfile {
   email: string;
   portfolioType: 'str' | 'ltr' | 'both';
   properties: UserProperty[];
-  priceLabsApiKey?: string;
   plaidConnected?: boolean;
   unitCount?: number;
   projectionStyle?: 'conservative' | 'normal' | 'bullish';

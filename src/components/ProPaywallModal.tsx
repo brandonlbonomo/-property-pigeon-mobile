@@ -66,7 +66,6 @@ export function ProPaywallScreen() {
   const [plan, setPlan] = useState<'monthly' | 'yearly'>('monthly');
   const [pricing, setPricing] = useState<ProductPricing>({ monthly: null, yearly: null });
 
-  // Fetch prices on mount
   useEffect(() => {
     getProductPrices(isCleaner ? 'cleaner' : 'owner')
       .then(setPricing)
@@ -79,6 +78,10 @@ export function ProPaywallScreen() {
       navigationRef.goBack();
     }
   }, []);
+
+  const selectPlan = (p: 'monthly' | 'yearly') => {
+    setPlan(p);
+  };
 
   const planName = isCleaner ? 'Cleaner Pro' : 'Portfolio Pigeon Pro';
   const features = isCleaner ? CLEANER_FEATURES : OWNER_FEATURES;
@@ -102,7 +105,6 @@ export function ProPaywallScreen() {
       }
     } catch (e: any) {
       if (e?.userCancelled) return;
-      // User may already be subscribed — StoreKit throws when re-purchasing.
       const isActive = await checkProEntitlement();
       if (isActive) {
         await setProfile({ isSubscriptionActive: true });
@@ -124,8 +126,6 @@ export function ProPaywallScreen() {
         dismiss('restored');
         return;
       }
-      // Fallback: restorePurchases may return info without the expected entitlement key
-      // but the entitlement could still be active
       const isActive = await checkProEntitlement();
       if (isActive) {
         await setProfile({ isSubscriptionActive: true });
@@ -145,45 +145,62 @@ export function ProPaywallScreen() {
     <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 }]}>
       <TouchableOpacity activeOpacity={0.7} style={styles.closeBtn}
         onPress={() => dismiss('cancelled')}>
-        <Ionicons name="close" size={24} color={Colors.textSecondary} />
+        <Ionicons name="close" size={22} color={Colors.textSecondary} />
       </TouchableOpacity>
 
+      {/* Hero */}
       <View style={styles.hero}>
         <View style={styles.iconCircle}>
-          <Ionicons name="diamond-outline" size={36} color={Colors.primary} />
+          <Ionicons name="diamond-outline" size={32} color={Colors.green} />
         </View>
         <Text style={styles.title}>{planName}</Text>
         <View style={styles.trialBadge}>
-          <Ionicons name="gift-outline" size={14} color={Colors.green} />
+          <Ionicons name="gift-outline" size={13} color={Colors.green} />
           <Text style={styles.trialText}>Free trial included</Text>
         </View>
       </View>
 
-      <View style={styles.planToggle}>
-        <TouchableOpacity activeOpacity={0.7}
-          style={[styles.planOption, plan === 'monthly' && styles.planOptionActive]}
-          onPress={() => setPlan('monthly')}>
-          <Text style={[styles.planLabel, plan === 'monthly' && styles.planLabelActive]}>Monthly</Text>
-          <Text style={[styles.planPrice, plan === 'monthly' && styles.planPriceActive]}>{monthlyPrice}/mo</Text>
+      {/* Side-by-side liquid glass plan cards */}
+      <View style={styles.planRow}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[styles.planCard, plan === 'monthly' && styles.planCardActive]}
+          onPress={() => selectPlan('monthly')}
+        >
+          {plan === 'monthly' && <View style={styles.planCardShine} />}
+          <Text style={[styles.planCardLabel, plan === 'monthly' && styles.planCardLabelActive]}>Monthly</Text>
+          <Text style={[styles.planCardPrice, plan === 'monthly' && styles.planCardPriceActive]}>{monthlyPrice}</Text>
+          <Text style={[styles.planCardPeriod, plan === 'monthly' && styles.planCardPeriodActive]}>/month</Text>
         </TouchableOpacity>
-        <TouchableOpacity activeOpacity={0.7}
-          style={[styles.planOption, plan === 'yearly' && styles.planOptionActive]}
-          onPress={() => setPlan('yearly')}>
-          <Text style={[styles.planLabel, plan === 'yearly' && styles.planLabelActive]}>Yearly</Text>
-          <Text style={[styles.planPrice, plan === 'yearly' && styles.planPriceActive]}>{yearlyPrice}/yr</Text>
-          <Text style={[styles.planSavings, plan === 'yearly' && { color: '#fff' }]}>{yearlyMonthly}/mo</Text>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[styles.planCard, plan === 'yearly' && styles.planCardActive]}
+          onPress={() => selectPlan('yearly')}
+        >
+          {plan === 'yearly' && <View style={styles.planCardShine} />}
+          <View style={styles.saveBadge}>
+            <Text style={styles.saveBadgeText}>SAVE 33%</Text>
+          </View>
+          <Text style={[styles.planCardLabel, plan === 'yearly' && styles.planCardLabelActive]}>Yearly</Text>
+          <Text style={[styles.planCardPrice, plan === 'yearly' && styles.planCardPriceActive]}>{yearlyPrice}</Text>
+          <Text style={[styles.planCardPeriod, plan === 'yearly' && styles.planCardPeriodActive]}>/year</Text>
+          <Text style={[styles.planCardSub, plan === 'yearly' && styles.planCardSubActive]}>{yearlyMonthly}/mo</Text>
         </TouchableOpacity>
       </View>
 
+      {/* Features */}
       <View style={styles.features}>
         {features.map((f, i) => (
           <View key={i} style={styles.featureRow}>
-            <Ionicons name="checkmark-circle" size={18} color={Colors.green} />
+            <View style={styles.featureCheck}>
+              <Ionicons name="checkmark" size={14} color={Colors.green} />
+            </View>
             <Text style={styles.featureText}>{f}</Text>
           </View>
         ))}
       </View>
 
+      {/* CTA */}
       <View style={styles.buttons}>
         <TouchableOpacity
           style={[styles.primaryBtn, (loading || loadingPrices) && { opacity: 0.6 }]}
@@ -223,52 +240,95 @@ export function ProPaywallScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
-  content: { padding: Spacing.lg, paddingBottom: 40 },
+  content: { padding: Spacing.lg, alignItems: 'center' },
   closeBtn: {
-    alignSelf: 'flex-end', width: 36, height: 36, borderRadius: 18,
-    backgroundColor: Colors.glassHeavy, alignItems: 'center', justifyContent: 'center',
-    marginBottom: Spacing.md,
+    alignSelf: 'flex-end', width: 34, height: 34, borderRadius: 17,
+    backgroundColor: Colors.glassHeavy, borderWidth: 0.5, borderColor: Colors.glassBorder,
+    alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md,
+    ...Platform.select({
+      ios: { shadowColor: Colors.glassShadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
+    }),
   },
   hero: { alignItems: 'center', marginBottom: Spacing.lg },
   iconCircle: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
-    marginBottom: Spacing.md,
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: Colors.glassHeavy, borderWidth: 0.5, borderColor: Colors.glassBorder,
+    alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.sm,
+    ...Platform.select({
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 },
+    }),
   },
-  title: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
+  title: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.text },
   trialBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
-    paddingHorizontal: Spacing.md, paddingVertical: 6, marginTop: Spacing.md,
+    paddingHorizontal: Spacing.sm + 4, paddingVertical: 5, marginTop: Spacing.sm,
   },
-  trialText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.green },
-  planToggle: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.lg },
-  planOption: {
-    flex: 1, padding: Spacing.md, borderRadius: Radius.lg,
-    borderWidth: 2, borderColor: Colors.border, alignItems: 'center',
+  trialText: { fontSize: 12, fontWeight: '700', color: Colors.green },
+
+  // Plan cards — side by side liquid glass
+  planRow: {
+    flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.lg, width: '100%',
   },
-  planOptionActive: { borderColor: Colors.primary, backgroundColor: Colors.green },
-  planLabel: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
-  planLabelActive: { color: '#fff' },
-  planPrice: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.text, marginTop: 2 },
-  planPriceActive: { color: '#fff' },
-  planSavings: { fontSize: FontSize.xs, color: Colors.textDim, marginTop: 2 },
-  features: { gap: Spacing.md, marginBottom: Spacing.xl },
+  planCard: {
+    flex: 1, alignItems: 'center', paddingVertical: Spacing.lg, paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.xl, backgroundColor: Colors.glassHeavy,
+    borderWidth: 1.5, borderColor: Colors.glassBorder,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: Colors.glassShadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 },
+    }),
+  },
+  planCardActive: {
+    borderColor: Colors.green, backgroundColor: Colors.glass,
+    borderTopColor: Colors.glassHighlight, borderTopWidth: 2,
+    ...Platform.select({
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 16 },
+    }),
+  },
+  planCardShine: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: '45%',
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+  },
+  planCardLabel: { fontSize: 12, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5, marginBottom: 4, zIndex: 1 },
+  planCardLabelActive: { color: Colors.green },
+  planCardPrice: { fontSize: 28, fontWeight: '900', color: Colors.text, letterSpacing: -0.5, zIndex: 1 },
+  planCardPriceActive: { color: Colors.text },
+  planCardPeriod: { fontSize: 12, fontWeight: '500', color: Colors.textDim, marginTop: 2, zIndex: 1 },
+  planCardPeriodActive: { color: Colors.textSecondary },
+  planCardSub: { fontSize: 11, fontWeight: '600', color: Colors.textDim, marginTop: 4, zIndex: 1 },
+  planCardSubActive: { color: Colors.green },
+  saveBadge: {
+    position: 'absolute', top: 8, right: 8,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
+    paddingHorizontal: 6, paddingVertical: 2, zIndex: 2,
+  },
+  saveBadgeText: { fontSize: 8, fontWeight: '800', color: Colors.green, letterSpacing: 0.3 },
+
+  // Features
+  features: { gap: Spacing.md, marginBottom: Spacing.xl, width: '100%' },
   featureRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  featureText: { fontSize: FontSize.md, color: Colors.text, flex: 1 },
-  buttons: { gap: Spacing.sm },
+  featureCheck: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center',
+  },
+  featureText: { fontSize: FontSize.sm, color: Colors.text, flex: 1, fontWeight: '500' },
+
+  // Buttons
+  buttons: { gap: Spacing.sm, width: '100%' },
   primaryBtn: {
     backgroundColor: Colors.green, borderRadius: Radius.lg,
     padding: Spacing.md + 2, alignItems: 'center',
     ...Platform.select({
-      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 20 },
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 16 },
     }),
   },
-  primaryBtnText: { color: '#FFFFFF', fontSize: FontSize.md, fontWeight: '600' },
+  primaryBtnText: { color: '#FFFFFF', fontSize: FontSize.md, fontWeight: '700' },
   restoreBtn: { alignItems: 'center', padding: Spacing.sm },
-  restoreText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '500' },
+  restoreText: { color: Colors.text, fontSize: FontSize.sm, fontWeight: '600' },
   skipBtn: { alignItems: 'center', padding: Spacing.sm },
   skipText: { color: Colors.textDim, fontSize: FontSize.sm },
   disclosure: { fontSize: 9, color: Colors.textDim, textAlign: 'center', lineHeight: 13, marginTop: Spacing.sm },
-  link: { color: Colors.primary, textDecorationLine: 'underline' },
+  link: { color: Colors.textSecondary, textDecorationLine: 'underline' },
 });

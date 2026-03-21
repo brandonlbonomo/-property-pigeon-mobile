@@ -105,7 +105,7 @@ export function SearchScreen() {
 
       {loading && <ActivityIndicator size="small" color={Colors.primary} style={{ marginTop: Spacing.lg }} />}
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
         {searchError && (
           <View style={styles.errorBanner}>
             <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />

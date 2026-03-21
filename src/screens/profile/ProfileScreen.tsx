@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl, Platform,
-  TouchableOpacity, Modal, Switch, ActivityIndicator, Image, Dimensions, FlatList,
+  TouchableOpacity, Modal, Switch, ActivityIndicator, Image, Dimensions, FlatList, TextInput, KeyboardAvoidingView,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
@@ -80,7 +80,7 @@ export function ProfileScreen() {
   const profile = useUserStore(s => s.profile);
   const setProfile = useUserStore(s => s.setProfile);
   const { isActive: isPro } = useSubscriptionGate();
-  const { fetchCockpit, fetchIcalEvents, fetchInvGroups, fetchTransactions, fetchCategoryTags, saveCategoryTag, fetchCustomCategories } = useDataStore();
+  const { fetchCockpit, fetchCalendarEvents, fetchInvGroups, fetchTransactions, fetchCategoryTags, saveCategoryTag, fetchCustomCategories } = useDataStore();
   const [cockpit, setCockpit] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [invGroups, setInvGroups] = useState<any[]>([]);
@@ -123,7 +123,7 @@ export function ProfileScreen() {
       setError(null);
       const results = await Promise.all([
         fetchCockpit(force),
-        isSTR ? fetchIcalEvents(force).catch(() => []) : Promise.resolve([]),
+        isSTR ? fetchCalendarEvents(force).catch(() => []) : Promise.resolve([]),
         isSTR ? fetchInvGroups(force).catch(() => []) : Promise.resolve([]),
         apiGetPortfolioScore().catch(() => ({ score: null })),
         fetchTransactions(force).catch(() => []),
@@ -149,7 +149,7 @@ export function ProfileScreen() {
     }
     setLoading(false);
     setRefreshing(false);
-  }, [fetchCockpit, fetchIcalEvents, fetchInvGroups, fetchTransactions, fetchCategoryTags, fetchCustomCategories, isSTR]);
+  }, [fetchCockpit, fetchCalendarEvents, fetchInvGroups, fetchTransactions, fetchCategoryTags, fetchCustomCategories, isSTR]);
 
   useEffect(() => { load(); }, []);
 
@@ -170,7 +170,16 @@ export function ProfileScreen() {
   const totalUnits = (profile?.properties || []).reduce((sum, p) => sum + (p.units || 0), 0);
   const isPlaidConnected = profile?.plaidConnected === true;
   const projStyle = profile?.projectionStyle || 'normal';
-  const totalInvestment = profile?.totalInvestment || 0;
+  const totalInvestment = useMemo(() => {
+    const properties = profile?.properties || [];
+    const perPropTotal = properties.reduce((sum: number, p: any) => {
+      if (p.purchasePrice && p.downPaymentPct) {
+        return sum + (p.purchasePrice * p.downPaymentPct / 100);
+      }
+      return sum;
+    }, 0);
+    return perPropTotal > 0 ? perPropTotal : (profile?.totalInvestment || 0);
+  }, [profile?.properties, profile?.totalInvestment]);
 
   // ── Per-property P/L ──
   const revByProp = cockpit?.revenue_by_property || {};
@@ -324,7 +333,7 @@ export function ProfileScreen() {
     const payee = tx?.payee || tx?.name || '';
     if (!payee || payee.length < 3) return;
     const tagLabel = tagValue.startsWith('__')
-      ? (tagValue === '__rental_income__' ? 'Airbnb Income' : tagValue === '__internal_transfer__' ? 'Internal Transfer' : tagValue)
+      ? (tagValue === '__rental_income__' ? 'Rental Income' : tagValue === '__internal_transfer__' ? 'Internal Transfer' : tagValue)
       : propLabel(tagValue);
     Alert.alert(
       'Create Auto-Tag Rule?',
@@ -502,7 +511,7 @@ export function ProfileScreen() {
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
       {...({delaysContentTouches: false} as any)}
     >
       {error && (
@@ -1000,7 +1009,7 @@ export function ProfileScreen() {
         }
       })}
 
-      {/* ── Step 1: Property / Airbnb Income Bottom Sheet ── */}
+      {/* ── Step 1: Property / Rental Income Bottom Sheet ── */}
       <Modal
         visible={txTagStep === 'property' && (!!txTaggingId || (multiSelectMode && selectedTxIds.size > 0))}
         transparent
@@ -1024,7 +1033,7 @@ export function ProfileScreen() {
                   || 'Transaction')}
             </Text>
 
-            {/* Airbnb Income shortcut */}
+            {/* Rental Income shortcut */}
             <TouchableOpacity
               activeOpacity={0.7}
               style={[tagSheetStyles.option, { borderColor: Colors.green + '40', backgroundColor: Colors.greenDim }]}
@@ -1073,7 +1082,7 @@ export function ProfileScreen() {
             >
               <Ionicons name="logo-usd" size={16} color={Colors.green} />
               <View style={tagSheetStyles.optionText}>
-                <Text style={[tagSheetStyles.optionLabel, { color: Colors.green }]}>Airbnb Income</Text>
+                <Text style={[tagSheetStyles.optionLabel, { color: Colors.green }]}>Rental Income</Text>
                 <Text style={tagSheetStyles.optionHint}>Split across properties by booking nights</Text>
               </View>
             </TouchableOpacity>
@@ -1265,6 +1274,7 @@ export function ProfileScreen() {
         animationType="slide"
         onRequestClose={() => { setTxTagStep('idle'); setTxTaggingId(null); setSplitData(null); }}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <TouchableOpacity activeOpacity={1} style={tagSheetStyles.overlay}
           onPress={() => { setTxTagStep('idle'); setTxTaggingId(null); setSplitData(null); }}>
           <View style={[tagSheetStyles.sheet, { maxHeight: '70%' }]} onStartShouldSetResponder={() => true}>
@@ -1277,9 +1287,9 @@ export function ProfileScreen() {
                 <Text style={tagSheetStyles.subtitle}>
                   {splitData.has_ical
                     ? `Split ${fmt$(splitData.total_amount)} based on ${splitData.splits.reduce((s: number, sp: any) => s + sp.nights, 0)} booking nights`
-                    : `No iCal bookings found — adjust split manually`}
+                    : `No bookings found — adjust split manually`}
                 </Text>
-                <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
                   {(splitData.splits || []).map((sp: any, idx: number) => (
                     <View key={sp.prop_id} style={[tagSheetStyles.option, { flexDirection: 'column', alignItems: 'stretch', gap: 6 }]}>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1378,6 +1388,7 @@ export function ProfileScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Drill-down modal */}
@@ -1431,10 +1442,10 @@ export function ProfileScreen() {
           ) : (
           <>
           <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
-            <View style={{ width: 36, height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2 }} />
+            <View style={{ width: 36, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2 }} />
           </View>
           <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: Spacing.xl * 2 }}
-            showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets
             scrollEventThrottle={16} bounces={true}>
             <Text style={modalStyles.title}>{selectedProperty?.name}</Text>
             {selectedProperty?.address ? (
@@ -1686,7 +1697,7 @@ export function ProfileScreen() {
       {/* ── Customize Profile Modal ── */}
       <Modal visible={showCustomize} transparent animationType="slide" onRequestClose={() => setShowCustomize(false)}>
         <TouchableOpacity activeOpacity={1} style={modalStyles.overlay} onPress={() => setShowCustomize(false)}>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ justifyContent: 'flex-end', flexGrow: 1 }} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ justifyContent: 'flex-end', flexGrow: 1 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
           <View style={modalStyles.card} onStartShouldSetResponder={() => true}>
             <View style={modalStyles.handle} />
             <Text style={modalStyles.title}>CUSTOMIZE PROFILE</Text>
@@ -1724,7 +1735,7 @@ export function ProfileScreen() {
                   <Switch
                     value={cardVisibility[opt.key] !== false}
                     onValueChange={() => toggleCard(opt.key)}
-                    trackColor={{ true: Colors.green, false: 'rgba(255,255,255,0.15)' }}
+                    trackColor={{ true: Colors.green, false: 'rgba(0,0,0,0.12)' }}
                   />
                 </View>
                 {i < availableCards.length - 1 && <View style={modalStyles.divider} />}
@@ -1868,7 +1879,7 @@ const modalStyles = StyleSheet.create({
     padding: Spacing.lg, paddingBottom: Spacing.xl * 2,
   },
   handle: {
-    width: 36, height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2,
+    width: 36, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2,
     alignSelf: 'center', marginBottom: Spacing.lg,
   },
   title: {
@@ -1902,7 +1913,7 @@ const modalStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl },
+  content: { padding: Spacing.md, paddingTop: 140, paddingBottom: Spacing.xl },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -2216,7 +2227,7 @@ const tagSheetStyles = StyleSheet.create({
     }),
   },
   handle: {
-    width: 36, height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2,
+    width: 36, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2,
     alignSelf: 'center', marginBottom: Spacing.lg,
   },
   title: {

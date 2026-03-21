@@ -104,7 +104,7 @@ export function ComposeGroupScreen() {
 
       {/* Selected users pills */}
       {selected.length > 0 && (
-        <ScrollView
+        <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.selectedScroll}
@@ -151,7 +151,7 @@ export function ComposeGroupScreen() {
       )}
 
       {/* Search results */}
-      <ScrollView style={styles.results} keyboardDismissMode="on-drag">
+      <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" style={styles.results} keyboardDismissMode="on-drag">
         {results.map(user => {
           const initial = (user.username || '?')[0].toUpperCase();
           const checked = isSelected(user.user_id);

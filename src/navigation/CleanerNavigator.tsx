@@ -207,50 +207,8 @@ export function CleanerPillNavigator() {
   }, []);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Subtle brand-green header glow */}
-      <LinearGradient
-        colors={[Colors.brandGlow, Colors.brandGlowMid, 'rgba(10,10,10,0)']}
-        style={styles.headerGlow}
-        pointerEvents="none"
-      />
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <TouchableOpacity activeOpacity={0.7}
-            onPress={() => navigation.navigate('Settings')}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="settings-outline" size={22} color={Colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.titleCenter}>
-          <Image source={require('../../assets/logo.png')} style={styles.logo} />
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <TouchableOpacity activeOpacity={0.7}
-            onPress={() => navigation.navigate('Search')}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="search-outline" size={22} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.7}
-            onPress={() => navigation.navigate('Notifications')}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="notifications-outline" size={22} color={Colors.textSecondary} />
-            {unreadCount > 0 && <View style={styles.badge} />}
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <LiquidPillBar
-        tabs={tabs}
-        activeIndex={activeIndex}
-        scrollOffset={normalizedOffset}
-        onPressTab={onPressTab}
-      />
-
+    <View style={styles.container}>
+      {/* Content — full bleed, scrolls behind the header */}
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -269,6 +227,70 @@ export function CleanerPillNavigator() {
           </View>
         ))}
       </ScrollView>
+
+      {/* ── Frosted glass header overlay ── */}
+      <View style={[styles.headerOverlay, { paddingTop: insets.top, paddingBottom: 50 }]} pointerEvents="box-none">
+        <LinearGradient
+          colors={[
+            'rgba(248,249,250,0.85)',
+            'rgba(248,249,250,0.75)',
+            'rgba(248,249,250,0.55)',
+            'rgba(248,249,250,0.25)',
+            'rgba(248,249,250,0)',
+          ]}
+          locations={[0, 0.4, 0.65, 0.85, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+        {/* Green brand tint */}
+        <LinearGradient
+          colors={[
+            'rgba(22,163,74,0.55)',
+            'rgba(30,206,110,0.28)',
+            'rgba(30,206,110,0.08)',
+            'rgba(30,206,110,0)',
+          ]}
+          locations={[0, 0.35, 0.65, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+        {/* Header row */}
+        <View style={styles.header} pointerEvents="box-none">
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <TouchableOpacity activeOpacity={0.7}
+              onPress={() => navigation.navigate('Settings')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="settings-outline" size={22} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.titleCenter}>
+            <Image source={require('../../assets/logo.png')} style={styles.logo} />
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <TouchableOpacity activeOpacity={0.7}
+              onPress={() => navigation.navigate('Search')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="search-outline" size={22} color={Colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity activeOpacity={0.7}
+              onPress={() => navigation.navigate('Notifications')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="notifications-outline" size={22} color={Colors.textSecondary} />
+              {unreadCount > 0 && <View style={styles.badge} />}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <LiquidPillBar
+          tabs={tabs}
+          activeIndex={activeIndex}
+          scrollOffset={normalizedOffset}
+          onPressTab={onPressTab}
+        />
+      </View>
 
       {/* ── Floating liquid-glass FABs (profile page only) ── */}
 
@@ -397,13 +419,12 @@ export function CleanerPillNavigator() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
-  headerGlow: {
+  headerOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: 180,
-    zIndex: 0,
+    zIndex: 10,
   },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

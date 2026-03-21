@@ -28,6 +28,7 @@ export function AddPropertiesScreen({ navigation }: any) {
   const [address, setAddress] = useState('');
   const [units, setUnits] = useState('1');
   const [isAirbnb, setIsAirbnb] = useState(portfolioType === 'str');
+  const [icalUrls, setIcalUrls] = useState<string[]>([]);
   const [market, setMarket] = useState('');
   const [resolvedAddress, setResolvedAddress] = useState<ResolvedAddress | null>(null);
   const [unitsPerYear, setUnitsPerYear] = useState('');
@@ -52,19 +53,22 @@ export function AddPropertiesScreen({ navigation }: any) {
     if (!name.trim()) return;
     const id = generatePropertyId(name.trim());
     const propIsAirbnb = portfolioType === 'str' ? true : portfolioType === 'ltr' ? false : isAirbnb;
+    const unitCount = Math.max(1, parseInt(units) || 1);
+    const validIcalUrls = propIsAirbnb ? icalUrls.slice(0, unitCount).filter(u => u?.trim()) : [];
     const prop: UserProperty = {
       id,
       label: name.trim(),
       name: name.trim(),
       address: address.trim(),
-      units: Math.max(1, parseInt(units) || 1),
+      units: unitCount,
       isAirbnb: propIsAirbnb,
       ...(propIsAirbnb && market.trim() ? { market: market.trim() } : {}),
       ...(resolvedAddress?.lat ? { lat: resolvedAddress.lat, lng: resolvedAddress.lng } : {}),
+      ...(validIcalUrls.length > 0 ? { icalUrls: icalUrls.slice(0, unitCount) } : {}),
     };
     setProperties(prev => [...prev, prop]);
     setName(''); setAddress(''); setUnits('1'); setIsAirbnb(portfolioType === 'str');
-    setMarket(''); setResolvedAddress(null);
+    setMarket(''); setResolvedAddress(null); setIcalUrls([]);
   };
 
   const removeProperty = (index: number) => {
@@ -228,6 +232,33 @@ export function AddPropertiesScreen({ navigation }: any) {
               />
             </>
           ) : null}
+
+          {/* iCal URL inputs — shown for Airbnb properties */}
+          {(portfolioType === 'str' || (portfolioType === 'both' && isAirbnb)) && (
+            <>
+              <Text style={styles.label}>Airbnb iCal URLs (optional)</Text>
+              <Text style={[styles.subtitle, { marginBottom: Spacing.xs, fontSize: 12 }]}>
+                Paste from Airbnb → Listing → Availability → Export Calendar
+              </Text>
+              {Array.from({ length: Math.max(1, parseInt(units) || 1) }, (_, i) => (
+                <TextInput
+                  key={`ical-${i}`}
+                  style={[styles.input, i > 0 && { marginTop: Spacing.sm }]}
+                  value={icalUrls[i] || ''}
+                  onChangeText={(t) => {
+                    const updated = [...icalUrls];
+                    updated[i] = t;
+                    setIcalUrls(updated);
+                  }}
+                  placeholder={parseInt(units) > 1 ? `Unit ${i + 1} iCal URL` : 'iCal URL'}
+                  placeholderTextColor={Colors.textDim}
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  autoCorrect={false}
+                />
+              ))}
+            </>
+          )}
 
           {atLimit ? (
             <TouchableOpacity

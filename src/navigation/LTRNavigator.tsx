@@ -16,30 +16,32 @@ import { LiquidPillBar, PillTab } from '../components/LiquidPillBar';
 import { ProfileScreen, triggerCustomize } from '../screens/profile/ProfileScreen';
 import { MoneyScreen } from '../screens/money/MoneyScreen';
 import { ProjectionsScreen } from '../screens/money/ProjectionsScreen';
-import { InventoryScreen } from '../screens/inventory/InventoryScreen';
 import { CleaningsScreen, useCleaningsBadgeCount } from '../screens/cleanings/CleaningsScreen';
 import { NetworkMapScreen } from '../screens/network/NetworkMapScreen';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BASE_ORDER = ['profile', 'performance', 'projections'];
-const STR_PILLS = ['calendar', 'inventory'];
+const STR_PILLS = ['logistics'];
 
 const PILL_LABELS: Record<string, string> = {
   profile: 'HQ',
   performance: 'Money',
   projections: 'Projections',
-  calendar: 'Calendar',
-  inventory: 'Inventory',
+  logistics: 'Logistics',
   network: 'Map',
 };
+
+// Each screen's internal ScrollView needs top padding so the first card
+// starts below the header, but scrolled content slides behind the header.
+// We export this so screens can use it in their contentContainerStyle.
+export const HEADER_SCROLL_PADDING = 100;
 
 function PageContent({ pageKey }: { pageKey: string }) {
   switch (pageKey) {
     case 'profile': return <ProfileScreen />;
     case 'performance': return <MoneyScreen />;
     case 'projections': return <ProjectionsScreen />;
-    case 'calendar': return <CleaningsScreen />; // Calendar pill → CleaningsScreen (iCal events, check-ins, cleanings)
-    case 'inventory': return <InventoryScreen />;
+    case 'logistics': return <CleaningsScreen />;
     case 'network': return <NetworkMapScreen />;
     default: return <View />;
   }
@@ -74,7 +76,7 @@ export function PillNavigator() {
       order = migrated;
     }
     // Remove deprecated pills from any saved order
-    order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'cleanings' && k !== 'home');
+    order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'cleanings' && k !== 'home' && k !== 'calendar' && k !== 'inventory');
     // Ensure base pills exist
     if (!order.includes('performance')) order.push('performance');
     if (!order.includes('projections')) {
@@ -102,7 +104,7 @@ export function PillNavigator() {
   const tabs: PillTab[] = pillOrder.map(key => ({
     key,
     label: PILL_LABELS[key] || key,
-    badge: key === 'calendar' ? cleaningsBadge : undefined,
+    badge: undefined,
   }));
 
   // Convert pixel scroll → normalized page index (0, 1, 2, ...)
@@ -179,63 +181,14 @@ export function PillNavigator() {
     springFabs(false);
   }, []);
 
+  // Header row (~48) + pills (~44) = ~92 below safe area inset
+  // Content starts right at the bottom of the pills — the gradient tail
+  // extends ~40px below, so scrolled content fades behind the header
+  const headerContentHeight = 92;
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Brand tint — covers only status bar + header + pills, fades to transparent */}
-      <LinearGradient
-        colors={[
-          'rgba(30,206,110,0.22)',
-          'rgba(30,206,110,0.12)',
-          'rgba(30,206,110,0.03)',
-          'rgba(10,10,10,0)',
-        ]}
-        locations={[0, 0.35, 0.7, 1]}
-        style={[styles.headerGlow, { height: insets.top + 200 }]}
-        pointerEvents="none"
-      />
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity activeOpacity={0.7}
-          onPress={() => navigation.navigate('Settings')}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="settings-outline" size={22} color={Colors.textSecondary} />
-        </TouchableOpacity>
-        <View style={styles.titleCenter}>
-          <Image source={require('../../assets/logo.png')} style={styles.logo} />
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <TouchableOpacity activeOpacity={0.7}
-          onPress={() => navigation.navigate('Search')}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="search-outline" size={22} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.7}
-          onPress={() => navigation.navigate('Notifications')}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="notifications-outline" size={22} color={Colors.textSecondary} />
-            {unreadCount > 0 && (
-              <View style={{
-                position: 'absolute', top: -2, right: -4,
-                width: 8, height: 8, borderRadius: 4,
-                backgroundColor: Colors.red,
-              }} />
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Floating Liquid Glass Pills */}
-      <LiquidPillBar
-        tabs={tabs}
-        activeIndex={activeIndex}
-        scrollOffset={normalizedOffset}
-        onPressTab={onPressTab}
-      />
-
-      {/* Swipeable Pages */}
+    <View style={styles.container}>
+      {/* Swipeable Pages — full bleed, content scrolls behind the header */}
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -255,6 +208,75 @@ export function PillNavigator() {
           </View>
         ))}
       </ScrollView>
+
+      {/* ── Frosted glass header — floats over content ── */}
+      <View style={[styles.headerOverlay, { paddingTop: insets.top }]} pointerEvents="box-none">
+        {/* Frosted glass: semi-transparent so cards are visible behind it */}
+        <LinearGradient
+          colors={[
+            'rgba(248,249,250,0.85)',
+            'rgba(248,249,250,0.75)',
+            'rgba(248,249,250,0.55)',
+            'rgba(248,249,250,0.25)',
+            'rgba(248,249,250,0)',
+          ]}
+          locations={[0, 0.4, 0.65, 0.85, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+        {/* Green brand tint — deeper green matching logo */}
+        <LinearGradient
+          colors={[
+            'rgba(22,163,74,0.55)',
+            'rgba(30,206,110,0.28)',
+            'rgba(30,206,110,0.08)',
+            'rgba(30,206,110,0)',
+          ]}
+          locations={[0, 0.35, 0.65, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+        {/* Header row */}
+        <View style={styles.header} pointerEvents="box-none">
+          <TouchableOpacity activeOpacity={0.7}
+            onPress={() => navigation.navigate('Settings')}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="settings-outline" size={22} color={Colors.textSecondary} />
+          </TouchableOpacity>
+          <View style={styles.titleCenter}>
+            <Image source={require('../../assets/logo.png')} style={styles.logo} />
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <TouchableOpacity activeOpacity={0.7}
+              onPress={() => navigation.navigate('Search')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="search-outline" size={22} color={Colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity activeOpacity={0.7}
+              onPress={() => navigation.navigate('Notifications')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="notifications-outline" size={22} color={Colors.textSecondary} />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: 'absolute', top: -2, right: -4,
+                  width: 8, height: 8, borderRadius: 4,
+                  backgroundColor: Colors.red,
+                }} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+        {/* Pill bar */}
+        <LiquidPillBar
+          tabs={tabs}
+          activeIndex={activeIndex}
+          scrollOffset={normalizedOffset}
+          onPressTab={onPressTab}
+        />
+      </View>
 
       {/* ── Floating liquid-glass FAB stack (right side) ── */}
       {/* Map FAB (bottom — always visible, persistent) */}
@@ -328,12 +350,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.bg,
   },
-  headerGlow: {
+  headerOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 0,
+    zIndex: 10,
+    paddingBottom: 50,
   },
   header: {
     flexDirection: 'row',
@@ -399,7 +422,7 @@ const styles = StyleSheet.create({
 
   // Menu
   menuOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.60)',
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.30)',
     justifyContent: 'flex-end',
   },
   menuSheet: {

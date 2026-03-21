@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import { LinearGradient } from 'expo-linear-gradient';
 // Lazy-load expo-clipboard to avoid crash if native module missing
 const Clipboard = { setStringAsync: async (s: string) => { try { const C = require('expo-clipboard'); await C.setStringAsync(s); } catch { /* fallback */ } } };
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -22,12 +23,13 @@ import { Card } from '../../components/Card';
 import { BarChart, BarData, dismissAllChartTooltips } from '../../components/BarChart';
 import { SectionHeader } from '../../components/SectionHeader';
 import { GlossyHorizontalBar } from '../../components/GlossyHorizontalBar';
-import { fmt$ } from '../../utils/format';
+import { fmt$ , localDateStr } from '../../utils/format';
+import { InventoryScreen } from '../inventory/InventoryScreen';
 
 
-type SubTab = 'Calendar' | 'Cleanings' | 'Cost' | 'Rates';
+type SubTab = 'Calendar' | 'Inventory' | 'Cost';
 const SCREEN_W = Dimensions.get('window').width;
-const SUB_TABS: SubTab[] = ['Calendar', 'Cleanings', 'Cost', 'Rates'];
+const SUB_TABS: SubTab[] = ['Calendar', 'Inventory', 'Cost'];
 const RATES_KEY = 'pp_cleaning_rates';
 const MONTH_NAMES_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -101,12 +103,11 @@ function LockedSubTab() {
 
 export function CleaningsScreen() {
   const { isReadOnly } = useSubscriptionGate();
-  const { fetchIcalEvents, fetchIcalFeeds, fetchProps, fetchAnalytics } = useDataStore();
+  const { fetchCalendarEvents, fetchProps, fetchAnalytics } = useDataStore();
   const lastError = useDataStore(s => s.lastError);
   const [events, setEvents] = useState<any[]>([]);
   const [props, setProps] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
-  const [plStats, setPlStats] = useState<any>(null);
   const [feedMap, setFeedMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -114,7 +115,7 @@ export function CleaningsScreen() {
   const [subTab, setSubTab] = useState<SubTab>('Calendar');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [tappedCard, setTappedCard] = useState<'cleanings' | 'cost' | null>(null);
-  const [selectedDay, setSelectedDay] = useState<string | null>(() => new Date().toISOString().slice(0, 10));
+  const [selectedDay, setSelectedDay] = useState<string | null>(() => localDateStr());
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
@@ -139,7 +140,7 @@ export function CleaningsScreen() {
   const [calGridLayout, setCalGridLayout] = useState({ width: 0, height: 0 });
   const calGlassX = useRef(new Animated.Value(0)).current;
   const calGlassY = useRef(new Animated.Value(0)).current;
-  const calSelectedRef = useRef<string>(new Date().toISOString().slice(0, 10));
+  const calSelectedRef = useRef<string>(localDateStr());
 
   // ── Cost / Rates state ──
   const [rates, setRates] = useState<Record<string, number>>({});
@@ -201,23 +202,20 @@ export function CleaningsScreen() {
     } catch {}
   }, [rates]);
 
-  const hasPriceLabs = !!userProfile?.priceLabsApiKey;
-
   const load = useCallback(async (force = false) => {
     try {
-      const [ev, pr, an, rawFeeds] = await Promise.all([
-        fetchIcalEvents(force),
+      const [ev, pr, an] = await Promise.all([
+        fetchCalendarEvents(force),
         fetchProps(force),
         fetchAnalytics(force),
-        fetchIcalFeeds(force),
       ]);
       setProps(pr || []);
       setEvents(ev || []);
       setAnalytics(an);
-      // Build feed_key → listingName map for unit-level labels
+      // Build prop_id → listingName map from iCal events
       const map: Record<string, string> = {};
-      (rawFeeds || []).forEach((f: any) => {
-        if (f.feed_key && f.listingName) map[f.feed_key] = f.listingName;
+      (ev || []).forEach((e: any) => {
+        if (e.prop_id && e.listing_name) map[e.prop_id] = e.listing_name;
       });
       setFeedMap(map);
       setLastUpdated(new Date());
@@ -226,30 +224,27 @@ export function CleaningsScreen() {
         const invs = await fetchReceivedInvoices(force);
         setReceivedInvoices(invs);
       } catch {}
-      // Fetch PriceLabs stats for market occupancy comparison
-      if (hasPriceLabs) {
-        try {
-          const stats = await apiFetch('/api/pricelabs/stats');
-          setPlStats(stats);
-        } catch {}
-      }
     } catch (e) {
       // fetch failed
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchIcalEvents, fetchIcalFeeds, fetchProps, fetchAnalytics, fetchReceivedInvoices, hasPriceLabs]);
+  }, [fetchCalendarEvents, fetchProps, fetchAnalytics, fetchReceivedInvoices]);
 
   useEffect(() => { load(); }, []);
 
   const dataVersion = useDataStore(s => s.dataVersion);
   useEffect(() => { if (dataVersion > 0) load(true); }, [dataVersion]);
-  const onRefresh = () => { setRefreshing(true); load(true); };
+  const onRefresh = async () => {
+    setRefreshing(true);
+    load(true);
+  };
 
-  const propLabel = (pid: string, feedKey?: string) => {
-    // Use feed listingName for unit-level label (e.g. "LOCKWOOD - Unit 1")
-    if (feedKey && feedMap[feedKey]) return feedMap[feedKey];
+  const propLabel = (pid: string, feedKey?: string, listingName?: string) => {
+    // Use listing_name from iCal event directly
+    if (listingName) return listingName;
+    if (pid && feedMap[pid]) return feedMap[pid];
     const p = (props || []).find((p: any) => (p.id || p.prop_id) === pid);
     return p?.label || pid || 'Property';
   };
@@ -267,14 +262,15 @@ export function CleaningsScreen() {
     const seenCI = new Set<string>();
 
     sorted.forEach((e: any) => {
-      if (!e.check_out || !e.prop_id) return;
+      if (!e.check_out) return;
       // Use feed_key in dedup key so different units get separate entries
+      const pid = e.prop_id || e.feed_key || 'unknown';
       const unitKey = e.feed_key || '';
-      const key = `${e.prop_id}-${unitKey}-${e.check_out}`;
+      const key = `${pid}-${unitKey}-${e.check_out}`;
       if (!seen.has(key)) {
         seen.add(key);
         const sameDayNext = sorted.find(
-          (n: any) => n.prop_id === e.prop_id && (n.feed_key || '') === unitKey && n.check_in === e.check_out && n !== e
+          (n: any) => (n.prop_id || n.feed_key || 'unknown') === pid && (n.feed_key || '') === unitKey && n.check_in === e.check_out && n !== e
         );
         let prevNights = 0;
         if (e.check_in && e.check_out) {
@@ -284,8 +280,8 @@ export function CleaningsScreen() {
         }
         cleaningDays.push({
           date: e.check_out,
-          prop_id: e.prop_id,
-          feed_key: e.feed_key || '',
+          prop_id: pid,
+          listing_name: e.listing_name || '',
           outGuest: e.summary || e.guest_name,
           inGuest: sameDayNext?.summary || sameDayNext?.guest_name || null,
           sameDayTurnover: !!sameDayNext,
@@ -293,13 +289,13 @@ export function CleaningsScreen() {
         });
       }
       if (e.check_in) {
-        const ciKey = `${e.prop_id}-${unitKey}-${e.check_in}`;
+        const ciKey = `${pid}-${unitKey}-${e.check_in}`;
         if (!seenCI.has(ciKey)) {
           seenCI.add(ciKey);
           checkinDays.push({
             date: e.check_in,
-            prop_id: e.prop_id,
-            feed_key: e.feed_key || '',
+            prop_id: pid,
+            listing_name: e.listing_name || '',
             guest: e.summary || e.guest_name,
             nights: e.nights,
           });
@@ -327,7 +323,7 @@ export function CleaningsScreen() {
       calendar[c.date].checkinProps.push(c.prop_id);
     });
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr();
     return {
       cleanings: cleaningDays.filter(c => c.date >= today).sort((a, b) => a.date.localeCompare(b.date)),
       allCleanings: cleaningDays.sort((a, b) => a.date.localeCompare(b.date)),
@@ -341,26 +337,16 @@ export function CleaningsScreen() {
 
   // ── Week stats ──
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = localDateStr(today);
   const endOfWeek = new Date(today);
   endOfWeek.setDate(today.getDate() + (7 - today.getDay()));
-  const weekEnd = endOfWeek.toISOString().slice(0, 10);
+  const weekEnd = localDateStr(endOfWeek);
   const cleaningsThisWeek = cleanings.filter(c => c.date >= todayStr && c.date <= weekEnd).length;
 
-  // PriceLabs-only occupancy (STR/both users with a PriceLabs API key)
-  const plOccupancy = useMemo(() => {
-    if (!hasPriceLabs || !plStats?.by_prop) return [];
-    const byProp = plStats.by_prop;
-    return props
-      .filter(p => byProp[p.id || p.prop_id]?.avg_occ_past_30 != null)
-      .map(p => {
-        const pid = p.id || p.prop_id;
-        return { id: pid, label: p.label || pid, occupancy: byProp[pid].avg_occ_past_30 as number };
-      });
-  }, [props, hasPriceLabs, plStats]);
-
   // ── Cost computations ──
-  const currentMonth = `${today.getFullYear()}-${pad(today.getMonth() + 1)}`;
+  // Use the viewed calendar month so the cost card updates when navigating
+  const viewedMonth = `${viewMonth.year}-${pad(viewMonth.month + 1)}`;
+  const currentMonth = viewedMonth;
   const hasAnyRates = Object.values(rates).some(v => v > 0);
 
   // Invoice totals by month
@@ -379,7 +365,7 @@ export function CleaningsScreen() {
   const hasInvoicesThisMonth = invoiceCostThisMonth > 0;
 
   const expectedCostThisMonth = useMemo(() => {
-    const remaining = cleanings.filter(c => c.date.startsWith(currentMonth));
+    const remaining = allCleanings.filter(c => c.date.startsWith(currentMonth));
     const breakdown: { propId: string; count: number; rate: number; cost: number }[] = [];
     const byProp: Record<string, number> = {};
     remaining.forEach(c => { byProp[c.prop_id] = (byProp[c.prop_id] || 0) + 1; });
@@ -393,7 +379,7 @@ export function CleaningsScreen() {
     // Use actual invoice total if available
     const displayTotal = hasInvoicesThisMonth ? invoiceCostThisMonth : total;
     return { total: displayTotal, estimatedTotal: total, invoiceTotal: invoiceCostThisMonth, breakdown, count: remaining.length, hasInvoices: hasInvoicesThisMonth };
-  }, [cleanings, currentMonth, rates, hasInvoicesThisMonth, invoiceCostThisMonth]);
+  }, [allCleanings, currentMonth, rates, hasInvoicesThisMonth, invoiceCostThisMonth]);
 
   const costYears = useMemo(() => {
     const years = new Set<number>();
@@ -476,13 +462,33 @@ export function CleaningsScreen() {
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <View style={{ flex: 1, backgroundColor: 'transparent' }}>
-      {/* ── Fixed header: Error banner + Summary Cards + SwipePills ── */}
-      <View style={{ paddingHorizontal: Spacing.md, paddingTop: Spacing.md }}>
+      {/* ── Fixed header overlay with frosted glass ── */}
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingHorizontal: Spacing.md, paddingTop: 155, paddingBottom: 30 }} pointerEvents="box-none">
+        <LinearGradient
+          colors={[
+            'rgba(248,249,250,0.95)',
+            'rgba(248,249,250,0.85)',
+            'rgba(248,249,250,0.5)',
+            'rgba(248,249,250,0)',
+          ]}
+          locations={[0, 0.7, 0.88, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
         {/* Error banner */}
         {lastError && (
           <View style={styles.errorBanner}>
             <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />
             <Text style={styles.errorText}>{lastError}</Text>
+          </View>
+        )}
+        {/* Empty calendar hint */}
+        {!loading && events.length === 0 && (
+          <View style={[styles.errorBanner, { borderColor: 'rgba(245,158,11,0.20)', backgroundColor: 'rgba(245,158,11,0.08)' }]}>
+            <Ionicons name="warning-outline" size={16} color={Colors.yellow} />
+            <Text style={[styles.errorText, { color: Colors.yellow }]}>
+              No booking data yet. Add iCal URLs to your Airbnb properties in Settings to populate your calendar.
+            </Text>
           </View>
         )}
 
@@ -496,7 +502,7 @@ export function CleaningsScreen() {
                 setTappedCard(null);
               } else {
                 setTappedCard('cleanings');
-                handlePillSelect('Cleanings');
+                handlePillSelect('Calendar');
               }
             }}
           >
@@ -518,7 +524,7 @@ export function CleaningsScreen() {
                           <View key={i} style={styles.cardDetailRow}>
                             <Ionicons name="sparkles" size={10} color={Colors.green} />
                             <Text style={styles.cardDetailText} numberOfLines={1}>
-                              {dayName} · {propLabel(c.prop_id, c.feed_key)}
+                              {dayName} · {propLabel(c.prop_id, undefined, c.listing_name)}
                             </Text>
                           </View>
                         );
@@ -543,14 +549,14 @@ export function CleaningsScreen() {
               }
             }}
           >
-            <Text style={styles.summaryLabel}>EST. COST THIS MONTH</Text>
+            <Text style={styles.summaryLabel}>EST. COST · {MONTH_NAMES_SHORT[viewMonth.month].toUpperCase()} {viewMonth.year}</Text>
             <Text style={[styles.summaryNumber, { color: Colors.red }]}>
               {hasAnyRates ? fmt$(expectedCostThisMonth.total) : '--'}
             </Text>
             {tappedCard === 'cost' && (
               <View style={styles.cardDetail}>
                 {!hasAnyRates ? (
-                  <Text style={styles.cardDetailText}>Set rates in the Rates tab</Text>
+                  <Text style={styles.cardDetailText}>Set rates in the Cost tab</Text>
                 ) : expectedCostThisMonth.breakdown.length === 0 ? (
                   <Text style={styles.cardDetailText}>No cleanings remaining this month</Text>
                 ) : (
@@ -580,9 +586,8 @@ export function CleaningsScreen() {
           compact
           items={[
             { key: 'Calendar' as SubTab, label: 'Calendar' },
-            { key: 'Cleanings' as SubTab, label: 'Cleanings' },
+            { key: 'Inventory' as SubTab, label: 'Inventory' },
             { key: 'Cost' as SubTab, label: 'Cost' },
-            { key: 'Rates' as SubTab, label: 'Rates' },
           ]}
           selected={subTab}
           onSelect={handlePillSelect}
@@ -591,7 +596,7 @@ export function CleaningsScreen() {
         />
       </View>
 
-      {/* ── Horizontal paginated scroll ── */}
+      {/* ── Horizontal paginated scroll — content scrolls behind the fixed header ── */}
       <Animated.ScrollView
         ref={horizontalRef as any}
         horizontal
@@ -611,26 +616,13 @@ export function CleaningsScreen() {
         {/* ═══ CALENDAR PAGE ═══ */}
         <ScrollView
           style={{ width: SCREEN_W }}
-          contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
-          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ padding: Spacing.md, paddingTop: 310, paddingBottom: Spacing.xl * 2 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
+          keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets
           onTouchStart={dismissAllChartTooltips}
         >
           {isReadOnly ? <LockedSubTab /> : (
             <>
-              {/* PriceLabs Occupancy — only shown when PriceLabs API key is connected */}
-              {plOccupancy.length > 0 && (
-                <View style={styles.occCompactRow}>
-                  {plOccupancy.map(p => (
-                    <View key={p.id} style={styles.occCompactItem}>
-                      <Text style={styles.occCompactLabel} numberOfLines={1}>{p.label}</Text>
-                      <Text style={styles.occCompactPct}>{p.occupancy.toFixed(0)}%</Text>
-                      <Text style={styles.occP30Label}>P30 · PriceLabs</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-
               {/* Month Navigation */}
               <View style={styles.calHeader}>
                 <TouchableOpacity activeOpacity={0.7}
@@ -661,8 +653,8 @@ export function CleaningsScreen() {
                 ))}
               </View>
 
-              {/* Property filter */}
-              {props.length > 0 && (
+              {/* Property filter — Airbnb only */}
+              {props.filter((p: any) => p.isAirbnb).length > 0 && (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}
                   contentContainerStyle={styles.filterContent}>
                   <TouchableOpacity activeOpacity={0.7}
@@ -671,7 +663,7 @@ export function CleaningsScreen() {
                   >
                     <Text style={[styles.filterChipText, propFilter === 'all' && styles.filterChipTextActive]}>All</Text>
                   </TouchableOpacity>
-                  {props.map((p: any) => {
+                  {props.filter((p: any) => p.isAirbnb).map((p: any) => {
                     const id = p.id || p.prop_id;
                     return (
                       <TouchableOpacity activeOpacity={0.7}
@@ -741,17 +733,17 @@ export function CleaningsScreen() {
                         >
                           <View style={[
                             styles.calDayBubble,
-                            !isSelected && isToday && styles.calDayBubbleToday,
                             !isSelected && hasTurnover && styles.calDayBubbleTurnover,
                             !isSelected && hasCleaning && !hasTurnover && styles.calDayBubbleCleaning,
                             !isSelected && hasCheckin && !hasCleaning && !hasTurnover && styles.calDayBubbleCheckin,
+                            isToday && styles.calDayBubbleToday,
                           ]}>
                             <Text style={[
                               styles.calDayText,
-                              isToday && styles.calDayTextToday,
                               hasTurnover && styles.calDayTextTurnover,
                               hasCleaning && !hasTurnover && styles.calDayTextCleaning,
                               hasCheckin && !hasCleaning && !hasTurnover && styles.calDayTextCheckin,
+                              isToday && styles.calDayTextToday,
                               isSelected && styles.calDayTextSelected,
                             ]}>{day}</Text>
                             {(hasCleaning || hasTurnover) && <View style={styles.calDotCleaning} />}
@@ -793,7 +785,7 @@ export function CleaningsScreen() {
                 // Also include historical checkins
                 const allCheckinDays = events
                   .filter((e: any) => e.check_in === selectedDay && e.prop_id && (propFilter === 'all' || e.prop_id === propFilter))
-                  .map((e: any) => ({ prop_id: e.prop_id, guest: e.summary || e.guest_name, nights: e.nights }));
+                  .map((e: any) => ({ prop_id: e.prop_id, guest: e.summary || e.guest_name, nights: e.nights, listing_name: e.listing_name || '' }));
                 const uniqueCheckins = allCheckinDays.filter((c, i, arr) =>
                   arr.findIndex(x => x.prop_id === c.prop_id && x.guest === c.guest) === i
                 );
@@ -811,7 +803,7 @@ export function CleaningsScreen() {
                             <View style={[styles.dayDetailDot, { backgroundColor: c.sameDayTurnover ? Colors.red : Colors.yellow }]} />
                             <View style={{ flex: 1 }}>
                               <Text style={styles.dayDetailRowTitle}>
-                                {c.sameDayTurnover ? 'Turnover' : 'Cleaning'} · {propLabel(c.prop_id, c.feed_key)}
+                                {c.sameDayTurnover ? 'Turnover' : 'Cleaning'} · {propLabel(c.prop_id, undefined, c.listing_name)}
                               </Text>
                               {c.outGuest && c.outGuest !== 'Reserved' && <Text style={styles.dayDetailRowSub}>Checkout: {c.outGuest}</Text>}
                               {c.inGuest && c.inGuest !== 'Reserved' && <Text style={styles.dayDetailRowSub}>Next guest: {c.inGuest}</Text>}
@@ -825,7 +817,7 @@ export function CleaningsScreen() {
                             <View key={`ci-${i}`} style={styles.dayDetailRow}>
                               <View style={[styles.dayDetailDot, { backgroundColor: Colors.green }]} />
                               <View style={{ flex: 1 }}>
-                                <Text style={styles.dayDetailRowTitle}>Check-in · {propLabel(c.prop_id, c.feed_key)}</Text>
+                                <Text style={styles.dayDetailRowTitle}>Check-in · {propLabel(c.prop_id, undefined, c.listing_name)}</Text>
                                 {c.guest && c.guest !== 'Reserved' && <Text style={styles.dayDetailRowSub}>{c.guest}</Text>}
                                 {c.nights > 0 && <Text style={styles.dayDetailRowSub}>{c.nights} night{c.nights !== 1 ? 's' : ''}</Text>}
                               </View>
@@ -843,127 +835,52 @@ export function CleaningsScreen() {
           )}
         </ScrollView>
 
-        {/* ═══ CLEANINGS PAGE ═══ */}
+        {/* ═══ INVENTORY PAGE ═══ */}
+        <View style={{ width: SCREEN_W, flex: 1 }}>
+          <InventoryScreen />
+        </View>
+
+        {/* ═══ COST PAGE (merged Cost + Rates) ═══ */}
         <ScrollView
           style={{ width: SCREEN_W }}
-          contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
-        >
-          {isReadOnly ? <LockedSubTab /> : (
-            <>
-              {/* Property filter */}
-              {props.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}
-                  contentContainerStyle={styles.filterContent}>
-                  <TouchableOpacity activeOpacity={0.7}
-                    style={[styles.filterChip, propFilter === 'all' && styles.filterChipActive]}
-                    onPress={() => setPropFilter('all')}
-                  >
-                    <Text style={[styles.filterChipText, propFilter === 'all' && styles.filterChipTextActive]}>All</Text>
-                  </TouchableOpacity>
-                  {props.map((p: any) => {
-                    const id = p.id || p.prop_id;
-                    return (
-                      <TouchableOpacity activeOpacity={0.7}
-                        key={id}
-                        style={[styles.filterChip, propFilter === id && styles.filterChipActive]}
-                        onPress={() => setPropFilter(id)}
-                      >
-                        <Text style={[styles.filterChipText, propFilter === id && styles.filterChipTextActive]}>
-                          {p.label || p.id}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              )}
-
-              {/* Last Updated + Refresh */}
-              <View style={styles.metaRow}>
-                <Text style={styles.metaText}>
-                  {lastUpdated
-                    ? `Updated ${lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
-                    : ''}
-                </Text>
-                <TouchableOpacity activeOpacity={0.7}
-                  style={styles.refreshBtn} onPress={onRefresh} disabled={refreshing}>
-                  <Ionicons name="refresh" size={14} color={Colors.primary} />
-                  <Text style={styles.refreshBtnText}>{refreshing ? 'Refreshing...' : 'Refresh'}</Text>
-                </TouchableOpacity>
-              </View>
-
-              {filteredCleanings.length === 0 ? (
-                <EmptyState message="No upcoming cleanings" sub="Cleanings appear based on check-out dates from your bookings" />
-              ) : (
-                filteredCleanings.map((c, i) => {
-                  const dateObj = new Date(c.date + 'T00:00:00');
-                  const isToday = c.date === todayStr;
-                  const dayLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-                  return (
-                    <View key={i} style={styles.cleaningCard}>
-                      <View style={styles.cleaningDateBar}>
-                        <Text style={styles.cleaningDateText}>{dayLabel}</Text>
-                        {isToday && <View style={styles.todayDot} />}
-                      </View>
-                      <View style={styles.cleaningBody}>
-                        <View style={styles.cleaningBadgeRow}>
-                          <View style={[styles.cleaningBadge, isToday ? styles.cleaningBadgeUrgent : styles.cleaningBadgeNeeded]}>
-                            <Ionicons name={isToday ? 'alert-circle' : 'sparkles'} size={12}
-                              color={isToday ? Colors.red : Colors.yellow} />
-                            <Text style={[styles.cleaningBadgeText, { color: isToday ? Colors.red : Colors.yellow }]}>
-                              {isToday ? 'CLEANING TODAY' : 'CLEANING NEEDED'}
-                            </Text>
-                          </View>
-                          {c.sameDayTurnover && (
-                            <View style={styles.turnoverBadge}>
-                              <Ionicons name="warning" size={11} color={Colors.yellow} />
-                              <Text style={styles.turnoverText}>Same-Day Turnover</Text>
-                            </View>
-                          )}
-                        </View>
-                        <Text style={styles.cleaningProp}>{propLabel(c.prop_id, c.feed_key)}</Text>
-                        {c.prevNights > 0 && (
-                          <Text style={styles.cleaningMeta}>Previous stay: {c.prevNights} night{c.prevNights !== 1 ? 's' : ''}</Text>
-                        )}
-                        {c.outGuest && (
-                          <View style={styles.guestRow}>
-                            <Ionicons name="log-out-outline" size={14} color={Colors.textDim} />
-                            <Text style={styles.guestText}>Checkout: {c.outGuest}</Text>
-                          </View>
-                        )}
-                        {c.inGuest && (
-                          <View style={styles.guestRow}>
-                            <Ionicons name="log-in-outline" size={14} color={Colors.green} />
-                            <Text style={styles.guestText}>Next guest: {c.inGuest}</Text>
-                          </View>
-                        )}
-                      </View>
-                    </View>
-                  );
-                })
-              )}
-            </>
-          )}
-        </ScrollView>
-
-        {/* ═══ COST PAGE ═══ */}
-        <ScrollView
-          style={{ width: SCREEN_W }}
-          contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+          contentContainerStyle={{ padding: Spacing.md, paddingTop: 310, paddingBottom: Spacing.xl * 2 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
           onTouchStart={dismissAllChartTooltips}
         >
           {isReadOnly ? <LockedSubTab /> : (
             <>
+              {/* Month Navigation */}
+              <View style={styles.calHeader}>
+                <TouchableOpacity activeOpacity={0.7}
+                  onPress={() => setViewMonth(v => {
+                    const d = new Date(v.year, v.month - 1, 1);
+                    return { year: d.getFullYear(), month: d.getMonth() };
+                  })}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="chevron-back" size={22} color={Colors.textSecondary} />
+                </TouchableOpacity>
+                <Text style={styles.calHeaderTitle}>{MONTH_NAMES[viewMonth.month]} {viewMonth.year}</Text>
+                <TouchableOpacity activeOpacity={0.7}
+                  onPress={() => setViewMonth(v => {
+                    const d = new Date(v.year, v.month + 1, 1);
+                    return { year: d.getFullYear(), month: d.getMonth() };
+                  })}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="chevron-forward" size={22} color={Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
               <Card>
                 <Text style={styles.costSectionLabel}>
-                  {expectedCostThisMonth.hasInvoices ? 'ACTUAL COST THIS MONTH' : 'EXPECTED COST THIS MONTH'}
+                  {expectedCostThisMonth.hasInvoices ? `ACTUAL COST · ${MONTH_NAMES_SHORT[viewMonth.month].toUpperCase()}` : `EST. COST · ${MONTH_NAMES_SHORT[viewMonth.month].toUpperCase()}`}
                 </Text>
                 {!hasAnyRates && !expectedCostThisMonth.hasInvoices ? (
                   <View>
                     <Text style={styles.costTotal}>{fmt$(0)}</Text>
-                    <TouchableOpacity activeOpacity={0.7} onPress={() => handlePillSelect('Rates')}>
-                      <Text style={styles.costHint}>Set per-property rates in the Rates tab</Text>
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => { /* Rates section is below */ }}>
+                      <Text style={styles.costHint}>Set per-property rates below</Text>
                     </TouchableOpacity>
                   </View>
                 ) : (
@@ -1027,18 +944,8 @@ export function CleaningsScreen() {
                 <BarChart bars={costBars} color={Colors.red} height={120} invertDelta />
                 <Text style={styles.costYearTotal}>{costYear} Total: {fmt$(costYearTotal)}</Text>
               </Card>
-            </>
-          )}
-        </ScrollView>
 
-        {/* ═══ RATES PAGE ═══ */}
-        <ScrollView
-          style={{ width: SCREEN_W }}
-          contentContainerStyle={{ padding: Spacing.md, paddingBottom: Spacing.xl * 2 }}
-          keyboardShouldPersistTaps="handled"
-        >
-          {isReadOnly ? <LockedSubTab /> : (
-            <>
+              {/* ── Cleaning Rates (merged from Rates tab) ── */}
               <Card>
                 <View style={styles.ratesHeaderRow}>
                   <Ionicons name="pricetag-outline" size={18} color={Colors.primary} />
@@ -1051,10 +958,10 @@ export function CleaningsScreen() {
                 </View>
               </Card>
 
-              {props.length === 0 ? (
-                <EmptyState message="No properties" sub="Add properties in Settings to set cleaning rates" />
+              {props.filter((p: any) => p.isAirbnb).length === 0 ? (
+                <EmptyState message="No Airbnb properties" sub="Add Airbnb properties in Settings to set cleaning rates" />
               ) : (
-                props.map((p: any) => {
+                props.filter((p: any) => p.isAirbnb).map((p: any) => {
                   const id = p.id || p.prop_id;
                   return (
                     <View key={id} style={styles.rateRow}>
@@ -1117,7 +1024,7 @@ const EMPTY_EVENTS: any[] = [];
 export function useCleaningsBadgeCount(): number {
   const events = useDataStore(s => s.icalEvents?.data || EMPTY_EVENTS);
   return useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = localDateStr();
     const seen = new Set<string>();
     let count = 0;
     events.forEach((e: any) => {
@@ -1254,9 +1161,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   calDayBubbleToday: {
-    borderWidth: 2.5, borderColor: Colors.primary,
+    borderWidth: 3, borderColor: Colors.green,
+    backgroundColor: 'rgba(30,206,110,0.08)',
     ...Platform.select({
-      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 8 },
     }),
   },
   calDayBubbleCheckin: {
@@ -1290,7 +1198,7 @@ const styles = StyleSheet.create({
     }),
   },
   calDayText: { fontSize: FontSize.md, fontWeight: '500', color: Colors.text },
-  calDayTextToday: { color: Colors.primary, fontWeight: '800' },
+  calDayTextToday: { color: Colors.green, fontWeight: '900' },
   calDayTextCheckin: { color: Colors.green, fontWeight: '600' },
   calDayTextTurnover: { color: Colors.red, fontWeight: '600' },
   calDayTextCleaning: { color: Colors.yellow, fontWeight: '600' },

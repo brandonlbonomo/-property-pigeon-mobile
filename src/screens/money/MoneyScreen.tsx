@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
   ActivityIndicator, TouchableOpacity, Dimensions,
-  Animated, Platform, PanResponder, PanResponderGestureState,
+  Animated, Platform,
   NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 
 import { useDataStore } from '../../store/dataStore';
@@ -54,153 +55,45 @@ const badgeStyles = StyleSheet.create({
   text: { fontSize: 10, fontWeight: '600' },
 });
 
-const YEAR_PILL_W = 42;
-const YEAR_PILL_GAP = 2;
-const YEAR_PILL_STEP = YEAR_PILL_W + YEAR_PILL_GAP;
-const YEAR_CONTAINER_W = SCREEN_W - Spacing.md * 4 - 1 + 8;
-const YEAR_SIDE_PAD = (YEAR_CONTAINER_W - YEAR_PILL_W) / 2;
-
-function YearTabs({ years, selected, onSelect }: { years: number[]; selected: number; onSelect: (y: number) => void }) {
-  const selectedIdx = years.indexOf(selected);
-  const animIdx = useRef(new Animated.Value(selectedIdx >= 0 ? selectedIdx : 0)).current;
-
-  const yearsRef = useRef(years);
-  yearsRef.current = years;
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
-  const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
-
-  useEffect(() => {
-    const idx = years.indexOf(selected);
-    if (idx >= 0) {
-      Animated.spring(animIdx, {
-        toValue: idx,
-        useNativeDriver: true,
-        tension: 14,
-        friction: 5,
-      }).start();
-    }
-  }, [selected, years]);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 10 && Math.abs(gs.dx) > Math.abs(gs.dy),
-        onPanResponderRelease: (_, gs: PanResponderGestureState) => {
-          if (Math.abs(gs.dx) < 25) return;
-          const yrs = yearsRef.current;
-          const sel = selectedRef.current;
-          const idx = yrs.indexOf(sel);
-          if (idx < 0) return;
-          if (gs.dx < -25 && idx < yrs.length - 1) {
-            onSelectRef.current(yrs[idx + 1]);
-          } else if (gs.dx > 25 && idx > 0) {
-            onSelectRef.current(yrs[idx - 1]);
-          }
-        },
-      }),
-    []
-  );
-
-  const translateX = animIdx.interpolate({
-    inputRange: years.map((_, i) => i),
-    outputRange: years.map((_, i) => -i * YEAR_PILL_STEP),
-    extrapolate: 'clamp',
-  });
-
+function YearChevrons({ years, selected, onSelect }: { years: number[]; selected: number; onSelect: (y: number) => void }) {
+  const idx = years.indexOf(selected);
   return (
-    <View style={yearStyles.container} {...panResponder.panHandlers}>
-      <Animated.View
-        style={[
-          yearStyles.row,
-          { paddingLeft: YEAR_SIDE_PAD, paddingRight: YEAR_SIDE_PAD, transform: [{ translateX }] },
-        ]}
+    <View style={yearStyles.row}>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => idx > 0 && onSelect(years[idx - 1])}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        disabled={idx <= 0}
       >
-        {years.map((y, i) => {
-          const scale = animIdx.interpolate({
-            inputRange: [i - 1, i, i + 1],
-            outputRange: [0.8, 1.15, 0.8],
-            extrapolate: 'clamp',
-          });
-          const opacity = animIdx.interpolate({
-            inputRange: [i - 1, i, i + 1],
-            outputRange: [0.35, 1, 0.35],
-            extrapolate: 'clamp',
-          });
-          const glassOpacity = animIdx.interpolate({
-            inputRange: [i - 0.5, i, i + 0.5],
-            outputRange: [0, 1, 0],
-            extrapolate: 'clamp',
-          });
-
-          return (
-            <TouchableOpacity activeOpacity={0.7}
-          key={y}
-              onPress={() => onSelect(y)}
-              style={yearStyles.pillTouch}
-            >
-              <Animated.View style={[yearStyles.pill, { transform: [{ scale }], opacity }]}>
-                <Animated.View style={[yearStyles.glass, { opacity: glassOpacity }]} />
-                <Text style={yearStyles.label}>{y}</Text>
-              </Animated.View>
-            </TouchableOpacity>
-          );
-        })}
-      </Animated.View>
+        <Ionicons name="chevron-back" size={16} color={idx > 0 ? Colors.textSecondary : Colors.textDim + '40'} />
+      </TouchableOpacity>
+      <Text style={yearStyles.label}>{selected}</Text>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => idx < years.length - 1 && onSelect(years[idx + 1])}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        disabled={idx >= years.length - 1}
+      >
+        <Ionicons name="chevron-forward" size={16} color={idx < years.length - 1 ? Colors.textSecondary : Colors.textDim + '40'} />
+      </TouchableOpacity>
     </View>
   );
 }
 
 const yearStyles = StyleSheet.create({
-  container: {
-    height: 28,
-    overflow: 'hidden',
-    marginBottom: Spacing.xs,
-    marginHorizontal: -4,
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 28,
-    gap: YEAR_PILL_GAP,
-  },
-  pillTouch: {
-    width: YEAR_PILL_W,
-  },
-  pill: {
-    width: YEAR_PILL_W,
-    height: 22,
-    borderRadius: Radius.pill,
-    alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 1,
-    overflow: 'hidden',
-  },
-  glass: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.glass,
-    borderWidth: 0.5,
-    borderColor: Colors.glassBorder,
-    borderTopColor: Colors.glassHighlight,
-    borderTopWidth: 1,
-    ...Platform.select({
-      ios: {
-        shadowColor: Colors.glassShadow,
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.45,
-        shadowRadius: 10,
-      },
-      android: { elevation: 4 },
-    }),
+    gap: Spacing.sm,
+    marginBottom: Spacing.xs,
   },
   label: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: FontSize.xs,
+    fontWeight: '700',
     color: Colors.text,
-    zIndex: 1,
+    minWidth: 36,
+    textAlign: 'center',
   },
 });
 
@@ -214,7 +107,18 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const profile = useUserStore(s => s.profile);
   const portfolioType = profile?.portfolioType;
   const projectionStyle = profile?.projectionStyle || 'normal';
-  const totalInvestment = profile?.totalInvestment;
+  // Total investment = sum of (purchasePrice * downPaymentPct/100) across all properties
+  // Falls back to profile.totalInvestment if no per-property data
+  const totalInvestment = useMemo(() => {
+    const properties = profile?.properties || [];
+    const perPropTotal = properties.reduce((sum, p) => {
+      if (p.purchasePrice && p.downPaymentPct) {
+        return sum + (p.purchasePrice * p.downPaymentPct / 100);
+      }
+      return sum;
+    }, 0);
+    return perPropTotal > 0 ? perPropTotal : (profile?.totalInvestment || 0);
+  }, [profile?.properties, profile?.totalInvestment]);
 
   const { fetchCockpit } = useDataStore();
   const [cockpit, setCockpit] = useState<any>(null);
@@ -232,9 +136,11 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const currentYear = new Date().getFullYear();
   const years = useMemo(() => getAvailableYears(), []);
   const [revYear, setRevYear] = useState(currentYear);
-  const [expYear, setExpYear] = useState(currentYear);
   const [netYear, setNetYear] = useState(currentYear);
-  const [marginYear, setMarginYear] = useState(currentYear);
+
+  // Selected bar index per card — tapping a bar updates the card's displayed values
+  const [selectedRevBar, setSelectedRevBar] = useState<number | null>(null);
+  const [selectedNetBar, setSelectedNetBar] = useState<number | null>(null);
 
   // Horizontal scroll for period pages
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -242,6 +148,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
 
   const { fetchTransactions, fetchCategoryTags } = useDataStore();
   const [monthlyActuals, setMonthlyActuals] = useState<Record<string, { revenue: number; expenses: number }>>({});
+  const [strLtrSplit, setStrLtrSplit] = useState<{ str: number; ltr: number }>({ str: 0, ltr: 0 });
 
   const load = useCallback(async (force = false) => {
     try {
@@ -257,6 +164,10 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
       const actuals: Record<string, { revenue: number; expenses: number }> = {};
       const INCOME_CATS = new Set(['__rental_income__', '__cleaning_income__']);
       const EXCLUDED_CATS = new Set(['__delete__', '__internal_transfer__']);
+      // Build STR property set from Manage Properties
+      const userProps = profile?.properties || [];
+      const strPropIds = new Set(userProps.filter((p: any) => p.isAirbnb).map((p: any) => p.id || p.name));
+      let strRevTotal = 0, ltrRevTotal = 0;
 
       for (const tx of (txs || [])) {
         const catTag = catTags?.[tx.id] || tx.category_tag;
@@ -276,11 +187,22 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
         const isIncome = INCOME_CATS.has(catTag) || (!catTag && (tx.type === 'in' || tx.amount < 0));
         if (isIncome) {
           actuals[month].revenue += amount;
+          // STR vs non-STR: property's isAirbnb flag is the source of truth
+          if (propTag && strPropIds.has(propTag)) {
+            strRevTotal += amount;
+          } else if (propTag) {
+            // Has a property tag that's NOT in STR set = non-STR
+            ltrRevTotal += amount;
+          } else {
+            // No property tag (category only) — can't determine, default STR
+            strRevTotal += amount;
+          }
         } else {
           actuals[month].expenses += amount;
         }
       }
       setMonthlyActuals(actuals);
+      setStrLtrSplit({ str: strRevTotal, ltr: ltrRevTotal });
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -317,8 +239,9 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const priorExp = prior.expenses ?? 0;
   const priorNet = prior.net ?? 0;
 
-  const airbnbRev = raw?.airbnb?.revenue ?? revenue;
-  const nonAirbnbRev = raw?.pierce?.revenue ?? 0;
+  // STR vs non-STR revenue — computed from actual tagged transactions in load()
+  const airbnbRev = strLtrSplit.str;
+  const nonAirbnbRev = strLtrSplit.ltr;
 
   const margin = revenue > 0 ? (net / revenue) * 100 : 0;
   const priorMargin = priorRev > 0 ? (priorNet / priorRev) * 100 : 0;
@@ -355,11 +278,90 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     return 'margin';
   }
 
-  function getMonthMetric(targetYear: number, month: number, metric: Metric): number {
+  // Seasonal projection: for each month, blend same-month prior year data
+  // with YTD average. This adapts to new tags and captures seasonality.
+  const projectionByMonth = useMemo(() => {
+    const now = new Date();
+    const curMonth = now.getMonth();
+    const curYear = now.getFullYear();
+
+    // YTD average as fallback
+    let ytdRevSum = 0, ytdExpSum = 0, ytdCount = 0;
+    for (let m = 0; m <= curMonth; m++) {
+      const key = `${curYear}-${String(m + 1).padStart(2, '0')}`;
+      const data = monthlyActuals[key];
+      if (data && (data.revenue > 0 || data.expenses > 0)) {
+        ytdRevSum += data.revenue;
+        ytdExpSum += data.expenses;
+        ytdCount++;
+      }
+    }
+    const ytdAvgRev = ytdCount > 0 ? ytdRevSum / ytdCount : 0;
+    const ytdAvgExp = ytdCount > 0 ? ytdExpSum / ytdCount : 0;
+
+    // Per-month seasonal data from prior years
+    const byMonth: Record<number, { rev: number; exp: number }> = {};
+    for (let m = 0; m < 12; m++) {
+      let revTotal = 0, expTotal = 0, count = 0;
+      // Look back up to 3 prior years for seasonal signal
+      for (let yOff = 1; yOff <= 3; yOff++) {
+        const key = `${curYear - yOff}-${String(m + 1).padStart(2, '0')}`;
+        const data = monthlyActuals[key];
+        if (data && (data.revenue > 0 || data.expenses > 0)) {
+          // Weight recent years more: year-1 = 3x, year-2 = 2x, year-3 = 1x
+          const w = 4 - yOff;
+          revTotal += data.revenue * w;
+          expTotal += data.expenses * w;
+          count += w;
+        }
+      }
+      if (count > 0) {
+        byMonth[m] = { rev: revTotal / count, exp: expTotal / count };
+      }
+    }
+
+    // Build projection: if seasonal data exists for the month, blend
+    // 60% seasonal + 40% YTD avg. Otherwise use YTD avg.
+    const result: Record<number, { rev: number; exp: number }> = {};
+    for (let m = 0; m < 12; m++) {
+      const seasonal = byMonth[m];
+      if (seasonal) {
+        // Scale seasonal data by YTD growth factor so projections
+        // reflect this year's trajectory, not just raw prior year values
+        const seasonalAvg = (seasonal.rev + seasonal.exp) / 2 || 1;
+        const ytdAvg = (ytdAvgRev + ytdAvgExp) / 2 || 1;
+        const growthFactor = ytdAvg / seasonalAvg;
+        const scaledRev = seasonal.rev * Math.min(growthFactor, 3);
+        const scaledExp = seasonal.exp * Math.min(growthFactor, 3);
+        result[m] = {
+          rev: scaledRev * 0.6 + ytdAvgRev * 0.4,
+          exp: scaledExp * 0.6 + ytdAvgExp * 0.4,
+        };
+      } else {
+        result[m] = { rev: ytdAvgRev, exp: ytdAvgExp };
+      }
+    }
+    return result;
+  }, [monthlyActuals]);
+
+  function getMonthMetric(targetYear: number, month: number, metric: Metric, useProjection = false): number {
     const key = `${targetYear}-${String(month + 1).padStart(2, '0')}`;
     const data = monthlyActuals[key];
-    const rev = data?.revenue ?? 0;
-    const exp = data?.expenses ?? 0;
+    const now = new Date();
+    const isFuture = targetYear > now.getFullYear() || (targetYear === now.getFullYear() && month > now.getMonth());
+
+    let rev = data?.revenue ?? 0;
+    let exp = data?.expenses ?? 0;
+
+    // For future months, use seasonal projection so lines don't flatline
+    if (useProjection && isFuture && rev === 0 && exp === 0) {
+      const proj = projectionByMonth[month];
+      if (proj) {
+        rev = proj.rev;
+        exp = proj.exp;
+      }
+    }
+
     switch (metric) {
       case 'revenue': return rev;
       case 'expenses': return exp;
@@ -368,7 +370,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     }
   }
 
-  function yearBars(_current: number, _priorVal: number, targetYear: number, p: Period): BarData[] {
+  function yearBars(_current: number, _priorVal: number, targetYear: number, p: Period, useProjection = false): BarData[] {
     const now = new Date();
     const curMonth = now.getMonth();
     const curYear = now.getFullYear();
@@ -376,7 +378,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
 
     const monthly: BarData[] = [];
     for (let m = 0; m < 12; m++) {
-      const val = getMonthMetric(targetYear, m, metric);
+      const val = getMonthMetric(targetYear, m, metric, useProjection);
       const isPast = targetYear < curYear || (targetYear === curYear && m <= curMonth);
       monthly.push({
         label: MONTH_ABBR[m],
@@ -414,20 +416,19 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     return monthly;
   }
 
-  function annualBars(_current: number, _priorVal: number): BarData[] {
+  function annualBars(_current: number, _priorVal: number, useProjection = false): BarData[] {
     const metric = detectMetric(_current);
     return years.map(y => {
       let total = 0;
       if (metric === 'margin') {
-        // Margin is avg, not sum
         let totalRev = 0, totalExp = 0;
         for (let m = 0; m < 12; m++) {
-          totalRev += getMonthMetric(y, m, 'revenue');
-          totalExp += getMonthMetric(y, m, 'expenses');
+          totalRev += getMonthMetric(y, m, 'revenue', useProjection);
+          totalExp += getMonthMetric(y, m, 'expenses', useProjection);
         }
         total = totalRev > 0 ? ((totalRev - totalExp) / totalRev) * 100 : 0;
       } else {
-        for (let m = 0; m < 12; m++) total += getMonthMetric(y, m, metric);
+        for (let m = 0; m < 12; m++) total += getMonthMetric(y, m, metric, useProjection);
       }
       const hasActual = Object.keys(monthlyActuals).some(k => k.startsWith(String(y)));
       const isCurrent = y === currentYear;
@@ -605,106 +606,102 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
       );
     }
 
+    // Pre-compute bar data so we can reference values for dynamic display
+    const revBars = isAnnual ? annualBars(revenue, priorRev) : yearBars(revenue, priorRev, revYear, p);
+    const expLineBars = isAnnual ? annualBars(expenses, priorExp, true) : yearBars(expenses, priorExp, revYear, p, true);
+    // Actual expense bars (no projections) — for card header display only
+    const expActualBars = isAnnual ? annualBars(expenses, priorExp) : yearBars(expenses, priorExp, revYear, p);
+    const netBars = isAnnual ? annualBars(net, priorNet) : yearBars(net, priorNet, netYear, p);
+    const marginLineBars = isAnnual ? annualBars(margin, priorMargin, true) : yearBars(margin, priorMargin, netYear, p, true);
+    const marginActualBars = isAnnual ? annualBars(margin, priorMargin) : yearBars(margin, priorMargin, netYear, p);
+
+    // Dynamic values: if a bar is selected, show ACTUAL value (no projections); otherwise show default
+    const revDisplayVal = selectedRevBar != null && revBars[selectedRevBar]
+      ? revBars[selectedRevBar].value
+      : (isAnnual ? displayValue(revenue, priorRev, currentYear, p) : displayValue(revenue, priorRev, revYear, p));
+    const expDisplayVal = selectedRevBar != null && expActualBars[selectedRevBar]
+      ? expActualBars[selectedRevBar].value
+      : (isAnnual ? displayValue(expenses, priorExp, currentYear, p) : displayValue(expenses, priorExp, revYear, p));
+    const revDisplayLabel = selectedRevBar != null && revBars[selectedRevBar]
+      ? revBars[selectedRevBar].label : null;
+
+    const netDisplayVal = selectedNetBar != null && netBars[selectedNetBar]
+      ? netBars[selectedNetBar].value
+      : (isAnnual ? annualNetValue : displayValue(net, priorNet, netYear, p));
+    const marginDisplayVal = selectedNetBar != null && marginActualBars[selectedNetBar]
+      ? marginActualBars[selectedNetBar].value
+      : (isAnnual ? margin : displayValue(margin, priorMargin, netYear, p));
+    const netDisplayLabel = selectedNetBar != null && netBars[selectedNetBar]
+      ? netBars[selectedNetBar].label : null;
+
     // Monthly / Quarterly / Annual shared layout
     return (
       <>
-        {showBreakdown && (
-          <>
-            <SectionHeader title="Revenue Breakdown" />
-            <View style={styles.cardRow}>
-              <Card style={styles.halfCard}>
-                <Text style={styles.miniLabel}>STR Revenue</Text>
-                <Text style={[styles.cardValue, { color: Colors.green }]}>{fmt$(airbnbDisplayVal)}</Text>
-                <Text style={styles.miniSub}>Airbnb income</Text>
-              </Card>
-              <Card style={styles.halfCard}>
-                <Text style={styles.miniLabel}>Non-Airbnb Revenue</Text>
-                <Text style={[styles.cardValue, { color: Colors.primary }]}>{fmt$(nonAirbnbDisplayVal)}</Text>
-                <Text style={styles.miniSub}>Other income</Text>
-              </Card>
+        <Card padding={Spacing.sm}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardHeaderLabels}>
+              <Text style={[styles.sectionLabel, { color: Colors.green }]}>{revenueLabel.toUpperCase()}</Text>
+              <Text style={styles.sectionLabelSep}>/</Text>
+              <Text style={[styles.sectionLabel, { color: Colors.red }]}>EXPENSES</Text>
+              {revDisplayLabel && <Text style={styles.selectedLabel}>{revDisplayLabel}</Text>}
             </View>
-          </>
-        )}
-
-        <Card>
-          <View style={styles.cardHeader}>
-            <Text style={styles.sectionLabel}>{revenueLabel.toUpperCase()}</Text>
-            <DeltaBadge value={pct.revenue} />
+            <View style={styles.cardHeaderBadges}>
+              <DeltaBadge value={pct.revenue} />
+              <DeltaBadge value={pct.expenses} invert />
+            </View>
           </View>
-          <Text style={styles.bigValue}>
-            {fmt$(isAnnual
-              ? displayValue(revenue, priorRev, currentYear, p)
-              : displayValue(revenue, priorRev, revYear, p)
-            )}
-          </Text>
-          {!isAnnual && <YearTabs years={years} selected={revYear} onSelect={setRevYear} />}
+          <View style={styles.dualBigRow}>
+            <Text style={styles.compactValue}>{fmt$(revDisplayVal)}</Text>
+            <Text style={styles.bigValueSep}>/</Text>
+            <Text style={[styles.compactValue, { color: Colors.red }]}>{fmt$(expDisplayVal)}</Text>
+          </View>
+          {!isAnnual && <YearChevrons years={years} selected={revYear} onSelect={(y) => { setRevYear(y); setSelectedRevBar(null); }} />}
           <BarChart
-            bars={isAnnual ? annualBars(revenue, priorRev) : yearBars(revenue, priorRev, revYear, p)}
+            bars={revBars}
+            overlayLine={{ data: expLineBars, color: Colors.red }}
             color={Colors.green}
+            onBarTap={(_bar, idx) => setSelectedRevBar(idx)}
+            onDismiss={() => setSelectedRevBar(null)}
             onDoubleTap={handleDoubleTap}
-
           />
         </Card>
 
-        <Card>
+        <Card padding={Spacing.sm}>
           <View style={styles.cardHeader}>
-            <Text style={styles.sectionLabel}>EXPENSES</Text>
-            <DeltaBadge value={pct.expenses} invert />
+            <View style={styles.cardHeaderLabels}>
+              <Text style={styles.sectionLabel}>NET INCOME</Text>
+              <Text style={styles.sectionLabelSep}>/</Text>
+              <Text style={[styles.sectionLabel, { color: Colors.primary }]}>MARGIN</Text>
+              {netDisplayLabel && <Text style={styles.selectedLabel}>{netDisplayLabel}</Text>}
+            </View>
+            <View style={styles.cardHeaderBadges}>
+              <DeltaBadge value={pct.net} />
+            </View>
           </View>
-          <Text style={[styles.bigValue, { color: Colors.red }]}>
-            {fmt$(isAnnual
-              ? displayValue(expenses, priorExp, currentYear, p)
-              : displayValue(expenses, priorExp, expYear, p)
-            )}
-          </Text>
-          {!isAnnual && <YearTabs years={years} selected={expYear} onSelect={setExpYear} />}
-          <BarChart
-            bars={isAnnual ? annualBars(expenses, priorExp) : yearBars(expenses, priorExp, expYear, p)}
-            color={Colors.red}
-            onDoubleTap={handleDoubleTap}
-            invertDelta
-
-          />
-        </Card>
-
-        <Card>
-          <View style={styles.cardHeader}>
-            <Text style={styles.sectionLabel}>NET INCOME</Text>
-            <DeltaBadge value={pct.net} />
+          <View style={styles.netRow}>
+            <Text style={[styles.compactValue, {
+              marginBottom: 0,
+              color: netDisplayVal >= 0 ? Colors.green : Colors.red
+            }]}>
+              {fmt$(netDisplayVal)}
+            </Text>
+            <View style={styles.marginChip}>
+              <Text style={styles.marginChipLabel}>MARGIN</Text>
+              <Text style={[styles.marginChipValue, {
+                color: marginDisplayVal >= 0 ? Colors.green : Colors.red
+              }]}>
+                {marginDisplayVal.toFixed(1)}%
+              </Text>
+            </View>
           </View>
-          <Text style={[styles.bigValue, {
-            color: (isAnnual ? annualNetValue : displayValue(net, priorNet, netYear, p)) >= 0 ? Colors.green : Colors.red
-          }]}>
-            {fmt$(isAnnual
-              ? annualNetValue
-              : displayValue(net, priorNet, netYear, p)
-            )}
-          </Text>
-          {!isAnnual && <YearTabs years={years} selected={netYear} onSelect={setNetYear} />}
+          {!isAnnual && <YearChevrons years={years} selected={netYear} onSelect={(y) => { setNetYear(y); setSelectedNetBar(null); }} />}
           <BarChart
-            bars={isAnnual ? annualBars(net, priorNet) : yearBars(net, priorNet, netYear, p)}
+            bars={netBars}
+            overlayLine={{ data: marginLineBars, color: Colors.primary }}
             color={Colors.green}
             showNegative
-            onDoubleTap={handleDoubleTap}
-
-          />
-        </Card>
-
-        <Card>
-          <View style={styles.cardHeader}>
-            <Text style={styles.sectionLabel}>NET MARGIN</Text>
-            <DeltaBadge value={margin - priorMargin} />
-          </View>
-          <Text style={[styles.bigValue, {
-            color: (isAnnual ? margin : displayValue(margin, priorMargin, marginYear, p)) >= 0 ? Colors.green : Colors.red
-          }]}>
-            {(isAnnual ? margin : displayValue(margin, priorMargin, marginYear, p)).toFixed(1)}%
-          </Text>
-          {!isAnnual && <YearTabs years={years} selected={marginYear} onSelect={setMarginYear} />}
-          <BarChart
-            bars={isAnnual ? annualBars(margin, priorMargin) : yearBars(margin, priorMargin, marginYear, p)}
-            color={Colors.primary}
-            isPercent
+            onBarTap={(_bar, idx) => setSelectedNetBar(idx)}
+            onDismiss={() => setSelectedNetBar(null)}
             onDoubleTap={handleDoubleTap}
           />
         </Card>
@@ -741,56 +738,13 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
           </>
         )}
 
-        {Object.keys(byProp).length > 0 && (
-          <>
-            <SectionHeader title="Expenses by Property" />
-            <Card>
-              {Object.entries(byProp)
-                .sort(([, a]: any, [, b]: any) => b - a)
-                .map(([pid, amount]: any, i: number, arr: any[]) => {
-                  const pctVal = expenses > 0 ? (amount / expenses) * 100 : 0;
-                  return (
-                    <View key={pid}>
-                      <View style={styles.propExpRow}>
-                        <View style={styles.propExpInfo}>
-                          <Text style={styles.propExpName}>{propLabel(pid)}</Text>
-                          <Text style={styles.propExpPct}>{pctVal.toFixed(0)}%</Text>
-                        </View>
-                        <Text style={styles.propExpAmt}>{fmt$(amount)}</Text>
-                      </View>
-                      <View style={styles.propExpBarTrack}>
-                        <View style={[styles.propExpBarFill, { width: `${pctVal}%` }]} />
-                      </View>
-                      {i < arr.length - 1 && <View style={styles.propExpDivider} />}
-                    </View>
-                  );
-                })}
-            </Card>
-          </>
-        )}
       </>
     );
   };
 
   return (
     <View style={styles.outerContainer}>
-      {error ? <Card style={[styles.errorCard, { margin: Spacing.md }]}><Text style={styles.error}>{error}</Text></Card> : null}
-
-      {/* Period Toggle — scroll-driven */}
-      {!fixedPeriod && (
-        <View style={{ paddingHorizontal: Spacing.md }}>
-          <SwipePills
-            compact
-            items={PILL_ITEMS}
-            selected={period}
-            onSelect={handlePillSelect}
-            scrollOffset={scrollX}
-            pageWidth={SCREEN_W}
-          />
-        </View>
-      )}
-
-      {/* Horizontal paginated content — tap-only, no user swipe */}
+      {/* Horizontal paginated content — scrolls behind the sub-pill overlay */}
       <Animated.ScrollView
         ref={horizontalRef as any}
         horizontal
@@ -810,7 +764,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
           <View key={p} style={{ width: SCREEN_W, flex: 1 }}>
             <ScrollView
               contentContainerStyle={styles.content}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
               onTouchStart={dismissAllChartTooltips}
             >
               {renderPeriodContent(p)}
@@ -818,6 +772,32 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
           </View>
         ))}
       </Animated.ScrollView>
+
+      {/* ── Frosted glass sub-pill overlay ── */}
+      {!fixedPeriod && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingTop: 150, paddingBottom: 25, paddingHorizontal: Spacing.md }} pointerEvents="box-none">
+          <LinearGradient
+            colors={[
+              'rgba(248,249,250,0.95)',
+              'rgba(248,249,250,0.85)',
+              'rgba(248,249,250,0.5)',
+              'rgba(248,249,250,0)',
+            ]}
+            locations={[0, 0.65, 0.85, 1]}
+            style={StyleSheet.absoluteFillObject}
+            pointerEvents="none"
+          />
+          {error ? <Card style={[styles.errorCard, { marginBottom: Spacing.sm }]}><Text style={styles.error}>{error}</Text></Card> : null}
+          <SwipePills
+            compact
+            items={PILL_ITEMS}
+            selected={period}
+            onSelect={handlePillSelect}
+            scrollOffset={scrollX}
+            pageWidth={SCREEN_W}
+          />
+        </View>
+      )}
 
       <MonthDetailModal
         visible={!!drillDownMonth}
@@ -830,22 +810,52 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
 
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: 'transparent', overflow: 'hidden' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl },
+  content: { padding: Spacing.md, paddingTop: 195, paddingBottom: Spacing.xl },
   center: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorCard: { backgroundColor: Colors.redDim, borderColor: Colors.red + '30' },
   error: { color: Colors.red, fontSize: FontSize.sm },
 
   cardHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2,
   },
   sectionLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, letterSpacing: 0.8, fontWeight: '600' },
   bigValue: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },
+  compactValue: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text, marginBottom: 2 },
 
   cardRow: { flexDirection: 'row', gap: Spacing.sm },
   halfCard: { flex: 1 },
   miniLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: '500', marginBottom: 4 },
   cardValue: { fontSize: FontSize.lg, fontWeight: '700' },
   miniSub: { fontSize: FontSize.xs, color: Colors.textDim, marginTop: 2 },
+
+  // Compact revenue split chips
+  chipCard: { flex: 1, paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm },
+  chipRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  chipLabel: { fontSize: FontSize.xs - 1, color: Colors.textSecondary, fontWeight: '600', letterSpacing: 0.3 },
+  chipValue: { fontSize: FontSize.sm, fontWeight: '700' },
+
+  // Combined rev/exp header
+  cardHeaderLabels: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  cardHeaderBadges: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sectionLabelSep: { fontSize: FontSize.xs, color: Colors.textDim, fontWeight: '400' },
+  selectedLabel: {
+    fontSize: FontSize.xs - 1, fontWeight: '700', color: Colors.primary,
+    marginLeft: 6, backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
+    paddingHorizontal: 6, paddingVertical: 1, overflow: 'hidden',
+  },
+  dualBigRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 2 },
+  bigValueSep: { fontSize: FontSize.lg, fontWeight: '400', color: Colors.textDim },
+
+  // Net income + margin row
+  netRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
+  marginChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: Colors.glassDark, borderRadius: Radius.pill,
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderWidth: 0.5, borderColor: Colors.glassBorder,
+  },
+  marginChipLabel: { fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5 },
+  marginChipValue: { fontSize: FontSize.sm, fontWeight: '700' },
 
   cocRow: { flexDirection: 'row', alignItems: 'center' },
   cocHalf: { flex: 1, alignItems: 'center', paddingVertical: Spacing.sm },

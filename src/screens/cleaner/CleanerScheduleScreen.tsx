@@ -7,6 +7,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { useCleanerStore, CleanerEvent } from '../../store/cleanerStore';
+import { localDateStr } from '../../utils/format';
 
 type SubTab = 'Cleanings' | 'Check-ins' | 'Calendar';
 const SUB_TABS: SubTab[] = ['Calendar', 'Cleanings', 'Check-ins'];
@@ -22,12 +23,12 @@ const SUB_PAD = 3;
 
 function buildDayList() {
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = localDateStr(today);
   const days: { date: string; label: string; dayNum: number; isToday: boolean }[] = [];
   for (let i = -DAYS_BEFORE; i <= DAYS_AFTER; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().slice(0, 10);
+    const dateStr = localDateStr(d);
     days.push({
       date: dateStr,
       label: WEEKDAYS[d.getDay()],
@@ -92,18 +93,18 @@ export function CleanerScheduleScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<SubTab>('Calendar');
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [selectedDate, setSelectedDate] = useState(() => localDateStr());
   const [propFilter, setPropFilter] = useState('all');
 
   // Calendar state
   const today = new Date();
   const [calMonth, setCalMonth] = useState(today.getMonth());
   const [calYear, setCalYear] = useState(today.getFullYear());
-  const [calSelectedDay, setCalSelectedDay] = useState(new Date().toISOString().slice(0, 10));
+  const [calSelectedDay, setCalSelectedDay] = useState(localDateStr());
   const [calGridLayout, setCalGridLayout] = useState({ width: 0, height: 0 });
   const calGlassX = useRef(new Animated.Value(0)).current;
   const calGlassY = useRef(new Animated.Value(0)).current;
-  const calSelectedRef = useRef(new Date().toISOString().slice(0, 10));
+  const calSelectedRef = useRef(localDateStr());
 
   useEffect(() => {
     fetchSchedule().catch(() => setError('Could not load schedule.'));
@@ -273,7 +274,7 @@ export function CleanerScheduleScreen() {
     else setCalMonth(m => m + 1);
   };
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateStr();
 
   const numWeeks = calGrid.length;
   const calCellW = calGridLayout.width > 0 ? (calGridLayout.width - 2 * Spacing.sm) / 7 : 0;
@@ -316,7 +317,7 @@ export function CleanerScheduleScreen() {
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
     >
       {error && (
         <View style={styles.errorBanner}>
@@ -446,15 +447,15 @@ export function CleanerScheduleScreen() {
                     >
                       <View style={[
                         styles.calDayBubble,
-                        !isSelected && isToday && !isCleaning && !isCheckin && styles.calDayBubbleToday,
                         !isSelected && isCheckin && styles.calDayBubbleCheckin,
                         !isSelected && isCleaning && !isCheckin && styles.calDayBubbleCleaning,
+                        isToday && styles.calDayBubbleToday,
                       ]}>
                         <Text style={[
                           styles.calDayText,
-                          isToday && styles.calDayTextToday,
                           isCheckin && styles.calDayTextCheckin,
                           isCleaning && !isCheckin && styles.calDayTextCleaning,
+                          isToday && styles.calDayTextToday,
                           isSelected && styles.calDayTextSelected,
                         ]}>
                           {day}
@@ -559,7 +560,7 @@ export function CleanerScheduleScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: 'transparent' },
+  container: { flex: 1, backgroundColor: 'transparent', paddingTop: 140 },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -673,7 +674,7 @@ const styles = StyleSheet.create({
   dayLabelActive: { color: Colors.text, fontWeight: '600' },
   dayNum: { fontSize: FontSize.lg, fontWeight: '600', color: Colors.text, marginTop: 2 },
   dayNumActive: { color: Colors.text, fontWeight: '800' },
-  dayToday: { color: Colors.primary },
+  dayToday: { color: Colors.green, fontWeight: '900' },
 
   events: { padding: Spacing.md },
   eventCard: {
@@ -724,10 +725,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   calDayBubbleToday: {
-    backgroundColor: 'rgba(59,130,246,0.15)',
-    borderWidth: 1.5, borderColor: 'rgba(59,130,246,0.25)',
+    borderWidth: 3, borderColor: Colors.green,
+    backgroundColor: 'rgba(30,206,110,0.08)',
     ...Platform.select({
-      ios: { shadowColor: 'rgba(59,130,246,0.35)', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 8 },
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 8 },
     }),
   },
   calDayBubbleCheckin: {
@@ -754,7 +755,7 @@ const styles = StyleSheet.create({
     }),
   },
   calDayText: { fontSize: FontSize.md, fontWeight: '500', color: Colors.text },
-  calDayTextToday: { color: Colors.primary, fontWeight: '800' },
+  calDayTextToday: { color: Colors.green, fontWeight: '900' },
   calDayTextCheckin: { color: Colors.green, fontWeight: '600' },
   calDayTextCleaning: { color: Colors.yellow, fontWeight: '600' },
   calDayTextSelected: { fontWeight: '800' as const },

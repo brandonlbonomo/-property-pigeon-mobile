@@ -7,7 +7,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { CleanerEvent, InvoiceLineItem } from '../../../store/cleanerStore';
-import { fmt$ } from '../../../utils/format';
+import { fmt$ , localDateStr } from '../../../utils/format';
 
 const CLEANING_TYPES = [
   'Standard Cleaning',
@@ -101,7 +101,7 @@ export function ReviewStep({
   };
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+    <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" style={styles.scroll} contentContainerStyle={styles.content}>
       <Text style={styles.heading}>Review Invoice</Text>
       <Text style={styles.subHeading}>{hostName} · {period}</Text>
 
@@ -237,7 +237,7 @@ function AddManualItemModal({ visible, onClose, onAdd }: {
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) return;
     onAdd({
-      date: new Date().toISOString().slice(0, 10),
+      date: localDateStr(),
       propertyName: description,
       cleaningType: type,
       rate: amountNum,

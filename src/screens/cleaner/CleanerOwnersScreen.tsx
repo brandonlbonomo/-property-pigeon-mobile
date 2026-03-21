@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
   TouchableOpacity, TextInput, Alert, ActivityIndicator, Platform,
@@ -70,6 +70,10 @@ export function CleanerOwnersScreen() {
   const [showFollow, setShowFollow] = useState(false);
   const [followInput, setFollowInput] = useState('');
   const [followLoading, setFollowLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<{ username: string; role: string } | null>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [propertyPicker, setPropertyPicker] = useState<{
     owner: FollowedOwner;
     properties: { id: string; label: string }[];
@@ -181,10 +185,10 @@ export function CleanerOwnersScreen() {
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-    <ScrollView
+    <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
     >
       {error && (
         <View style={styles.errorBanner}>
@@ -241,18 +245,76 @@ export function CleanerOwnersScreen() {
           {showFollow ? (
             <View style={styles.followBox}>
               <Text style={styles.followLabel}>Follow code or username</Text>
-              <TextInput
-                style={styles.followInput}
-                value={followInput}
-                onChangeText={setFollowInput}
-                placeholder="PPG-XXXXXX or username"
-                placeholderTextColor={Colors.textDim}
-                autoCapitalize="none"
-                autoFocus
-              />
+              {/* Selected user bubble */}
+              {selectedUser && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.sm }}>
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+                    backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
+                    paddingHorizontal: Spacing.sm + 4, paddingVertical: 6,
+                    borderWidth: 1.5, borderColor: Colors.green + '40',
+                  }}>
+                    <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: Colors.green + '20', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: Colors.green }}>{selectedUser.username[0].toUpperCase()}</Text>
+                    </View>
+                    <Text style={{ fontSize: FontSize.sm, fontWeight: '700', color: Colors.green }}>{selectedUser.username}</Text>
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => { setSelectedUser(null); setFollowInput(''); }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Ionicons name="close-circle" size={18} color={Colors.green} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+              {!selectedUser && (
+                <TextInput
+                  style={styles.followInput}
+                  value={followInput}
+                  onChangeText={(t) => {
+                    setFollowInput(t);
+                    if (searchTimer.current) clearTimeout(searchTimer.current);
+                    if (t.trim().length >= 2 && !t.startsWith('PPG-')) {
+                      setSearchLoading(true);
+                      searchTimer.current = setTimeout(async () => {
+                        try {
+                          const res = await apiFetch(`/api/users/search?q=${encodeURIComponent(t.trim())}`);
+                          setSearchResults(res.users || []);
+                        } catch { setSearchResults([]); }
+                        setSearchLoading(false);
+                      }, 300);
+                    } else {
+                      setSearchResults([]);
+                      setSearchLoading(false);
+                    }
+                  }}
+                  placeholder="PPG-XXXXXX or username"
+                  placeholderTextColor={Colors.textDim}
+                  autoCapitalize="none"
+                  autoFocus
+                />
+              )}
+              {/* Auto-populated search results */}
+              {searchLoading && <ActivityIndicator size="small" color={Colors.green} style={{ marginTop: Spacing.sm }} />}
+              {!selectedUser && searchResults.length > 0 && (
+                <View style={{ marginTop: Spacing.sm }}>
+                  {searchResults.slice(0, 5).map((u: any) => (
+                    <TouchableOpacity key={u.user_id} activeOpacity={0.7}
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border }}
+                      onPress={() => { setSelectedUser({ username: u.username, role: u.role }); setFollowInput(u.username); setSearchResults([]); }}
+                    >
+                      <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.greenDim, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.sm }}>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.green }}>{(u.username || '?')[0].toUpperCase()}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>{u.username}</Text>
+                        <Text style={{ fontSize: FontSize.xs, color: Colors.textDim }}>{u.role === 'owner' ? 'Host' : 'Cleaner'}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
               <View style={styles.followBtns}>
                 <TouchableOpacity activeOpacity={0.7}
-          style={styles.cancelBtn} onPress={() => setShowFollow(false)}>
+          style={styles.cancelBtn} onPress={() => { setShowFollow(false); setSearchResults([]); setSelectedUser(null); }}>
                   <Text style={styles.cancelBtnText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity activeOpacity={0.7}
@@ -305,7 +367,7 @@ export function CleanerOwnersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl * 2 },
+  content: { padding: Spacing.md, paddingTop: 170, paddingBottom: Spacing.xl * 2 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: Spacing.sm },
   backText: { fontSize: FontSize.md, color: Colors.primary },
   sectionTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text, marginBottom: Spacing.xs },

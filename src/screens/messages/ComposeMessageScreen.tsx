@@ -79,7 +79,7 @@ export function ComposeMessageScreen() {
         </View>
       )}
 
-      <ScrollView style={styles.results} keyboardDismissMode="on-drag">
+      <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" style={styles.results} keyboardDismissMode="on-drag">
         {results.map(user => {
           const initial = (user.username || '?')[0].toUpperCase();
           return (

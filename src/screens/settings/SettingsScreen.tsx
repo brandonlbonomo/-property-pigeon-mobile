@@ -13,7 +13,7 @@ import { useDataStore } from '../../store/dataStore';
 import { useOnboardingStore } from '../../store/onboardingStore';
 import { useUserStore, generatePropertyId } from '../../store/userStore';
 import { apiFetch, setToken, apiDeleteAccount, apiCheckUsername, apiUpdateUsername, apiSearchUsers, apiGetFollowCode, apiFollowRequest } from '../../services/api';
-import { fmt$, fmtDate } from '../../utils/format';
+import { fmt$, fmtDate , localDateStr } from '../../utils/format';
 import { useNotificationStore } from '../../store/notificationStore';
 import { PlaidLinkModal } from '../../components/PlaidLink';
 import { TagPill, SPECIAL_TAGS, getPropertyColor } from '../../components/TagPill';
@@ -24,7 +24,7 @@ import { AddressAutocomplete, ResolvedAddress } from '../../components/AddressAu
 import { PropertyStreetView } from '../../components/PropertyStreetView';
 import { MAPS_PROXY_URL } from '../../constants/api';
 
-type Section = 'main' | 'properties' | 'pricelabs' | 'income' | 'plaid' | 'cleanerFeeds' | 'tagRules' | 'billing' | 'transactions' | 'invoices' | 'notifications' | 'customTags';
+type Section = 'main' | 'properties' | 'income' | 'plaid' | 'cleanerFeeds' | 'tagRules' | 'billing' | 'transactions' | 'invoices' | 'notifications' | 'customTags';
 
 // ── Shared Components ──
 
@@ -217,7 +217,7 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
       <BackButton onPress={onBack} />
       <Text style={styles.pageTitle}>Invoices Received</Text>
       <Text style={styles.pageDesc}>Invoices sent to you by your cleaners.</Text>
@@ -322,9 +322,9 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
 // ── Add Property Modal ──
 function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }: {
   visible: boolean; onClose: () => void;
-  onSave: (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; icalUrl?: string; icalUrls?: string[]; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean }) => Promise<void>;
+  onSave: (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean; downPaymentPct?: number; icalUrls?: string[] }) => Promise<void>;
   portfolioType: 'str' | 'ltr' | 'both' | null;
-  editData?: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; lat?: number; lng?: number; unitLabels?: string[]; existingIcalUrls?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean } | null;
+  editData?: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean; downPaymentPct?: number; icalUrls?: string[] } | null;
 }) {
   const isEditing = !!editData;
   const [name, setName] = useState('');
@@ -334,10 +334,11 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
   const [isAirbnb, setIsAirbnb] = useState(portfolioType !== 'ltr');
   const [market, setMarket] = useState('');
   const [resolvedAddress, setResolvedAddress] = useState<ResolvedAddress | null>(null);
-  const [icalUrls, setIcalUrls] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [icalUrls, setIcalUrls] = useState<string[]>([]);
   const [purchasePrice, setPurchasePrice] = useState('');
   const [purchaseDate, setPurchaseDate] = useState('');
+  const [downPaymentPct, setDownPaymentPct] = useState('');
   const [valuationOptOut, setValuationOptOut] = useState(false);
 
   const unitCount = Math.max(1, parseInt(units) || 1);
@@ -351,16 +352,17 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
       setIsAirbnb(editData.isAirbnb);
       setMarket(editData.market || '');
       setUnitLabels(editData.unitLabels || []);
-      setIcalUrls(editData.existingIcalUrls || []);
       setPurchasePrice(editData.purchasePrice ? String(editData.purchasePrice) : '');
       setPurchaseDate(editData.purchaseDate || '');
+      setDownPaymentPct(editData.downPaymentPct ? String(editData.downPaymentPct) : '');
       setValuationOptOut(editData.valuationOptOut || false);
+      setIcalUrls(editData.icalUrls || []);
       if (editData.lat) setResolvedAddress({ address: editData.address, lat: editData.lat, lng: editData.lng || 0, city: '', state: '' });
       else setResolvedAddress(null);
     } else if (!visible) {
       setName(''); setAddress(''); setUnits('1'); setUnitLabels([]);
-      setIsAirbnb(portfolioType !== 'ltr'); setMarket(''); setResolvedAddress(null); setIcalUrls([]);
-      setPurchasePrice(''); setPurchaseDate(''); setValuationOptOut(false);
+      setIsAirbnb(portfolioType !== 'ltr'); setMarket(''); setResolvedAddress(null);
+      setPurchasePrice(''); setPurchaseDate(''); setDownPaymentPct(''); setValuationOptOut(false); setIcalUrls([]);
     }
   }, [visible, editData]);
 
@@ -376,31 +378,28 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
 
   const handleSave = async () => {
     if (!name.trim()) { Alert.alert('Required', 'Enter a property name'); return; }
-    const trimmedIcals = icalUrls.slice(0, unitCount).map(u => (u || '').trim());
-    for (const u of trimmedIcals) {
-      if (u && !/^https?:\/\/.+\..+/.test(u)) {
-        Alert.alert('Invalid', 'Enter a valid iCal URL starting with http:// or https://'); return;
-      }
-    }
     setSaving(true);
     try {
       const labels = unitCount > 1 ? unitLabels.slice(0, unitCount).map(l => l.trim()).filter(Boolean) : undefined;
-      const validIcals = trimmedIcals.filter(Boolean);
       const pp = parseFloat(purchasePrice);
+      const validIcalUrls = isAirbnb ? icalUrls.slice(0, unitCount) : undefined;
+      const hasIcalUrls = validIcalUrls?.some(u => u?.trim());
       await onSave({
         name: name.trim(), address: address.trim(), units: unitCount,
         isAirbnb,
         market: market.trim() || undefined,
-        ...(unitCount === 1 && validIcals[0] ? { icalUrl: validIcals[0] } : {}),
-        ...(unitCount > 1 && validIcals.length ? { icalUrls: trimmedIcals } : {}),
         ...(resolvedAddress?.lat ? { lat: resolvedAddress.lat, lng: resolvedAddress.lng } : {}),
         ...(labels?.length ? { unitLabels: labels } : {}),
         ...(pp > 0 ? { purchasePrice: pp } : {}),
         ...(purchaseDate ? { purchaseDate } : {}),
+        ...(parseFloat(downPaymentPct) > 0 ? { downPaymentPct: parseFloat(downPaymentPct) } : {}),
         valuationOptOut,
+        ...(hasIcalUrls ? { icalUrls: validIcalUrls } : {}),
       });
       setName(''); setAddress(''); setUnits('1'); setUnitLabels([]); setIsAirbnb(portfolioType !== 'ltr');
       setMarket(''); setResolvedAddress(null); setIcalUrls([]); onClose();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Could not save property. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -411,7 +410,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
       onRequestClose={onClose}>
       <KeyboardAvoidingView style={{ flex: 1, backgroundColor: Colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
-          <View style={{ width: 36, height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2 }} />
+          <View style={{ width: 36, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2 }} />
         </View>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: Spacing.xl * 2 }}
           keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -466,7 +465,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
           <View style={{ flex: 1 }}>
             <Text style={styles.modalFieldLabel}>Units</Text>
             <TextInput style={styles.modalInput} value={units}
-              onChangeText={(t) => { setUnits(t); const n = parseInt(t) || 1; if (n > 1 && unitLabels.length < n) setUnitLabels(prev => [...prev, ...Array(n - prev.length).fill('')]); if (n > 1 && icalUrls.length < n) setIcalUrls(prev => [...prev, ...Array(n - prev.length).fill('')]); }}
+              onChangeText={(t) => { setUnits(t); const n = parseInt(t) || 1; if (n > 1 && unitLabels.length < n) setUnitLabels(prev => [...prev, ...Array(n - prev.length).fill('')]); }}
               placeholder="1" placeholderTextColor={Colors.textDim} keyboardType="number-pad" />
           </View>
 
@@ -482,30 +481,28 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
                     value={unitLabels[i] || ''}
                     onChangeText={(t) => { const updated = [...unitLabels]; updated[i] = t; setUnitLabels(updated); }}
                     placeholder={`Unit ${i + 1}`} placeholderTextColor={Colors.textDim} maxLength={50} />
-                  {isAirbnb && (
-                    <TextInput style={[styles.modalInput, { marginTop: Spacing.xs }]}
-                      value={icalUrls[i] || ''}
-                      onChangeText={(t) => { const updated = [...icalUrls]; updated[i] = t; setIcalUrls(updated); }}
-                      placeholder="iCal link (optional)"
-                      placeholderTextColor={Colors.textDim}
-                      autoCapitalize="none" keyboardType="url" maxLength={2000} />
-                  )}
                 </View>
               ))}
             </View>
           )}
 
-          {/* Single-unit iCal link — shown for Airbnb properties with 1 unit */}
-          {isAirbnb && unitCount === 1 && (
+          {/* iCal URLs — shown for Airbnb properties */}
+          {isAirbnb && (
             <>
-              <Text style={styles.modalFieldLabel}>iCal Link (optional)</Text>
+              <Text style={styles.modalSectionLabel}>AIRBNB iCAL FEEDS</Text>
               <Text style={styles.modalHelpTextSmall}>
-                Paste your Airbnb calendar export URL to enable occupancy tracking and inventory auto-depletion.
+                Paste from Airbnb → Listing → Availability → Export Calendar
               </Text>
-              <TextInput style={styles.modalInput} value={icalUrls[0] || ''} onChangeText={(t) => setIcalUrls([t])}
-                placeholder="https://www.airbnb.com/calendar/ical/..."
-                placeholderTextColor={Colors.textDim}
-                autoCapitalize="none" keyboardType="url" maxLength={2000} />
+              {Array.from({ length: unitCount }, (_, i) => (
+                <View key={`ical-${i}`} style={{ marginTop: i > 0 ? Spacing.sm : Spacing.xs }}>
+                  <TextInput style={styles.modalInput}
+                    value={icalUrls[i] || ''}
+                    onChangeText={(t) => { const updated = [...icalUrls]; updated[i] = t; setIcalUrls(updated); }}
+                    placeholder={unitCount > 1 ? `${unitLabels[i]?.trim() || `Unit ${i + 1}`} iCal URL` : 'iCal URL'}
+                    placeholderTextColor={Colors.textDim}
+                    autoCapitalize="none" autoCorrect={false} />
+                </View>
+              ))}
             </>
           )}
 
@@ -527,6 +524,10 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
               <TextInput style={styles.modalInput} value={purchaseDate}
                 onChangeText={setPurchaseDate} placeholder="YYYY-MM-DD"
                 placeholderTextColor={Colors.textDim} />
+              <Text style={styles.modalFieldLabel}>Down Payment %</Text>
+              <TextInput style={styles.modalInput} value={downPaymentPct}
+                onChangeText={setDownPaymentPct} placeholder="e.g. 20"
+                placeholderTextColor={Colors.textDim} keyboardType="decimal-pad" />
             </>
           )}
 
@@ -777,7 +778,7 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
       propId: (isSTR || incomeType === 'airbnb') ? 'airbnb' : propId,
       amount: amount.trim(),
       description: description.trim() || ((isSTR || incomeType === 'airbnb') ? 'Airbnb income' : ''),
-      date: new Date().toISOString().slice(0, 10),
+      date: localDateStr(),
       incomeType: (isSTR || incomeType === 'airbnb') ? 'airbnb' : 'property',
     });
     setPropId(''); setAmount(''); setDescription(''); setIncomeType('airbnb'); onClose();
@@ -878,7 +879,7 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
 
 const PILL_LABELS: Record<string, string> = {
   profile: 'HQ', home: 'Overview', performance: 'Performance', projections: 'Projections',
-  calendar: 'Calendar', cleanings: 'Cleanings', inventory: 'Inventory',
+  logistics: 'Logistics',
   schedule: 'Schedule', owners: 'Hosts', invoices: 'Invoices', money: 'Money',
 };
 
@@ -913,13 +914,11 @@ export function SettingsScreen() {
   const [showAddIncome, setShowAddIncome] = useState(false);
   const [showAddCleaner, setShowAddCleaner] = useState(false);
   const [showAddTagRule, setShowAddTagRule] = useState(false);
-  const [icalFeeds, setIcalFeeds] = useState<any[]>([]);
   const [cleanerFeeds, setCleanerFeeds] = useState<any[]>([]);
   const [tagRules, setTagRules] = useState<Record<string, string>>({});
   const [customCategories, setCustomCategories] = useState<any[]>([]);
   const [customTagName, setCustomTagName] = useState('');
   const [customTagType, setCustomTagType] = useState<'income' | 'expense'>('expense');
-  const [priceLabsKey, setPriceLabsKey] = useState('');
   const [plaidAccounts, setPlaidAccounts] = useState<any[]>([]);
   const [plaidLinkToken, setPlaidLinkToken] = useState('');
   const [showPlaidLink, setShowPlaidLink] = useState(false);
@@ -991,10 +990,6 @@ export function SettingsScreen() {
     // Properties come from local userStore profile, not API
     setProperties(userProfile?.properties || []);
     try { const tags = await apiFetch('/api/tags'); setTagRules(tags || {}); } catch { }
-    try {
-      const data = await apiFetch('/api/ical/feeds');
-      setIcalFeeds(Array.isArray(data) ? data : (data?.feeds || []));
-    } catch { setIcalFeeds([]); }
     try {
       const data = await apiFetch('/api/cleaner/feeds');
       setCleanerFeeds(Array.isArray(data) ? data : (data?.feeds || []));
@@ -1111,11 +1106,23 @@ export function SettingsScreen() {
     Alert.alert('Cache Cleared', 'Data will reload on next visit to each tab.');
   };
 
-  const handleAddProperty = async (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; icalUrl?: string; icalUrls?: string[]; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean }) => {
+  const FREE_ICAL_LIMIT = 3;
+
+  const handleAddProperty = async (p: { name: string; address: string; units: number; isAirbnb: boolean; market?: string; lat?: number; lng?: number; unitLabels?: string[]; purchasePrice?: number; purchaseDate?: string; valuationOptOut?: boolean; downPaymentPct?: number; icalUrls?: string[] }) => {
     const currentProps = userProfile?.properties || [];
     if (isReadOnly && currentProps.length >= 2) {
       handleProGate();
       return;
+    }
+    // Gate: free users limited to 3 total iCal URLs
+    if (isReadOnly && p.icalUrls?.some(u => u?.trim())) {
+      const existingIcalCount = currentProps.reduce((sum, prop) => sum + (prop.icalUrls?.filter(u => u?.trim()).length || 0), 0);
+      const newIcalCount = p.icalUrls.filter(u => u?.trim()).length;
+      if (existingIcalCount + newIcalCount > FREE_ICAL_LIMIT) {
+        Alert.alert('Pro Required', `Free accounts are limited to ${FREE_ICAL_LIMIT} iCal feeds. Subscribe to Pro for unlimited iCal feeds.`);
+        handleProGate();
+        return;
+      }
     }
     const id = generatePropertyId(p.name);
     const newProp = {
@@ -1126,6 +1133,8 @@ export function SettingsScreen() {
       ...(p.purchasePrice ? { purchasePrice: p.purchasePrice } : {}),
       ...(p.purchaseDate ? { purchaseDate: p.purchaseDate } : {}),
       ...(p.valuationOptOut ? { valuationOptOut: true } : {}),
+      ...(p.downPaymentPct ? { downPaymentPct: p.downPaymentPct } : {}),
+      ...(p.icalUrls?.some(u => u?.trim()) ? { icalUrls: p.icalUrls } : {}),
     };
     const updatedProps = [...currentProps, newProp];
     await setUserProfile({ properties: updatedProps });
@@ -1134,33 +1143,11 @@ export function SettingsScreen() {
     try {
       await apiFetch('/api/props', { method: 'POST', body: JSON.stringify({ props: updatedProps }) });
     } catch {}
-    // Save iCal feeds (single or per-unit)
-    const allIcals: { url: string; unitLabel?: string }[] = [];
-    if (p.icalUrl) {
-      allIcals.push({ url: p.icalUrl });
-    } else if (p.icalUrls) {
-      p.icalUrls.forEach((u, i) => {
-        if (u) allIcals.push({ url: u, unitLabel: p.unitLabels?.[i] || `Unit ${i + 1}` });
-      });
+    // Fire iCal sync in background — don't block the save
+    if (p.icalUrls?.some(u => u?.trim())) {
+      apiFetch('/api/ical/sync', { method: 'POST' }).catch(() => {});
     }
-    if (allIcals.length) {
-      try {
-        const newFeeds = allIcals.map(ic => ({
-          propId: id,
-          listingName: ic.unitLabel ? `${p.name} - ${ic.unitLabel}` : p.name,
-          url: ic.url,
-        }));
-        const updatedFeeds = [...icalFeeds, ...newFeeds];
-        await apiFetch('/api/ical/feeds', { method: 'POST', body: JSON.stringify({ feeds: updatedFeeds }) });
-        setIcalFeeds(updatedFeeds);
-        // Trigger sync so events appear immediately
-        try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch {}
-        invalidateAll();
-      } catch {}
-    } else {
-      // No iCal feeds — still invalidate all data for property change propagation
-      invalidateAll();
-    }
+    invalidateAll();
     // Auto-upgrade portfolioType when mixing property types
     const currentType = portfolioType;
     const hasAirbnb = updatedProps.some((prop: any) => prop.isAirbnb);
@@ -1201,7 +1188,7 @@ export function SettingsScreen() {
 
     Alert.alert(
       'Delete Property',
-      `Deleting "${label}" will permanently remove all associated data including units, iCal feeds, calendar events, transaction tags, inventory, and P&L history.\n\nThis cannot be undone.`,
+      `Deleting "${label}" will permanently remove all associated data including units, calendar events, transaction tags, inventory, and P&L history.\n\nThis cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete All Data', style: 'destructive', onPress: async () => {
@@ -1225,15 +1212,6 @@ export function SettingsScreen() {
         }},
       ],
     );
-  };
-
-  const handleSavePriceLabs = async () => {
-    if (!priceLabsKey.trim()) { Alert.alert('Required', 'Enter your PriceLabs API key'); return; }
-    try {
-      await apiFetch('/api/pricelabs/config', { method: 'POST', body: JSON.stringify({ api_key: priceLabsKey.trim() }) });
-      await activateData();
-      Alert.alert('Saved', 'PriceLabs API key saved.');
-    } catch { Alert.alert('Error', 'Could not save API key. Please try again.'); }
   };
 
   const handleAddManualIncome = async (entry: { propId: string; amount: string; description: string; date: string; incomeType: string }) => {
@@ -1420,7 +1398,7 @@ export function SettingsScreen() {
 
   if (section === 'properties') {
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Properties</Text>
         <Text style={styles.pageDesc}>Manage your rental properties. Properties determine how transactions are categorized.</Text>
@@ -1446,7 +1424,6 @@ export function SettingsScreen() {
                   <Text style={styles.propName}>{label}</Text>
                   <Text style={styles.propType}>
                     {p.units} {p.units === 1 ? 'unit' : 'units'} · {p.isAirbnb ? 'STR' : 'LTR'}
-                    {(() => { const feedCount = icalFeeds.filter((f: any) => f.propId === (p.id || p.name)).length; return feedCount > 0 ? ` · ${feedCount} iCal` : ''; })()}
                   </Text>
                 </View>
                 <TouchableOpacity activeOpacity={0.7} onPress={() => setEditingPropIndex(i)}
@@ -1531,39 +1508,33 @@ export function SettingsScreen() {
           visible={editingPropIndex !== null}
           onClose={() => setEditingPropIndex(null)}
           portfolioType={portfolioType}
-          editData={editingPropIndex !== null ? (() => {
-            const prop = properties[editingPropIndex];
-            const propId = prop.id || prop.name;
-            const propFeeds = icalFeeds.filter((f: any) => f.propId === propId);
-            // Build iCal URLs array aligned with unit labels
-            const existingIcalUrls: string[] = [];
-            if (prop.units > 1 && prop.unitLabels?.length) {
-              prop.unitLabels.forEach((label: string) => {
-                const feed = propFeeds.find((f: any) =>
-                  f.listingName === `${prop.name} - ${label}` || f.url
-                );
-                const matchedFeed = propFeeds.find((f: any) =>
-                  f.listingName?.includes(label)
-                );
-                existingIcalUrls.push(matchedFeed?.url || '');
-              });
-            } else if (propFeeds.length > 0) {
-              existingIcalUrls.push(propFeeds[0].url || '');
-            }
-            return { ...prop, existingIcalUrls };
-          })() : null}
+          editData={editingPropIndex !== null ? properties[editingPropIndex] : null}
           onSave={async (p) => {
             if (editingPropIndex === null) return;
             const currentProps = [...(userProfile?.properties || [])];
             const existing = currentProps[editingPropIndex];
             const propId = existing.id || existing.name;
-            const oldName = existing.name;
+            // Gate: free users limited to 3 total iCal URLs
+            if (isReadOnly && p.icalUrls?.some(u => u?.trim())) {
+              const existingIcalCount = currentProps.reduce((sum, prop, idx) => {
+                if (idx === editingPropIndex) return sum; // don't count the one being edited
+                return sum + (prop.icalUrls?.filter(u => u?.trim()).length || 0);
+              }, 0);
+              const newIcalCount = p.icalUrls.filter(u => u?.trim()).length;
+              if (existingIcalCount + newIcalCount > FREE_ICAL_LIMIT) {
+                Alert.alert('Pro Required', `Free accounts are limited to ${FREE_ICAL_LIMIT} iCal feeds. Subscribe to Pro for unlimited iCal feeds.`);
+                handleProGate();
+                return;
+              }
+            }
             currentProps[editingPropIndex] = {
               ...existing, name: p.name, label: p.name, address: p.address, units: p.units,
               isAirbnb: p.isAirbnb,
               ...(p.market ? { market: p.market } : {}),
               ...(p.lat ? { lat: p.lat, lng: p.lng } : {}),
               ...(p.unitLabels?.length ? { unitLabels: p.unitLabels } : { unitLabels: undefined }),
+              ...(p.downPaymentPct ? { downPaymentPct: p.downPaymentPct } : { downPaymentPct: undefined }),
+              ...(p.icalUrls?.some(u => u?.trim()) ? { icalUrls: p.icalUrls } : { icalUrls: undefined }),
             };
             await setUserProfile({ properties: currentProps });
             setProperties(currentProps);
@@ -1571,51 +1542,11 @@ export function SettingsScreen() {
               await apiFetch('/api/props', { method: 'POST', body: JSON.stringify({ props: currentProps }) });
             } catch {}
 
-            // Collect iCal URLs from form (new or pre-filled)
-            const allIcals: { url: string; unitLabel?: string }[] = [];
-            if (p.icalUrl) {
-              allIcals.push({ url: p.icalUrl });
-            } else if (p.icalUrls) {
-              p.icalUrls.forEach((u, i) => {
-                if (u) allIcals.push({ url: u, unitLabel: p.unitLabels?.[i] || `Unit ${i + 1}` });
-              });
+            // Fire iCal sync in background — don't block the save
+            if (p.icalUrls?.some(u => u?.trim())) {
+              apiFetch('/api/ical/sync', { method: 'POST' }).catch(() => {});
             }
 
-            // Get existing feeds for this property (to update names even if URLs unchanged)
-            const existingPropFeeds = icalFeeds.filter((f: any) => f.propId === propId);
-            const otherFeeds = icalFeeds.filter((f: any) => f.propId !== propId);
-
-            let updatedFeeds = icalFeeds;
-            if (allIcals.length) {
-              // User provided URLs — rebuild feeds with new names
-              const newFeeds = allIcals.map(ic => ({
-                propId,
-                listingName: ic.unitLabel ? `${p.name} - ${ic.unitLabel}` : p.name,
-                url: ic.url,
-              }));
-              updatedFeeds = [...otherFeeds, ...newFeeds];
-            } else if (existingPropFeeds.length > 0) {
-              // No URLs in form but feeds exist — update listingNames for name/unit changes
-              const renamedFeeds = existingPropFeeds.map((f: any, i: number) => ({
-                ...f,
-                listingName: p.unitLabels?.[i]
-                  ? `${p.name} - ${p.unitLabels[i]}`
-                  : p.units > 1
-                    ? `${p.name} - Unit ${i + 1}`
-                    : p.name,
-              }));
-              updatedFeeds = [...otherFeeds, ...renamedFeeds];
-            }
-
-            if (updatedFeeds !== icalFeeds) {
-              try {
-                await apiFetch('/api/ical/feeds', { method: 'POST', body: JSON.stringify({ feeds: updatedFeeds }) });
-                setIcalFeeds(updatedFeeds);
-                if (allIcals.length) {
-                  try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch {}
-                }
-              } catch {}
-            }
             // Always invalidate caches so renamed properties reflect everywhere
             invalidateAll();
             setEditingPropIndex(null);
@@ -1627,7 +1558,7 @@ export function SettingsScreen() {
 
   if (section === 'customTags') {
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Custom Tags</Text>
         <Text style={styles.pageDesc}>Create custom income or expense categories for tagging transactions.</Text>
@@ -1707,39 +1638,6 @@ export function SettingsScreen() {
     );
   }
 
-  if (section === 'pricelabs') {
-    return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
-        <BackButton onPress={() => setSection('main')} />
-        <Text style={styles.pageTitle}>PriceLabs</Text>
-        <Text style={styles.pageDesc}>Connect PriceLabs to get market occupancy data and nightly rate analytics for your properties.</Text>
-        <SectionTitle title="API Configuration" />
-        <CardGroup>
-          <View style={styles.inputRow}>
-            <Text style={styles.inputLabel}>API Key</Text>
-            <TextInput style={styles.settingsInput} value={priceLabsKey} onChangeText={setPriceLabsKey}
-              placeholder="Enter your PriceLabs API key" placeholderTextColor={Colors.textDim}
-              autoCapitalize="none" secureTextEntry />
-          </View>
-        </CardGroup>
-        <TouchableOpacity activeOpacity={0.7}
-          style={styles.syncBtn} onPress={handleSavePriceLabs}>
-          <Ionicons name="save" size={16} color="#fff" />
-          <Text style={styles.syncBtnText}>Save API Key</Text>
-        </TouchableOpacity>
-        <SectionTitle title="How to get your API key" />
-        <CardGroup>
-          <View style={styles.helpRow}>
-            <Text style={styles.helpStep}>1. Log in to your PriceLabs account</Text>
-            <Text style={styles.helpStep}>2. Go to Account Settings → API Access</Text>
-            <Text style={styles.helpStep}>3. Generate or copy your API key</Text>
-            <Text style={styles.helpStep}>4. Paste it above and tap Save</Text>
-          </View>
-        </CardGroup>
-      </ScrollView>
-    );
-  }
-
   if (section === 'income') {
     const incomeDesc = portfolioType === 'str'
       ? 'Record Airbnb direct deposits. Since Airbnb pays out as a lump sum, income is tracked as a total — not per-property.'
@@ -1747,7 +1645,7 @@ export function SettingsScreen() {
       ? 'Add rental income per property — monthly rent, late fees, security deposits, or any other revenue.'
       : 'Add Airbnb lump-sum deposits or per-property income for non-Airbnb rentals.';
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Manual Income</Text>
         <Text style={styles.pageDesc}>{incomeDesc}</Text>
@@ -1763,7 +1661,7 @@ export function SettingsScreen() {
 
   if (section === 'plaid') {
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Plaid Connections</Text>
         <Text style={styles.pageDesc}>Connect your bank accounts to automatically import transactions. Portfolio Pigeon uses Plaid for secure bank connections.</Text>
@@ -1836,7 +1734,7 @@ export function SettingsScreen() {
     };
 
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Cleaner Feeds</Text>
         <Text style={styles.pageDesc}>Add your cleaning team and optionally link their calendar feeds to auto-schedule cleanings based on check-outs.</Text>
@@ -1893,7 +1791,7 @@ export function SettingsScreen() {
       { key: 'messages', label: 'Messages', sub: 'New messages and group chats', icon: 'chatbubble-outline' },
     ];
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Notifications</Text>
         <Text style={styles.pageDesc}>Choose which push notifications you'd like to receive.</Text>
@@ -1909,7 +1807,7 @@ export function SettingsScreen() {
                 <Switch
                   value={notifPrefs[item.key] !== false}
                   onValueChange={v => updateNotifPrefs({ [item.key]: v })}
-                  trackColor={{ true: Colors.green, false: 'rgba(255,255,255,0.15)' }}
+                  trackColor={{ true: Colors.green, false: 'rgba(0,0,0,0.12)' }}
                 />
               </View>
               {i < arr.length - 1 && <Divider />}
@@ -1922,7 +1820,7 @@ export function SettingsScreen() {
 
   if (section === 'tagRules') {
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Tag Rules</Text>
         <Text style={styles.pageDesc}>Auto-tag rules categorize transactions by matching payee names. Create rules to automatically sort expenses.</Text>
@@ -2054,7 +1952,7 @@ export function SettingsScreen() {
     };
 
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <BackButton onPress={() => setSection('main')} />
         <Text style={styles.pageTitle}>Subscription</Text>
         <Text style={styles.pageDesc}>Manage your Portfolio Pigeon subscription.</Text>
@@ -2288,8 +2186,7 @@ export function SettingsScreen() {
   // ═══════════════════════════════
   return (
     <View style={{ flex: 1 }}>
-    <GradientHeader />
-    <ScrollView style={[styles.container, { backgroundColor: 'transparent' }]} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
       {loading && <ActivityIndicator size="small" color={Colors.primary} style={{ marginBottom: Spacing.md }} />}
 
       {userProfile?.accountType === 'cleaner' ? (
@@ -2313,14 +2210,7 @@ export function SettingsScreen() {
 
           <SectionTitle title="Data Sources" />
           <CardGroup>
-            {!isLTR && (
-              <>
-                <SettingRow icon="analytics-outline" label="PriceLabs" sub="Market data & pricing" onPress={() => setSection('pricelabs')} />
-                <Divider />
-              </>
-            )}
             <SettingRow icon="card-outline" label="Plaid Connections" sub={isReadOnly ? "Subscribe to Pro" : `${plaidAccounts.length} accounts connected`} onPress={isReadOnly ? handleProGate : () => setSection('plaid')} />
-            {/* Cleaner Feeds removed — iCal feeds managed within Manage Properties */}
           </CardGroup>
 
           <SectionTitle title="Income" />
@@ -2407,7 +2297,7 @@ export function SettingsScreen() {
         } else {
           // Owner pill order
           const BASE_ORDER = ['profile', 'home', 'performance', 'projections'];
-          const STR_PILLS = ['calendar', 'inventory'];
+          const STR_PILLS = ['logistics'];
           const isSTRUser = userProfile?.portfolioType === 'str' || userProfile?.portfolioType === 'both';
           const DEFAULT_ORDER = isSTRUser ? [...BASE_ORDER, ...STR_PILLS] : BASE_ORDER;
           const raw = userProfile?.pillOrder || DEFAULT_ORDER;
@@ -2426,7 +2316,7 @@ export function SettingsScreen() {
             order = [...raw];
           }
           // Remove deprecated pills from saved order
-          order = order.filter(k => k !== 'feed' && k !== 'occupancy');
+          order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'calendar' && k !== 'inventory');
           // Ensure base pills
           if (!order.includes('performance')) order.push('performance');
           if (!order.includes('projections')) {
@@ -2540,7 +2430,7 @@ export function SettingsScreen() {
                 setIsPrivate(!v);
               }
             }}
-            trackColor={{ true: Colors.green, false: 'rgba(255,255,255,0.15)' }}
+            trackColor={{ true: Colors.green, false: 'rgba(0,0,0,0.12)' }}
           />
         </View>
       </CardGroup>
@@ -2624,7 +2514,7 @@ const styles = StyleSheet.create({
   version: { textAlign: 'center', color: Colors.textDim, fontSize: FontSize.xs, marginTop: Spacing.xl },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.60)', justifyContent: 'flex-end' },
   modalCard: { backgroundColor: Colors.glassOverlay, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl, padding: Spacing.lg, paddingBottom: Spacing.xl * 2 },
-  modalHandle: { width: 36, height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg },
+  modalHandle: { width: 36, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg },
   modalSectionLabel: { fontSize: FontSize.xs, fontWeight: '700', letterSpacing: 0.8, color: Colors.textDim, textTransform: 'uppercase', marginBottom: Spacing.sm },
   modalHelpText: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.md, lineHeight: 20 },
   modalHelpTextSmall: { fontSize: FontSize.xs, color: Colors.textDim, marginBottom: Spacing.sm, lineHeight: 16 },

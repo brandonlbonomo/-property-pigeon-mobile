@@ -115,7 +115,7 @@ function PendingAttachmentStrip({
 }) {
   if (attachments.length === 0) return null;
   return (
-    <ScrollView
+    <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
       horizontal
       style={styles.pendingStrip}
       contentContainerStyle={styles.pendingStripContent}
@@ -239,7 +239,7 @@ function DetailsModal({
             <ActivityIndicator color={Colors.primary} />
           </View>
         ) : (
-          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+          <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             {/* Profile card */}
             <View style={styles.detailProfileCard}>
               <View style={styles.detailAvatar}>
@@ -463,7 +463,7 @@ function InfoModal({
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+        <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
           {/* Photos */}
           <InfoSection icon="images-outline" iconColor="#8B5CF6" iconBg="rgba(139,92,246,0.10)" title="Photos" count={images.length}>
             {images.length === 0 ? (
@@ -836,7 +836,7 @@ export function ChatScreen() {
           <ActivityIndicator color={Colors.primary} />
         </View>
       ) : (
-        <ScrollView
+        <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
           ref={scrollRef}
           style={styles.messageList}
           contentContainerStyle={styles.messageContent}

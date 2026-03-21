@@ -11,7 +11,7 @@ import { useCleanerStore } from '../../store/cleanerStore';
 import { useDataStore } from '../../store/dataStore';
 import { Card } from '../../components/Card';
 import { BarChart, BarData } from '../../components/BarChart';
-import { fmt$, fmtDate } from '../../utils/format';
+import { fmt$, fmtDate , localDateStr } from '../../utils/format';
 import { SqftRates } from '../../navigation/CleanerNavigator';
 import { apiFetch } from '../../services/api';
 import {
@@ -123,7 +123,7 @@ export function CleanerProfileScreen({ sqftRates, onOpenRates }: { sqftRates?: S
 
   // Stats
   const totalCleanings = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr();
     return allEvents.filter(e => (e.check_out || '').slice(0, 10) <= today).length;
   }, [allEvents]);
 
@@ -238,10 +238,10 @@ export function CleanerProfileScreen({ sqftRates, onOpenRates }: { sqftRates?: S
   }
 
   return (
-    <ScrollView
+    <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
     >
       {error && (
         <View style={styles.errorBanner}>
@@ -488,7 +488,7 @@ export function CleanerProfileScreen({ sqftRates, onOpenRates }: { sqftRates?: S
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl },
+  content: { padding: Spacing.md, paddingTop: 140, paddingBottom: Spacing.xl },
   loadingContainer: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,

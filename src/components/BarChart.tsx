@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableWithoutFeedback, LayoutChangeEvent } from 'react-native';
+import { View, Text, StyleSheet, Pressable, LayoutChangeEvent } from 'react-native';
 import { Colors, FontSize, Spacing } from '../constants/theme';
 import { GlossyBarSvg } from './GlossyBar';
 import { ChartTooltip, TooltipData } from './ChartTooltip';
@@ -39,11 +39,19 @@ interface Props {
   isPercent?: boolean;
   onBarTap?: (bar: BarData, index: number) => void;
   onDoubleTap?: (bar: BarData, index: number) => void;
+  /** Called when tooltip is dismissed (tap outside bar) — reset card to current period */
+  onDismiss?: () => void;
   /** Invert delta coloring (green = decrease, for expenses) */
   invertDelta?: boolean;
+  /** Optional second set of bars rendered side-by-side (e.g. expenses next to revenue) */
+  pairedBars?: BarData[];
+  /** Color type for paired bars in GlossyBarSvg ('red' for expenses) */
+  pairedColorType?: 'green' | 'red';
+  /** Overlay line graph on top of bars (e.g. expenses line over revenue bars) */
+  overlayLine?: { data: BarData[]; color: string };
 }
 
-const BAR_GAP = 2;
+const BAR_GAP = 0;
 const LABEL_HEIGHT = 20;
 const DOT_HEIGHT = 10;
 
@@ -55,7 +63,11 @@ export function BarChart({
   isPercent = false,
   onBarTap,
   onDoubleTap,
+  onDismiss,
   invertDelta,
+  pairedBars,
+  pairedColorType = 'red',
+  overlayLine,
 }: Props) {
   const [chartWidth, setChartWidth] = useState(0);
   const [chartLeft, setChartLeft] = useState(0);
@@ -74,9 +86,10 @@ export function BarChart({
   // Register dismiss callback when tooltip is visible
   const dismissCb = useCallback(() => {
     setTooltip(null);
+    onDismiss?.();
     // Don't clear lastTapRef — the ref survives dismiss so the
     // second tap still triggers drill-down.
-  }, []);
+  }, [onDismiss]);
 
   useEffect(() => {
     if (tooltip) {
@@ -87,7 +100,17 @@ export function BarChart({
 
   if (!bars.length) return null;
 
-  const maxVal = Math.max(...bars.map(b => Math.abs(b.value)), 1);
+  const hasPaired = pairedBars && pairedBars.length === bars.length;
+  const hasOverlay = overlayLine && overlayLine.data.length === bars.length;
+  // Bars and paired bars share the same scale; overlay line gets its own scale
+  const barValues = [
+    ...bars.map(b => Math.abs(b.value)),
+    ...(hasPaired ? pairedBars!.map(b => Math.abs(b.value)) : []),
+  ];
+  const maxVal = Math.max(...barValues, 1);
+  const overlayMaxVal = hasOverlay
+    ? Math.max(...overlayLine!.data.map(b => Math.abs(b.value)), 1)
+    : 1;
   const hasNegative = showNegative && bars.some(b => b.value < 0);
 
   const positiveHeight = hasNegative ? height / 2 : height;
@@ -96,63 +119,76 @@ export function BarChart({
 
   // Calculate bar positions for SVG
   const barCount = bars.length;
-  const barWidth = barCount > 0 ? Math.max((chartWidth - (barCount - 1) * BAR_GAP) / barCount * 0.7, 6) : 6;
   const colWidth = barCount > 0 ? chartWidth / barCount : 0;
+  // Inset bars within each column to create visible gaps between months
+  // Paired bars need more gap; single/overlay bars can be fatter
+  const COL_INSET = hasPaired
+    ? Math.max(Math.round(colWidth * 0.30), 4)
+    : Math.max(Math.round(colWidth * 0.12), 2);
+  const PAIR_GAP = 0;
+  const singleBarWidth = Math.max(colWidth - COL_INSET * 2, 6);
+  const pairedBarWidth = hasPaired
+    ? Math.max(singleBarWidth / 2, 4)
+    : singleBarWidth;
 
-  const svgBars = bars.map((bar, i) => {
-    const barH = Math.max((Math.abs(bar.value) / maxVal) * (hasNegative ? height / 2 : height), 2);
+  const computeSvgBar = (bar: BarData, i: number, offset: number, colorType?: 'green' | 'red') => {
+    const barH = Math.max((Math.abs(bar.value) / maxVal) * (hasNegative ? height / 2 : height) * 0.78, 2);
     const isNeg = bar.value < 0;
-    const centerX = colWidth * i + colWidth / 2 - barWidth / 2;
+    const centerX = colWidth * i + colWidth / 2 - singleBarWidth / 2 + offset;
 
     let y: number;
     if (hasNegative) {
-      if (isNeg) {
-        y = positiveHeight; // starts at zero line going down
-      } else {
-        y = positiveHeight - barH; // grows up from zero line
-      }
+      y = isNeg ? positiveHeight : positiveHeight - barH;
     } else {
-      y = totalChartHeight - barH; // grows up from bottom
+      y = totalChartHeight - barH;
     }
 
     return {
       x: centerX,
       y,
-      width: barWidth,
+      width: pairedBarWidth,
       height: barH,
       isActual: bar.isActual,
       isNegative: isNeg,
+      colorType,
     };
-  });
+  };
 
+  const svgBars = hasPaired
+    ? [
+        ...bars.map((bar, i) => computeSvgBar(bar, i, 0, 'green')),
+        ...pairedBars!.map((bar, i) => computeSvgBar(bar, i, pairedBarWidth + PAIR_GAP, pairedColorType)),
+      ]
+    : bars.map((bar, i) => computeSvgBar(bar, i, 0));
+
+  // Compute overlay line points (own scale, centered on each column)
+  const svgOverlayLine = hasOverlay && chartWidth > 0 ? {
+    points: overlayLine!.data.map((bar, i) => {
+      const val = Math.abs(bar.value);
+      // Use 85% of chart height max so line doesn't touch top edge
+      const py = totalChartHeight - (val / overlayMaxVal) * totalChartHeight * 0.85;
+      return { x: colWidth * i + colWidth / 2, y: Math.max(py, 2) };
+    }),
+    color: overlayLine!.color,
+  } : undefined;
+
+  // Single tap → show tooltip + update card values
   const handleBarTap = (index: number) => {
     const bar = bars[index];
-    const now = Date.now();
-    const prev = lastTapRef.current;
-
-    // Second tap on same bar within 3s → audit view (drill down).
-    // Uses a ref so it works even when ScrollView's onTouchStart
-    // dismisses the tooltip before this handler fires.
-    if (prev && prev.index === index && now - prev.time < 3000) {
-      lastTapRef.current = null;
-      setTooltip(null);
-      onDoubleTap?.(bar, index);
-      return;
-    }
-
-    // First tap (or tap on different bar, or timeout) → show total
-    lastTapRef.current = { index, time: now };
     const svgBar = svgBars[index];
     if (svgBar) {
+      const overlayVal = hasOverlay ? overlayLine!.data[index]?.value : undefined;
+      const pairedVal = hasPaired ? pairedBars![index]?.value : undefined;
+      const secondaryVal = overlayVal ?? pairedVal;
       const tooltipData: TooltipData = {
         value: bar.value,
         label: bar.label,
-        priorValue: bar.priorValue,
-        priorLabel: bar.priorLabel,
+        priorValue: secondaryVal ?? bar.priorValue,
+        priorLabel: secondaryVal != null ? 'Exp' : bar.priorLabel,
         yoyValue: bar.yoyValue,
         isPercent,
         barIndex: index,
-        barX: svgBar.x + svgBar.width / 2,
+        barX: colWidth * index + colWidth / 2,
         barY: totalChartHeight - svgBar.y,
         invertDelta,
       };
@@ -161,15 +197,23 @@ export function BarChart({
     }
   };
 
+  // Long press → audit drill-down
+  const handleBarLongPress = (index: number) => {
+    const bar = bars[index];
+    setTooltip(null);
+    onDoubleTap?.(bar, index);
+  };
+
   return (
     <View style={[styles.container, { overflow: 'visible' }]} onLayout={onLayout}>
-      <View style={[styles.chartArea, { height: totalChartHeight, paddingTop: 12 }]}>
+      <View style={[styles.chartArea, { height: totalChartHeight, paddingTop: 4 }]}>
         {/* SVG glossy bars */}
         {chartWidth > 0 && (
           <GlossyBarSvg
             width={chartWidth}
             height={totalChartHeight}
             bars={svgBars}
+            overlayLine={svgOverlayLine}
           />
         )}
 
@@ -178,13 +222,17 @@ export function BarChart({
           <View style={[styles.zeroLine, { top: positiveHeight }]} />
         )}
 
-        {/* Enlarged invisible tap targets over each bar */}
-        <View style={[StyleSheet.absoluteFill, { top: -16, bottom: -16 }]}>
+        {/* Tap targets over each column: tap = tooltip, long-press = audit */}
+        <View style={styles.tapOverlay}>
           <View style={styles.tapRow}>
             {bars.map((_, i) => (
-              <TouchableWithoutFeedback key={i} onPress={() => handleBarTap(i)}>
-                <View style={styles.tapTarget} />
-              </TouchableWithoutFeedback>
+              <Pressable
+                key={i}
+                onPress={() => handleBarTap(i)}
+                onLongPress={() => handleBarLongPress(i)}
+                delayLongPress={350}
+                style={styles.tapTarget}
+              />
             ))}
           </View>
         </View>
@@ -195,15 +243,19 @@ export function BarChart({
         )}
       </View>
 
-      {/* Labels + current dot row — per-label tap targets */}
+      {/* Labels + current dot row */}
       <View style={styles.labelRow}>
         {bars.map((bar, i) => (
-          <TouchableWithoutFeedback key={i} onPress={() => handleBarTap(i)}>
-            <View style={styles.labelCol}>
-              {bar.isCurrent && <View style={styles.currentDot} />}
-              <Text style={styles.label}>{bar.label}</Text>
-            </View>
-          </TouchableWithoutFeedback>
+          <Pressable
+            key={i}
+            onPress={() => handleBarTap(i)}
+            onLongPress={() => handleBarLongPress(i)}
+            delayLongPress={350}
+            style={styles.labelCol}
+          >
+            {bar.isCurrent && <View style={styles.currentDot} />}
+            <Text style={styles.label}>{bar.label}</Text>
+          </Pressable>
         ))}
       </View>
     </View>
@@ -212,8 +264,8 @@ export function BarChart({
 
 const styles = StyleSheet.create({
   container: {
-    marginTop: Spacing.sm,
-    paddingBottom: Spacing.sm,
+    marginTop: 2,
+    paddingBottom: 0,
   },
   chartArea: {
     position: 'relative',
@@ -225,6 +277,10 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: Colors.textDim,
   },
+  tapOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+  },
   tapRow: {
     flexDirection: 'row',
     flex: 1,
@@ -235,8 +291,8 @@ const styles = StyleSheet.create({
   },
   labelRow: {
     flexDirection: 'row',
-    marginTop: 14,
-    paddingBottom: 4,
+    marginTop: 6,
+    paddingBottom: 2,
   },
   labelCol: {
     flex: 1,

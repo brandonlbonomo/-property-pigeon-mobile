@@ -6,6 +6,7 @@ export interface PropertyUnit {
   unit_name: string;
 }
 
+/** A property with optional unit-level listing IDs (mapped from PriceLabs) */
 export interface ICalProperty {
   id: string;
   label: string;

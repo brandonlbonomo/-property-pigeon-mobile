@@ -95,28 +95,23 @@ export function DoneScreen() {
         }
       }
 
-      // 5. Sync iCal feeds (already saved to API in DataSourcesScreen)
-      try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch { /* best-effort */ }
-
-      // 6. Sync PriceLabs key if set
-      if (profile?.priceLabsApiKey) {
+      // 5. Trigger iCal sync if any properties have iCal URLs
+      const hasIcalUrls = profile?.properties?.some(p => p.icalUrls?.some(u => u));
+      if (hasIcalUrls) {
         try {
-          await apiFetch('/api/pl-key', {
-            method: 'POST',
-            body: JSON.stringify({ api_key: profile.priceLabsApiKey }),
-          });
+          await apiFetch('/api/ical/sync', { method: 'POST' });
         } catch {
           // Non-critical
         }
       }
 
-      // 7. Fetch billing status (now that we have auth)
+      // 6. Fetch billing status (now that we have auth)
       await fetchBillingStatus();
 
-      // 8. Activate data fetching
+      // 7. Activate data fetching
       await activateData();
 
-      // 9. Complete onboarding
+      // 8. Complete onboarding
       await complete(portfolioType);
     } catch (e: any) {
       Alert.alert('Registration Failed', e?.serverError || e?.message || 'Could not create your account. Please try again.');

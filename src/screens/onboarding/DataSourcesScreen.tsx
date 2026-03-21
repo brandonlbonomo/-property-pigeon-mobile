@@ -17,17 +17,6 @@ export function DataSourcesScreen({ navigation }: any) {
   const setProfile = useUserStore(s => s.setProfile);
   const portfolioType = useUserStore(s => s.profile?.portfolioType);
 
-  const showSTRSources = portfolioType === 'str' || portfolioType === 'both';
-
-  // PriceLabs
-  const [plKey, setPlKey] = useState('');
-  const [plConnected, setPlConnected] = useState(false);
-
-  // iCal
-  const [icalUrl, setIcalUrl] = useState('');
-  const [icalPropName, setIcalPropName] = useState('');
-  const [icalFeeds, setIcalFeeds] = useState<{ url: string; propertyName: string }[]>([]);
-
   // Plaid
   const { isReadOnly } = useSubscriptionGate();
   const checkout = useProCheckout();
@@ -35,27 +24,6 @@ export function DataSourcesScreen({ navigation }: any) {
   const [plaidLinkToken, setPlaidLinkToken] = useState('');
   const [showPlaidLink, setShowPlaidLink] = useState(false);
   const [plaidConnected, setPlaidConnected] = useState(false);
-
-  const handleConnectPriceLabs = async () => {
-    if (!plKey.trim()) { Alert.alert('Required', 'Enter your PriceLabs API key'); return; }
-    // Store locally — will sync after registration
-    await setProfile({ priceLabsApiKey: plKey.trim() });
-    setPlConnected(true);
-  };
-
-  const isValidUrl = (u: string) => /^https?:\/\/.+\..+/.test(u);
-
-  const handleAddIcalFeed = () => {
-    if (!icalUrl.trim()) { Alert.alert('Required', 'Enter an iCal URL'); return; }
-    if (!isValidUrl(icalUrl.trim())) { Alert.alert('Invalid', 'Enter a valid URL starting with http:// or https://'); return; }
-    const feed = { url: icalUrl.trim(), propertyName: icalPropName.trim() || 'Feed' };
-    setIcalFeeds(prev => [...prev, feed]);
-    setIcalUrl(''); setIcalPropName('');
-  };
-
-  const handleRemoveIcalFeed = (index: number) => {
-    setIcalFeeds(prev => prev.filter((_, i) => i !== index));
-  };
 
   // ── Plaid Link Flow ──
 
@@ -100,17 +68,6 @@ export function DataSourcesScreen({ navigation }: any) {
   };
 
   const handleNext = async () => {
-    if (icalFeeds.length > 0) {
-      // Save feeds to backend API
-      try {
-        const feeds = icalFeeds.map(f => ({
-          propId: f.propertyName,
-          listingName: f.propertyName,
-          url: f.url,
-        }));
-        await apiFetch('/api/ical/feeds', { method: 'POST', body: JSON.stringify({ feeds }) });
-      } catch {}
-    }
     navigation.navigate('Billing');
   };
 
@@ -137,89 +94,6 @@ export function DataSourcesScreen({ navigation }: any) {
         <Text style={styles.subtitle}>
           Link your accounts to auto-import data. All sections are optional.
         </Text>
-
-        {/* PriceLabs — STR/Both only */}
-        {showSTRSources && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={[styles.sectionIcon, { backgroundColor: Colors.greenDim }]}>
-                <Ionicons name="analytics-outline" size={18} color={Colors.primary} />
-              </View>
-              <Text style={styles.sectionTitle}>PriceLabs</Text>
-              {plConnected && <Ionicons name="checkmark-circle" size={18} color={Colors.green} />}
-            </View>
-            <Text style={styles.sectionHint}>Compare occupancy and rates against market peers.</Text>
-            {!plConnected ? (
-              <View style={styles.sectionBody}>
-                <TextInput
-                  style={styles.input}
-                  value={plKey}
-                  onChangeText={setPlKey}
-                  placeholder="Enter your PriceLabs API key"
-                  placeholderTextColor={Colors.textDim}
-                  autoCapitalize="none"
-                  autoComplete="off"
-                />
-                <TouchableOpacity activeOpacity={0.7}
-          style={styles.connectBtn} onPress={handleConnectPriceLabs}>
-                  <Text style={styles.connectBtnText}>Connect</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <Text style={styles.connectedText}>Connected</Text>
-            )}
-          </View>
-        )}
-
-        {/* iCal Feeds — STR/Both only */}
-        {showSTRSources && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={[styles.sectionIcon, { backgroundColor: Colors.greenDim }]}>
-                <Ionicons name="calendar-outline" size={18} color={Colors.green} />
-              </View>
-              <Text style={styles.sectionTitle}>iCal Feeds</Text>
-            </View>
-            <Text style={styles.sectionHint}>No PriceLabs? Add iCal feeds for occupancy data and cleaning coordination.</Text>
-            <View style={styles.sectionBody}>
-              {icalFeeds.map((feed, i) => (
-                <View key={i} style={styles.feedRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.feedName}>{feed.propertyName}</Text>
-                    <Text style={styles.feedUrl} numberOfLines={1}>{feed.url}</Text>
-                  </View>
-                  <TouchableOpacity activeOpacity={0.7}
-          onPress={() => handleRemoveIcalFeed(i)}>
-                    <Ionicons name="close-circle" size={18} color={Colors.textDim} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-              <TextInput
-                style={styles.input}
-                value={icalPropName}
-                onChangeText={setIcalPropName}
-                placeholder="Property name for this feed"
-                placeholderTextColor={Colors.textDim}
-                autoComplete="off"
-              />
-              <TextInput
-                style={[styles.input, { marginTop: Spacing.sm }]}
-                value={icalUrl}
-                onChangeText={setIcalUrl}
-                placeholder="https://www.airbnb.com/calendar/ical/..."
-                placeholderTextColor={Colors.textDim}
-                autoCapitalize="none"
-                keyboardType="url"
-                autoComplete="off"
-              />
-              <TouchableOpacity activeOpacity={0.7}
-          style={styles.addFeedBtn} onPress={handleAddIcalFeed}>
-                <Ionicons name="add" size={16} color={Colors.green} />
-                <Text style={styles.addFeedText}>Add Feed</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
 
         {/* Plaid */}
         <View style={styles.section}>
@@ -310,21 +184,6 @@ const styles = StyleSheet.create({
     padding: Spacing.sm + 2, alignItems: 'center', marginTop: Spacing.sm,
   },
   connectBtnText: { color: '#fff', fontSize: FontSize.sm, fontWeight: '600' },
-
-  feedRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.greenDim, borderRadius: Radius.md,
-    padding: Spacing.sm, paddingHorizontal: Spacing.md, marginBottom: Spacing.sm,
-  },
-  feedName: { fontSize: FontSize.sm, fontWeight: '500', color: Colors.text },
-  feedUrl: { fontSize: 10, color: Colors.textDim, marginTop: 1 },
-  addFeedBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-    padding: Spacing.sm, borderRadius: Radius.md, marginTop: Spacing.sm,
-    borderWidth: 1, borderColor: Colors.green + '40', borderStyle: 'dashed',
-    backgroundColor: Colors.greenDim,
-  },
-  addFeedText: { fontSize: FontSize.sm, color: Colors.green, fontWeight: '500' },
 
   plaidBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,

@@ -6,6 +6,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { CleanerEvent } from '../../../store/cleanerStore';
+import { localDateStr } from '../../../utils/format';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = [
@@ -45,7 +46,7 @@ interface Props {
 export function CalendarStep({
   events, invoicedUids, selectedUnits, selectedCleanings, onToggleCleaning,
 }: Props) {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateStr();
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
@@ -136,8 +137,8 @@ export function CalendarStep({
       monday.setDate(now.getDate() - diffToMonday);
       const sunday = new Date(monday);
       sunday.setDate(monday.getDate() + 6);
-      start = monday.toISOString().slice(0, 10);
-      end = sunday.toISOString().slice(0, 10);
+      start = localDateStr(monday);
+      end = localDateStr(sunday);
     } else {
       start = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
       end = todayStr;

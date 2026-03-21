@@ -8,11 +8,11 @@ import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { GradientHeader } from '../../components/GradientHeader';
 import { useDataStore } from '../../store/dataStore';
 import { useUserStore } from '../../store/userStore';
-import { apiFetch } from '../../services/api';
 import { Card } from '../../components/Card';
 import { SectionHeader } from '../../components/SectionHeader';
 import { EmptyState } from '../../components/EmptyState';
 import { GlossyHorizontalBar } from '../../components/GlossyHorizontalBar';
+import { localDateStr } from '../../utils/format';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -36,14 +36,11 @@ function getMonthGrid(year: number, month: number) {
 }
 
 export function CalendarScreen() {
-  const { fetchIcalEvents, fetchIcalFeeds, fetchProps, fetchAnalytics } = useDataStore();
+  const { fetchCalendarEvents, fetchProps, fetchAnalytics } = useDataStore();
   const lastError = useDataStore(s => s.lastError);
-  const hasPriceLabs = !!useUserStore(s => s.profile?.priceLabsApiKey);
   const [events, setEvents] = useState<any[]>([]);
   const [props, setProps] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
-  const [plStats, setPlStats] = useState<any>(null);
-  const [feedMap, setFeedMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [viewMonth, setViewMonth] = useState(() => {
@@ -51,43 +48,29 @@ export function CalendarScreen() {
     return { year: d.getFullYear(), month: d.getMonth() };
   });
   const [propFilter, setPropFilter] = useState<string>('all');
-  const [calSelectedDay, setCalSelectedDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const [calSelectedDay, setCalSelectedDay] = useState(() => localDateStr());
   const [calGridLayout, setCalGridLayout] = useState({ width: 0, height: 0 });
   const calGlassX = useRef(new Animated.Value(0)).current;
   const calGlassY = useRef(new Animated.Value(0)).current;
-  const calSelectedRef = useRef(new Date().toISOString().slice(0, 10));
+  const calSelectedRef = useRef(localDateStr());
 
   const load = useCallback(async (force = false) => {
     try {
-      const [ev, pr, an, feeds] = await Promise.all([
-        fetchIcalEvents(force),
+      const [ev, pr, an] = await Promise.all([
+        fetchCalendarEvents(force),
         fetchProps(force),
         fetchAnalytics(force),
-        fetchIcalFeeds(force),
       ]);
       setEvents(ev || []);
       setProps(pr || []);
       setAnalytics(an);
-      // Build feed_key → listingName map for unit-level labels
-      const map: Record<string, string> = {};
-      (feeds || []).forEach((f: any) => {
-        if (f.feed_key && f.listingName) map[f.feed_key] = f.listingName;
-      });
-      setFeedMap(map);
-      // Fetch PriceLabs stats for market occupancy comparison
-      if (hasPriceLabs) {
-        try {
-          const stats = await apiFetch('/api/pricelabs/stats');
-          setPlStats(stats);
-        } catch {}
-      }
     } catch (e) {
       // fetch failed
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchIcalEvents, fetchIcalFeeds, fetchProps, fetchAnalytics, hasPriceLabs]);
+  }, [fetchCalendarEvents, fetchProps, fetchAnalytics]);
 
   useEffect(() => { load(); }, []);
 
@@ -97,19 +80,7 @@ export function CalendarScreen() {
   const onRefresh = () => { setRefreshing(true); load(true); };
 
   const today = new Date();
-  const todayDateStr = today.toISOString().slice(0, 10);
-
-  // PriceLabs-only occupancy (STR/both users with a PriceLabs API key)
-  const plOccupancy = useMemo(() => {
-    if (!hasPriceLabs || !plStats?.by_prop) return [];
-    const byProp = plStats.by_prop;
-    return props
-      .filter(p => byProp[p.id || p.prop_id]?.avg_occ_past_30 != null)
-      .map(p => {
-        const pid = p.id || p.prop_id;
-        return { id: pid, label: p.label || pid, occupancy: byProp[pid].avg_occ_past_30 as number };
-      });
-  }, [props, hasPriceLabs, plStats]);
+  const todayDateStr = localDateStr(today);
 
   // Derive upcoming cleanings from check-out events (per-unit via feed_key)
   const cleanings = useMemo(() => {
@@ -137,12 +108,12 @@ export function CalendarScreen() {
         });
       }
     });
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = localDateStr();
     return cleaningDays.filter(c => c.date >= todayStr).sort((a, b) => a.date.localeCompare(b.date));
   }, [events]);
 
   const filteredCleanings = cleanings.filter(c => propFilter === 'all' || c.prop_id === propFilter);
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = localDateStr(today);
 
   const { year, month } = viewMonth;
 
@@ -225,7 +196,7 @@ export function CalendarScreen() {
     const unitGroups = new Map<string, { hasCheckin: boolean; hasCheckout: boolean; unitLabel: string }>();
     selectedDayEvents.forEach((e: any) => {
       const unitKey = `${e.prop_id}-${e.feed_key || ''}`;
-      const unitLabel = (e.feed_key && feedMap[e.feed_key]) || props.find((p: any) => (p.id || p.prop_id) === e.prop_id)?.label || '';
+      const unitLabel = e.listing_name || props.find((p: any) => (p.id || p.prop_id) === e.prop_id)?.label || '';
       if (!unitGroups.has(unitKey)) {
         unitGroups.set(unitKey, { hasCheckin: false, hasCheckout: false, unitLabel });
       }
@@ -243,7 +214,7 @@ export function CalendarScreen() {
       }
     });
     return activities;
-  }, [calSelectedDay, selectedDayEvents, feedMap, props]);
+  }, [calSelectedDay, selectedDayEvents, props]);
 
 
   return (
@@ -251,26 +222,13 @@ export function CalendarScreen() {
     <ScrollView
       style={[styles.container, { backgroundColor: 'transparent' }]}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
     >
       {/* Error banner */}
       {lastError && (
         <View style={styles.errorBanner}>
           <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />
           <Text style={styles.errorText}>{lastError}</Text>
-        </View>
-      )}
-
-      {/* PriceLabs Occupancy — only shown when PriceLabs API key is connected */}
-      {plOccupancy.length > 0 && (
-        <View style={styles.occCompactRow}>
-          {plOccupancy.map(p => (
-            <View key={p.id} style={styles.occCompactItem}>
-              <Text style={styles.occCompactLabel} numberOfLines={1}>{p.label}</Text>
-              <Text style={styles.occCompactPct}>{p.occupancy.toFixed(0)}%</Text>
-              <Text style={styles.occP30Label}>P30 · PriceLabs</Text>
-            </View>
-          ))}
         </View>
       )}
 
@@ -304,8 +262,8 @@ export function CalendarScreen() {
         ))}
       </View>
 
-      {/* Property filter */}
-      {props.length > 0 && (
+      {/* Property filter — Airbnb only */}
+      {props.filter((p: any) => p.isAirbnb).length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.propScroll}>
           <TouchableOpacity activeOpacity={0.7}
           style={[styles.pill, propFilter === 'all' && styles.pillActive]}
@@ -313,7 +271,7 @@ export function CalendarScreen() {
           >
             <Text style={[styles.pillText, propFilter === 'all' && styles.pillTextActive]}>All</Text>
           </TouchableOpacity>
-          {props.map((p: any) => (
+          {props.filter((p: any) => p.isAirbnb).map((p: any) => (
             <TouchableOpacity activeOpacity={0.7}
           key={p.id || p.prop_id}
               style={[styles.pill, propFilter === (p.id || p.prop_id) && styles.pillActive]}
@@ -426,7 +384,7 @@ export function CalendarScreen() {
         <EmptyState message="No check-ins this month" />
       ) : (
         monthEvents.map((e: any, i: number) => {
-          const unitName = (e.feed_key && feedMap[e.feed_key]) || props.find((p: any) => (p.id || p.prop_id) === e.prop_id)?.label || '';
+          const unitName = e.listing_name || props.find((p: any) => (p.id || p.prop_id) === e.prop_id)?.label || '';
           return (
             <Card key={i} padding={Spacing.sm}>
               <View style={styles.eventRow}>
@@ -456,7 +414,7 @@ export function CalendarScreen() {
         filteredCleanings.slice(0, 10).map((c: any, i: number) => {
           const dateObj = new Date(c.date + 'T00:00:00');
           const isCleanToday = c.date === todayStr;
-          const unitName = (c.feed_key && feedMap[c.feed_key]) || props.find((p: any) => (p.id || p.prop_id) === c.prop_id)?.label || '';
+          const unitName = c.listing_name || props.find((p: any) => (p.id || p.prop_id) === c.prop_id)?.label || '';
           const eventType = c.sameDayTurnover ? 'Turnover' : 'Cleaning';
           return (
             <Card key={`cl-${i}`} padding={Spacing.sm}>
@@ -582,9 +540,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   calDayBubbleToday: {
-    borderWidth: 2.5, borderColor: Colors.primary,
+    borderWidth: 3, borderColor: Colors.green,
+    backgroundColor: 'rgba(30,206,110,0.08)',
     ...Platform.select({
-      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 6 },
+      ios: { shadowColor: Colors.green, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 8 },
     }),
   },
   calDayBubbleCheckin: {
@@ -611,7 +570,7 @@ const styles = StyleSheet.create({
     }),
   },
   calDayText: { fontSize: FontSize.md, fontWeight: '500', color: Colors.text },
-  calDayTextToday: { color: Colors.primary, fontWeight: '800' },
+  calDayTextToday: { color: Colors.green, fontWeight: '900' },
   calDayTextCheckin: { color: Colors.green, fontWeight: '600' },
   calDayTextCleaning: { color: Colors.yellow, fontWeight: '600' },
   calDayTextSelected: { fontWeight: '800' as const },

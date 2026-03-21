@@ -39,8 +39,17 @@ export function fmtMonthYear(iso: string): string {
   return `${names[parseInt(m) - 1]} ${y}`;
 }
 
+/** Returns YYYY-MM-DD in local timezone (not UTC).
+ *  Use this instead of toISOString().slice(0,10) which returns UTC date. */
+export function localDateStr(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function isoMonth(date: Date = new Date()): string {
-  return date.toISOString().slice(0, 7);
+  return localDateStr(date).slice(0, 7);
 }
 
 export function currentYear(): number {

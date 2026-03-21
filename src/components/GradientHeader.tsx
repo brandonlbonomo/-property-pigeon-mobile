@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '../constants/theme';
 
 /**
- * Seamless brand gradient — subtle green glow that melts into pure black.
+ * Seamless brand gradient — subtle green glow that melts into the light background.
  * Uses position:'absolute' so it sits behind content.
  */
 export function GradientHeader({
@@ -16,9 +16,9 @@ export function GradientHeader({
     <View style={[styles.wrapper, { height }]} pointerEvents="none">
       <LinearGradient
         colors={[
-          'rgba(30,206,110,0.18)',
-          'rgba(30,206,110,0.08)',
-          'rgba(30,206,110,0.02)',
+          'rgba(30,206,110,0.14)',
+          'rgba(30,206,110,0.06)',
+          'rgba(30,206,110,0.01)',
           Colors.bg,
         ]}
         locations={[0, 0.35, 0.65, 1]}

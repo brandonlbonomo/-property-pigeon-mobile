@@ -9,7 +9,6 @@ import { GradientHeader } from '../../components/GradientHeader';
 import { useDataStore } from '../../store/dataStore';
 import { useUserStore } from '../../store/userStore';
 import { fmt$, fmtDate } from '../../utils/format';
-import { apiFetch } from '../../services/api';
 import { GlossyHorizontalBar } from '../../components/GlossyHorizontalBar';
 import { MonthDetailModal } from '../../components/MonthDetailModal';
 
@@ -18,27 +17,25 @@ const MONTHS = ['January','February','March','April','May','June','July','August
 export function HomeScreen() {
   const profile = useUserStore(s => s.profile);
   const portfolioType = profile?.portfolioType;
-  const { fetchCockpit, fetchIcalEvents, fetchInvGroups, fetchAnalytics } = useDataStore();
+  const { fetchCockpit, fetchCalendarEvents, fetchInvGroups, fetchAnalytics } = useDataStore();
   const lastError = useDataStore(s => s.lastError);
   const [cockpit, setCockpit] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [invGroups, setInvGroups] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
-  const [plStats, setPlStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [drillDownMonth, setDrillDownMonth] = useState<string | null>(null);
 
   const isSTR = portfolioType === 'str' || portfolioType === 'both';
   const isLTR = portfolioType === 'ltr';
-  const hasPriceLabs = !!profile?.priceLabsApiKey;
   const properties = profile?.properties || [];
 
   const load = useCallback(async (force = false) => {
     try {
       const results = await Promise.all([
         fetchCockpit(force),
-        isSTR ? fetchIcalEvents(force).catch(() => []) : Promise.resolve([]),
+        isSTR ? fetchCalendarEvents(force).catch(() => []) : Promise.resolve([]),
         isSTR ? fetchInvGroups(force).catch(() => []) : Promise.resolve([]),
         isSTR ? fetchAnalytics(force).catch(() => null) : Promise.resolve(null),
       ]);
@@ -46,19 +43,12 @@ export function HomeScreen() {
       setEvents(results[1] || []);
       setInvGroups(results[2] || []);
       setAnalytics(results[3]);
-      // Fetch PriceLabs stats for per-property occupancy
-      if (isSTR && hasPriceLabs) {
-        try {
-          const stats = await apiFetch('/api/pricelabs/stats');
-          setPlStats(stats);
-        } catch {}
-      }
     } catch (err: any) {
       // load failed
     }
     setLoading(false);
     setRefreshing(false);
-  }, [fetchCockpit, fetchIcalEvents, fetchInvGroups, fetchAnalytics, isSTR, hasPriceLabs]);
+  }, [fetchCockpit, fetchCalendarEvents, fetchInvGroups, fetchAnalytics, isSTR]);
 
   useEffect(() => { load(); }, []);
 
@@ -116,30 +106,6 @@ export function HomeScreen() {
     }).length;
   }, [events, isSTR]);
 
-  // PriceLabs occupancy data (STR only, requires PriceLabs API key)
-  const priceLabsOcc = useMemo(() => {
-    if (!isSTR || !hasPriceLabs || !plStats?.by_prop) return null;
-    const byProp = plStats.by_prop;
-    const perProperty = properties
-      .filter(p => byProp[(p.id || p.name)]?.avg_occ_past_30 != null)
-      .map(p => {
-        const pid = p.id || p.name;
-        return {
-          id: pid,
-          label: p.label || p.name || pid,
-          p30: byProp[pid].avg_occ_past_30 as number,
-          n30: byProp[pid].avg_occ_next_30 as number | undefined,
-        };
-      });
-    const avgP30 = perProperty.length > 0
-      ? perProperty.reduce((s, p) => s + p.p30, 0) / perProperty.length
-      : null;
-    const marketAvg = analytics?.market_occupancy != null
-      ? analytics.market_occupancy * 100
-      : null;
-    return { perProperty, avgP30, marketAvg };
-  }, [isSTR, hasPriceLabs, plStats, properties, analytics]);
-
   // Inventory data (STR only)
   const inventoryStats = useMemo(() => {
     if (!isSTR || !invGroups.length) return null;
@@ -170,8 +136,7 @@ export function HomeScreen() {
   }
 
   const hasPlaid = !!profile?.plaidConnected;
-  const hasIcal = (profile?.properties || []).some((p: any) => (p.icalFeeds || []).length > 0);
-  const hasAnySource = hasPlaid || hasIcal || hasPriceLabs || revenue !== 0 || expenses !== 0;
+  const hasAnySource = hasPlaid || revenue !== 0 || expenses !== 0;
   const hasData = revenue !== 0 || expenses !== 0;
 
   // FY annualized (rough: current month x 12)
@@ -197,7 +162,7 @@ export function HomeScreen() {
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
       {...({delaysContentTouches: false} as any)}
     >
       {/* ── Hero Date ── */}
@@ -218,7 +183,7 @@ export function HomeScreen() {
           <Text style={styles.noDataBannerText}>
             {isLTR
               ? 'Connect Plaid or enter manual income in Settings to see your portfolio dashboard.'
-              : 'Connect Plaid, add iCal feeds, connect PriceLabs, or enter manual income in Settings to populate your dashboard.'}
+              : 'Connect Plaid or enter manual income in Settings to populate your dashboard.'}
           </Text>
         </View>
       )}
@@ -342,54 +307,10 @@ export function HomeScreen() {
       </View>
 
       {/* ── Occupancy Card (STR & BOTH only) ── */}
-      {isSTR && (priceLabsOcc || upcomingCheckins.length > 0 || activeStays > 0) && (
+      {isSTR && (upcomingCheckins.length > 0 || activeStays > 0) && (
         <>
           <Text style={styles.sectionTitle}>OCCUPANCY</Text>
           <View style={styles.brushCard}>
-            {priceLabsOcc && priceLabsOcc.perProperty.length > 0 && (
-              <>
-                {/* Portfolio avg P30 */}
-                {priceLabsOcc.avgP30 != null && (
-                  <View style={styles.occRow}>
-                    <View style={styles.occCol}>
-                      <Text style={styles.occLabel}>Portfolio P30</Text>
-                      <Text style={styles.occValue}>{priceLabsOcc.avgP30.toFixed(0)}%</Text>
-                      <View style={styles.occBarTrack}>
-                        <View style={[styles.occBarFill, { width: `${Math.min(priceLabsOcc.avgP30, 100)}%`, backgroundColor: Colors.green }]} />
-                      </View>
-                    </View>
-                    {priceLabsOcc.marketAvg != null && (
-                      <>
-                        <View style={styles.occDivider} />
-                        <View style={styles.occCol}>
-                          <Text style={styles.occLabel}>Market Avg</Text>
-                          <Text style={styles.occValue}>{priceLabsOcc.marketAvg.toFixed(0)}%</Text>
-                          <View style={styles.occBarTrack}>
-                            <View style={[styles.occBarFill, { width: `${Math.min(priceLabsOcc.marketAvg, 100)}%`, backgroundColor: Colors.green }]} />
-                          </View>
-                        </View>
-                      </>
-                    )}
-                  </View>
-                )}
-                {/* Per-property breakdown */}
-                {priceLabsOcc.perProperty.map(p => (
-                  <View key={p.id} style={styles.occPropRow}>
-                    <Text style={styles.occPropLabel} numberOfLines={1}>{p.label}</Text>
-                    <View style={{ flex: 1, marginHorizontal: 8 }}>
-                      <View style={styles.occBarTrack}>
-                        <View style={[styles.occBarFill, { width: `${Math.min(p.p30, 100)}%`, backgroundColor: Colors.green }]} />
-                      </View>
-                    </View>
-                    <Text style={styles.occPropPct}>{p.p30.toFixed(0)}%</Text>
-                  </View>
-                ))}
-                <View style={styles.occMarketRow}>
-                  <Ionicons name="analytics-outline" size={11} color={Colors.textDim} />
-                  <Text style={styles.occMarketText}>Past 30 days · PriceLabs</Text>
-                </View>
-              </>
-            )}
             <View style={styles.occFooterRow}>
               <Ionicons name="calendar-outline" size={13} color={Colors.textDim} />
               <Text style={styles.occFooterText}>
@@ -456,7 +377,7 @@ export function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl * 2 },
+  content: { padding: Spacing.md, paddingTop: 140, paddingBottom: Spacing.xl * 2 },
   center: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
 
   // Hero date

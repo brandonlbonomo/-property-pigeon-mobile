@@ -463,7 +463,7 @@ const styles = StyleSheet.create({
   sheetHandle: {
     width: 36,
     height: 4,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: 'rgba(0,0,0,0.12)',
     borderRadius: 2,
     alignSelf: 'center',
     marginBottom: Spacing.md,

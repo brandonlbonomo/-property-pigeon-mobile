@@ -19,18 +19,6 @@ import {
 type UnitType = 'count' | 'oz' | 'gal';
 const UNIT_LABELS: Record<UnitType, string> = { count: '', oz: 'oz', gal: 'gal' };
 
-/** Count iCal feeds for a property — checks both local icalFeeds and dataStore feeds. */
-function countFeedsForProperty(property: any, allFeeds?: any[]): number {
-  const localCount = (property.icalFeeds || []).length;
-  if (localCount > 0) return localCount;
-  // Fallback: count feeds from dataStore that match this property's ID
-  if (allFeeds) {
-    const pid = property.id || property.name;
-    return allFeeds.filter((f: any) => f.propId === pid).length;
-  }
-  return 0;
-}
-
 // ── Add Group Modal (tap a property or city to instantly create) ──
 
 function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
@@ -39,17 +27,10 @@ function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
   existingGroupIds: Set<string>;
 }) {
   const properties = useUserStore(s => s.profile?.properties) || [];
-  const { fetchIcalFeeds } = useDataStore();
-  const [feeds, setFeeds] = useState<any[]>([]);
-  React.useEffect(() => {
-    if (visible) fetchIcalFeeds().then(f => setFeeds(f || [])).catch(() => {});
-  }, [visible]);
 
   // Group properties by market/city
   const airbnbProps = properties.filter((p: any) => p.isAirbnb);
   const cities = [...new Set(airbnbProps.map((p: any) => p.market).filter(Boolean))] as string[];
-
-  const icalCountByProp = (p: any) => countFeedsForProperty(p, feeds);
 
   // Check if group already exists for this property/city
   const hasGroup = (id: string) => existingGroupIds.has(id);
@@ -85,13 +66,12 @@ function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
             Tap a property or city to start tracking its supplies.
           </Text>
 
-          <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+          <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
             {/* ── By Property ── */}
             {airbnbProps.length > 0 && (
               <>
                 <Text style={styles.pickerSectionLabel}>PROPERTIES</Text>
                 {airbnbProps.map((p: any) => {
-                  const feeds = icalCountByProp(p);
                   const already = hasGroup(p.id || p.name);
                   return (
                     <TouchableOpacity key={p.id || p.name} activeOpacity={already ? 1 : 0.7}
@@ -110,9 +90,6 @@ function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
                           )}
                           <Text style={styles.propPickerMeta}>
                             {p.units || 1} unit{(p.units || 1) !== 1 ? 's' : ''}
-                          </Text>
-                          <Text style={[styles.propPickerMeta, feeds > 0 && { color: Colors.green }]}>
-                            {feeds} iCal feed{feeds !== 1 ? 's' : ''}
                           </Text>
                         </View>
                       </View>
@@ -141,9 +118,6 @@ function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
                   const cityId = `city_${city.toLowerCase().replace(/\s+/g, '_')}`;
                   const already = hasGroup(cityId);
                   const propCount = airbnbProps.filter((p: any) => p.market === city).length;
-                  const feedCount = airbnbProps
-                    .filter((p: any) => p.market === city)
-                    .reduce((sum: number, p: any) => sum + icalCountByProp(p), 0);
                   return (
                     <TouchableOpacity key={city} activeOpacity={already ? 1 : 0.7}
                       style={[styles.propPickerRow, already && styles.propPickerRowDone]}
@@ -156,9 +130,6 @@ function AddGroupModal({ visible, onClose, onSave, existingGroupIds }: {
                         <View style={styles.propPickerMetaRow}>
                           <Text style={styles.propPickerMeta}>
                             {propCount} propert{propCount !== 1 ? 'ies' : 'y'}
-                          </Text>
-                          <Text style={[styles.propPickerMeta, feedCount > 0 && { color: Colors.green }]}>
-                            {feedCount} iCal feed{feedCount !== 1 ? 's' : ''}
                           </Text>
                         </View>
                       </View>
@@ -352,7 +323,7 @@ function AddItemForm({ onAdd, onCancel }: {
 
       {/* Catalog items as tappable chips */}
       {!selectedCatalog && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+        <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" horizontal showsHorizontalScrollIndicator={false}
           style={{ marginBottom: Spacing.sm, marginHorizontal: -Spacing.md }}
           contentContainerStyle={{ paddingHorizontal: Spacing.md, gap: 6 }}>
           {catalogItems.map(ci => (
@@ -448,7 +419,7 @@ function AddItemForm({ onAdd, onCancel }: {
 // ══════════════════════════════════════
 
 export function InventoryScreen() {
-  const { fetchInvGroups, fetchIcalFeeds } = useDataStore();
+  const { fetchInvGroups } = useDataStore();
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -456,30 +427,8 @@ export function InventoryScreen() {
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [addingItemGroup, setAddingItemGroup] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [icalFeeds, setIcalFeeds] = useState<any[]>([]);
 
   const properties = useUserStore(s => s.profile?.properties) || [];
-
-  // Fetch iCal feeds for accurate feed count
-  useEffect(() => {
-    fetchIcalFeeds().then(f => setIcalFeeds(f || [])).catch(() => {});
-  }, []);
-
-  // Count iCal feeds linked to a group
-  const getGroupFeedCount = useCallback((group: any) => {
-    if (group.linkType === 'property' && group.propertyId) {
-      const prop = properties.find((p: any) => (p.id || p.name) === group.propertyId);
-      if (!prop) return 0;
-      return countFeedsForProperty(prop, icalFeeds);
-    } else if (group.linkType === 'city' && group.city) {
-      const cityProps = properties.filter((p: any) =>
-        p.isAirbnb && p.market?.toLowerCase() === group.city.toLowerCase()
-      );
-      return cityProps.reduce((sum: number, p: any) =>
-        sum + countFeedsForProperty(p, icalFeeds), 0);
-    }
-    return 0;
-  }, [properties, icalFeeds]);
 
   const load = useCallback(async (force = false) => {
     try {
@@ -598,21 +547,11 @@ export function InventoryScreen() {
 
   return (
     <>
-      <ScrollView
+      <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
         style={styles.container}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
       >
-        {/* ── iCal Banner ── */}
-        {!groups.some(g => getGroupFeedCount(g) > 0) && groups.length > 0 && (
-          <View style={styles.icalBanner}>
-            <Ionicons name="calendar-outline" size={16} color={Colors.yellow} />
-            <Text style={styles.icalBannerText}>
-              Connect iCal feeds in Settings for accurate inventory auto-depletion
-            </Text>
-          </View>
-        )}
-
         {/* ── Top Header ── */}
         <View style={styles.topHeader}>
           <View>
@@ -668,8 +607,6 @@ export function InventoryScreen() {
             const catOrder = [...CATEGORIES.map(c => c.label), 'Other'];
             const sortedCategories = catOrder.filter(c => categorized[c]);
 
-            const feedCount = getGroupFeedCount(group);
-
             return (
               <View key={group.id || Math.random()} style={styles.groupCard}>
                 {/* ── Group Header ── */}
@@ -714,14 +651,6 @@ export function InventoryScreen() {
                         <Text style={{ color: Colors.red }}> · {lowCount} low</Text>
                       )}
                     </Text>
-                    {feedCount > 0 ? (
-                      <View style={styles.icalLinkedBadge}>
-                        <Ionicons name="checkmark-circle" size={11} color={Colors.green} />
-                        <Text style={styles.icalLinkedText}>{feedCount} iCal linked</Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.noIcalText}>No iCal feeds</Text>
-                    )}
                   </View>
                 </View>
 
@@ -817,17 +746,8 @@ export function InventoryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl * 2 },
+  content: { padding: Spacing.md, paddingTop: 310, paddingBottom: Spacing.xl * 2 },
   center: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center', justifyContent: 'center' },
-
-  // iCal Banner
-  icalBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: Colors.yellowDim, borderRadius: Radius.xl,
-    padding: Spacing.md, marginBottom: Spacing.md,
-    borderWidth: 0.5, borderColor: 'rgba(245,158,11,0.2)',
-  },
-  icalBannerText: { flex: 1, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 16 },
 
   // Top Header
   topHeader: {
@@ -914,10 +834,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start',
   },
   linkBadgeText: { fontSize: 10, fontWeight: '600', color: Colors.primary },
-  icalLinkedBadge: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  icalLinkedText: { fontSize: 10, fontWeight: '600', color: Colors.green },
-  noIcalText: { fontSize: 10, color: Colors.textDim },
-
   // Category headers
   catHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
@@ -1042,7 +958,7 @@ const styles = StyleSheet.create({
       android: { elevation: 8 },
     }),
   },
-  modalHandle: { width: 36, height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg },
+  modalHandle: { width: 36, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.lg },
   modalSectionLabel: { fontSize: FontSize.xs, fontWeight: '700', letterSpacing: 0.8, color: Colors.textDim, textTransform: 'uppercase', marginBottom: Spacing.sm },
   modalHelpText: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.md, lineHeight: 20 },
   modalInput: {

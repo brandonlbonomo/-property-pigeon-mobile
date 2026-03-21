@@ -176,7 +176,7 @@ export default function App() {
     return (
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>
-          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <StatusBar style="dark" backgroundColor={Colors.bg} />
           <LoadingScreen />
         </SafeAreaProvider>
       </GestureHandlerRootView>
@@ -187,7 +187,7 @@ export default function App() {
     return (
       <GestureHandlerRootView style={styles.rootWhite}>
         <SafeAreaProvider>
-          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <StatusBar style="dark" backgroundColor={Colors.bg} />
           <BiometricSplash
             onSuccess={handleBiometricSuccess}
             onFallback={handleBiometricFallback}
@@ -201,7 +201,7 @@ export default function App() {
     return (
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>
-          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <StatusBar style="dark" backgroundColor={Colors.bg} />
           <OnboardingNavigator />
         </SafeAreaProvider>
       </GestureHandlerRootView>
@@ -213,7 +213,7 @@ export default function App() {
     return (
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>
-          <StatusBar style="light" backgroundColor={Colors.bg} />
+          <StatusBar style="dark" backgroundColor={Colors.bg} />
           <LoadingScreen />
         </SafeAreaProvider>
       </GestureHandlerRootView>
@@ -225,7 +225,7 @@ export default function App() {
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
-        <StatusBar style="light" backgroundColor={Colors.bg} />
+        <StatusBar style="dark" backgroundColor={Colors.bg} />
         <Navigator />
       </SafeAreaProvider>
     </GestureHandlerRootView>

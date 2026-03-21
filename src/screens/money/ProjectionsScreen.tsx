@@ -131,7 +131,7 @@ function ProjectionBarChartCard({ data }: { data: YearRow[] }) {
   const projBars: BarData[] = data.map((row, i) => ({
     label: `Yr${row.yearOffset}`,
     value: row.netCF,
-    isActual: row.yearOffset === 0,
+    isActual: true,
     isCurrent: row.yearOffset === 0,
     priorValue: i > 0 ? data[i - 1].netCF : undefined,
     priorLabel: i > 0 ? `Yr${data[i - 1].yearOffset}` : undefined,
@@ -183,7 +183,13 @@ export function ProjectionsScreen() {
 
   const projStyle = profile?.projectionStyle || 'normal';
   const startingUnits = (profile?.properties || []).reduce((sum, p) => sum + (p.units || 1), 0);
-  const [unitsPerYear, setUnitsPerYear] = useState(profile?.unitsPerYear ?? 5);
+  const savedUnitsPerYear = profile?.unitsPerYear ?? 0;
+  const [unitsPerYear, setUnitsPerYear] = useState(savedUnitsPerYear);
+
+  // Reset to saved value when screen regains focus or profile changes
+  useEffect(() => {
+    setUnitsPerYear(savedUnitsPerYear);
+  }, [savedUnitsPerYear]);
 
   const load = useCallback(async (force = false) => {
     try {
@@ -246,9 +252,7 @@ export function ProjectionsScreen() {
   };
 
   const hasPlaid = !!profile?.plaidConnected;
-  const hasIcal = (profile?.properties || []).some((p: any) => (p.icalFeeds || []).length > 0);
-  const hasPriceLabs = !!profile?.priceLabsApiKey;
-  const hasAnySource = hasPlaid || hasIcal || hasPriceLabs || revenue > 0 || expenses > 0;
+  const hasAnySource = hasPlaid || revenue > 0 || expenses > 0;
 
   if (isReadOnly) {
     return (
@@ -300,7 +304,7 @@ export function ProjectionsScreen() {
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#FFFFFF"} colors={["#FFFFFF"]} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
       onTouchStart={dismissAllChartTooltips}
       {...({delaysContentTouches: false} as any)}
     >
@@ -314,7 +318,7 @@ export function ProjectionsScreen() {
         <View style={styles.emptyBanner}>
           <Ionicons name="information-circle-outline" size={18} color={Colors.textDim} />
           <Text style={styles.emptyBannerText}>
-            Connect Plaid, add iCal feeds, or enter manual income in Settings to generate projections based on your actual numbers.
+            Connect Plaid or enter manual income in Settings to generate projections based on your actual numbers.
           </Text>
         </View>
       )}
@@ -430,7 +434,7 @@ export function ProjectionsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xl * 2 },
+  content: { padding: Spacing.md, paddingTop: 160, paddingBottom: Spacing.xl * 2 },
 
   // YTD table
   sectionLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, letterSpacing: 0.8, fontWeight: '600' },
