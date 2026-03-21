@@ -180,8 +180,8 @@ const yearStyles = StyleSheet.create({
   },
 });
 
-type Tab = 'Revenue' | 'Projections';
-const TABS: Tab[] = ['Revenue', 'Projections'];
+type Tab = 'Revenue' | 'By Host' | 'Projections';
+const TABS: Tab[] = ['Revenue', 'By Host', 'Projections'];
 
 // ── Revenue Sub-tab ──
 
@@ -218,11 +218,22 @@ function RevenueTab({
 
   // This month revenue
   const thisMonth = now.toISOString().slice(0, 7);
-  const monthRevenue = useMemo(() => {
+  // Projected revenue (rates × checkouts)
+  const monthProjectedRevenue = useMemo(() => {
     return allEvents
       .filter(e => (e.check_out || '').slice(0, 7) === thisMonth)
       .reduce((sum, e) => sum + (rates[e.prop_id] || 0), 0);
   }, [allEvents, thisMonth, rates]);
+
+  // Actual revenue from Plaid (positive transactions = income)
+  const monthActualRevenue = useMemo(() => {
+    return plaidTransactions
+      .filter(t => (t.date || '').slice(0, 7) === thisMonth && (t.amount ?? 0) > 0)
+      .reduce((sum, t) => sum + (t.amount ?? 0), 0);
+  }, [plaidTransactions, thisMonth]);
+
+  // Use actual if available, otherwise projected
+  const monthRevenue = monthActualRevenue > 0 ? monthActualRevenue : monthProjectedRevenue;
 
   // Plaid expenses this month
   const monthExpenses = useMemo(() => {
@@ -235,16 +246,33 @@ function RevenueTab({
   const netMargin = monthRevenue - monthExpenses;
   const marginPct = monthRevenue > 0 ? (netMargin / monthRevenue) * 100 : 0;
 
-  // Monthly revenue bars for selected year
+  // Plaid revenue by month (actual)
+  const plaidRevByMonth = useMemo(() => {
+    const map: Record<string, number> = {};
+    plaidTransactions
+      .filter(t => (t.amount ?? 0) > 0)
+      .forEach(t => {
+        const ym = (t.date || '').slice(0, 7);
+        if (ym) map[ym] = (map[ym] || 0) + (t.amount ?? 0);
+      });
+    return map;
+  }, [plaidTransactions]);
+
+  // Monthly revenue bars — green = actual (Plaid), grey = projected (rates)
   const monthlyBars: BarData[] = useMemo(() => {
     return MONTH_LABELS.map((label, i) => {
       const ym = `${revYear}-${String(i + 1).padStart(2, '0')}`;
-      const rev = allEvents
+      const projected = allEvents
         .filter(e => (e.check_out || '').slice(0, 7) === ym)
         .reduce((sum, e) => sum + (rates[e.prop_id] || 0), 0);
+      const actual = plaidRevByMonth[ym] || 0;
+      // Use actual if available, otherwise projected
+      const rev = actual > 0 ? actual : projected;
       const isCurrentMonth = ym === thisMonth;
       const monthDate = new Date(revYear, i + 1, 0);
       const isFuture = monthDate > now && !isCurrentMonth;
+      // isActual = true (green) when we have Plaid data, false (grey) when projected
+      const hasActualData = actual > 0;
       const priorIdx = i - 1;
       let priorValue: number | undefined;
       let priorLabel: string | undefined;
@@ -255,9 +283,9 @@ function RevenueTab({
           .reduce((sum, e) => sum + (rates[e.prop_id] || 0), 0);
         priorLabel = MONTH_LABELS[priorIdx];
       }
-      return { label, value: rev, isActual: !isFuture, isCurrent: isCurrentMonth, month: ym, priorValue, priorLabel };
+      return { label, value: rev, isActual: hasActualData || (!isFuture && !isCurrentMonth), isCurrent: isCurrentMonth, month: ym, priorValue, priorLabel };
     });
-  }, [allEvents, rates, revYear, thisMonth, now]);
+  }, [allEvents, rates, revYear, thisMonth, now, plaidRevByMonth]);
 
   // Monthly expense bars (overlay line on revenue chart)
   const monthlyExpBars: BarData[] = useMemo(() => {
@@ -272,6 +300,21 @@ function RevenueTab({
       return { label, value: exp, isActual: !isFuture, isCurrent: isCurrentMonth };
     });
   }, [plaidTransactions, revYear, thisMonth, now]);
+
+  // Projected bars — only shows for current month as a paired grey bar
+  const projectedBars: BarData[] | undefined = useMemo(() => {
+    if (!isPlaidConnected) return undefined; // Only show paired bars when we have actual data
+    return MONTH_LABELS.map((label, i) => {
+      const ym = `${revYear}-${String(i + 1).padStart(2, '0')}`;
+      const isCurrentMonth = ym === thisMonth;
+      // Only show projected bar for current month
+      if (!isCurrentMonth) return { label, value: 0, isActual: false, isCurrent: false };
+      const projected = allEvents
+        .filter(e => (e.check_out || '').slice(0, 7) === ym)
+        .reduce((sum, e) => sum + (rates[e.prop_id] || 0), 0);
+      return { label, value: projected, isActual: false, isCurrent: true };
+    });
+  }, [allEvents, rates, revYear, thisMonth, isPlaidConnected]);
 
   // Quarterly revenue bars
   const quarterlyBars: BarData[] = useMemo(() => {
@@ -410,6 +453,11 @@ function RevenueTab({
         <Card style={styles.halfCard}>
           <Text style={styles.miniLabel}>Revenue This Month</Text>
           <Text style={[styles.cardValue, { color: Colors.green }]}>{fmt$(monthRevenue)}</Text>
+          {isPlaidConnected && monthActualRevenue > 0 && monthProjectedRevenue > 0 && monthProjectedRevenue !== monthActualRevenue && (
+            <Text style={{ fontSize: FontSize.xs, color: Colors.textDim, marginTop: 2 }}>
+              Projected: {fmt$(monthProjectedRevenue)}
+            </Text>
+          )}
         </Card>
         <Card style={styles.halfCard}>
           <Text style={styles.miniLabel}>Expenses This Month</Text>
@@ -436,7 +484,7 @@ function RevenueTab({
 
       {/* Revenue / Expenses chart */}
       <Card>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
           <Text style={[styles.sectionLabel, { color: Colors.green }]}>REVENUE</Text>
           <Text style={[styles.sectionLabel, { color: Colors.textDim }]}>/</Text>
           <Text style={[styles.sectionLabel, { color: Colors.red }]}>EXPENSES</Text>
@@ -452,6 +500,8 @@ function RevenueTab({
         <BarChart
           bars={monthlyBars}
           overlayLine={{ data: monthlyExpBars, color: Colors.red }}
+          pairedBars={projectedBars}
+          pairedColorType="green"
           color={Colors.green}
           height={120}
           onDoubleTap={handleDoubleTap}
@@ -481,29 +531,6 @@ function RevenueTab({
         <YearTabs years={years} selected={cleaningsYear} onSelect={setCleaningsYear} />
         <BarChart bars={cleaningsPerMonthBars} color={Colors.primary} height={120} />
       </Card>
-
-      {/* Revenue breakdown */}
-      {revenueByHost.length > 0 && (
-        <Card>
-          <Text style={styles.sectionLabel}>REVENUE BY HOST</Text>
-          {revenueByHost.map((host, i) => (
-            <View key={host.id} style={[styles.breakdownRow, i > 0 && styles.breakdownBorder]}>
-              <View style={{ flex: 1 }}>
-                <View style={styles.breakdownHeader}>
-                  <Text style={styles.breakdownName}>{host.name}</Text>
-                  <Text style={[styles.breakdownAmt, { color: Colors.green }]}>{fmt$(host.revenue)}</Text>
-                </View>
-                {host.props.map(p => (
-                  <View key={p.id} style={styles.breakdownProp}>
-                    <Text style={styles.breakdownPropName}>{p.name}</Text>
-                    <Text style={styles.breakdownPropAmt}>{fmt$(p.revenue)}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          ))}
-        </Card>
-      )}
 
       {/* Connect Plaid banner */}
       {!isPlaidConnected && (
@@ -627,6 +654,103 @@ const milestoneStyles = StyleSheet.create({
   value: { fontSize: FontSize.md, fontWeight: '700', color: Colors.primary },
   valueLabel: { fontSize: 9, color: Colors.textDim },
 });
+
+// ── Revenue by Host Sub-tab (Pro-gated) ──
+
+function RevenueByHostTab({ allEvents, rates }: { allEvents: CleanerEvent[]; rates: Record<string, number> }) {
+  const { isReadOnly } = useSubscriptionGate();
+  const checkout = useProCheckout();
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const revenueByHost = useMemo(() => {
+    const map = new Map<string, { name: string; revenue: number; cleanings: number; props: Map<string, { name: string; revenue: number; count: number }> }>();
+    allEvents
+      .filter(e => (e.check_out || '').slice(0, 4) === String(year))
+      .forEach(e => {
+        const rate = rates[e.prop_id] || 0;
+        if (!map.has(e.owner_id)) map.set(e.owner_id, { name: e.owner, revenue: 0, cleanings: 0, props: new Map() });
+        const host = map.get(e.owner_id)!;
+        host.revenue += rate;
+        host.cleanings++;
+        if (!host.props.has(e.prop_id)) host.props.set(e.prop_id, { name: e.prop_name, revenue: 0, count: 0 });
+        const prop = host.props.get(e.prop_id)!;
+        prop.revenue += rate;
+        prop.count++;
+      });
+    return Array.from(map.entries())
+      .map(([id, data]) => ({
+        id, name: data.name, revenue: data.revenue, cleanings: data.cleanings,
+        props: Array.from(data.props.entries()).map(([pid, pd]) => ({ id: pid, name: pd.name, revenue: pd.revenue, count: pd.count }))
+          .sort((a, b) => b.revenue - a.revenue),
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [allEvents, rates, year]);
+
+  const totalRevenue = revenueByHost.reduce((s, h) => s + h.revenue, 0);
+
+  if (isReadOnly) {
+    return (
+      <View style={styles.lockedContainer}>
+        <View style={styles.lockedCircle}>
+          <Ionicons name="lock-closed" size={28} color={Colors.textDim} />
+        </View>
+        <Text style={styles.lockedTitle}>Revenue by Host</Text>
+        <Text style={styles.lockedDesc}>
+          Subscribe to Pro to see per-host revenue breakdown, property-level earnings, and cleaning counts.
+        </Text>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[styles.lockedBtn, checkout.loading && { opacity: 0.6 }]}
+          onPress={checkout.startCheckout}
+          disabled={checkout.loading}
+        >
+          {checkout.loading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <Ionicons name="diamond-outline" size={14} color="#fff" />
+              <Text style={styles.lockedBtnText}>Subscribe to Pro</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <>
+      <Card>
+        <Text style={styles.sectionLabel}>REVENUE BY HOST — {year}</Text>
+        <Text style={styles.bigValue}>{fmt$(totalRevenue)}</Text>
+      </Card>
+
+      {revenueByHost.length === 0 ? (
+        <View style={{ alignItems: 'center', paddingVertical: Spacing.xl }}>
+          <Ionicons name="people-outline" size={40} color={Colors.textDim} />
+          <Text style={{ color: Colors.textDim, fontSize: FontSize.sm, marginTop: Spacing.sm }}>No revenue data for {year}</Text>
+        </View>
+      ) : (
+        revenueByHost.map((host) => (
+          <Card key={host.id}>
+            <View style={styles.breakdownHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.breakdownName}>{host.name}</Text>
+                <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary }}>{host.cleanings} cleaning{host.cleanings !== 1 ? 's' : ''}</Text>
+              </View>
+              <Text style={[styles.breakdownAmt, { color: Colors.green }]}>{fmt$(host.revenue)}</Text>
+            </View>
+            {host.props.map(p => (
+              <View key={p.id} style={styles.breakdownProp}>
+                <Text style={styles.breakdownPropName}>{p.name}</Text>
+                <Text style={styles.breakdownPropAmt}>{p.count}x · {fmt$(p.revenue)}</Text>
+              </View>
+            ))}
+          </Card>
+        ))
+      )}
+    </>
+  );
+}
 
 // ── Projections Sub-tab (Pro-gated) ──
 
@@ -972,6 +1096,15 @@ export function CleanerMoneyScreen() {
           />
         </ScrollView>
 
+        {/* By Host Page */}
+        <ScrollView
+          style={{ width: SCREEN_W }}
+          contentContainerStyle={styles.content}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
+        >
+          <RevenueByHostTab allEvents={allEvents} rates={rates} />
+        </ScrollView>
+
         {/* Projections Page */}
         <ScrollView
           style={{ width: SCREEN_W }}
@@ -1004,6 +1137,7 @@ export function CleanerMoneyScreen() {
           compact
           items={[
             { key: 'Revenue' as Tab, label: 'Revenue' },
+            { key: 'By Host' as Tab, label: 'Rev Per Host' },
             { key: 'Projections' as Tab, label: 'Projections' },
           ]}
           selected={tab}
