@@ -14,6 +14,7 @@ import * as SecureStore from 'expo-secure-store';
 import { useOnboardingStore } from './src/store/onboardingStore';
 import { useUserStore } from './src/store/userStore';
 import { GlassAlertProvider } from './src/components/GlassAlert';
+import { StripeProvider } from '@stripe/stripe-react-native';
 import { useNotificationStore } from './src/store/notificationStore';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { CleanerAppNavigator } from './src/navigation/CleanerAppNavigator';
@@ -223,13 +224,27 @@ export default function App() {
 
   const Navigator = accountType === 'cleaner' ? CleanerAppNavigator : AppNavigator;
 
+  // Fetch Stripe publishable key for payment sheet
+  const [stripeKey, setStripeKey] = useState<string | null>(null);
+  useEffect(() => {
+    fetch('https://portfoliopigeon.com/api/invoice/publishable-key')
+      .then(r => r.json())
+      .then(d => { if (d.publishable_key) setStripeKey(d.publishable_key); })
+      .catch(() => {});
+  }, []);
+
   return (
     <GestureHandlerRootView style={styles.root}>
-      <SafeAreaProvider>
-        <StatusBar style="dark" backgroundColor={Colors.bg} />
-        <Navigator />
-        <GlassAlertProvider />
-      </SafeAreaProvider>
+      <StripeProvider
+        publishableKey={stripeKey || 'pk_placeholder'}
+        merchantIdentifier="merchant.com.portfoliopigeon.mobile"
+      >
+        <SafeAreaProvider>
+          <StatusBar style="dark" backgroundColor={Colors.bg} />
+          <Navigator />
+          <GlassAlertProvider />
+        </SafeAreaProvider>
+      </StripeProvider>
     </GestureHandlerRootView>
   );
 }

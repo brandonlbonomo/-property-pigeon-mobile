@@ -58,6 +58,13 @@
           "photosPermission": "Allow Portfolio Pigeon to access your photos to send in messages.",
           "cameraPermission": "Allow Portfolio Pigeon to use your camera to take photos for messages."
         }
+      ],
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.portfoliopigeon.mobile",
+          "enableGooglePay": true
+        }
       ]
     ],
     "extra": {

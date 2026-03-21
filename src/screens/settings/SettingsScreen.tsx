@@ -24,6 +24,7 @@ import { AddressAutocomplete, ResolvedAddress } from '../../components/AddressAu
 import { PropertyStreetView } from '../../components/PropertyStreetView';
 import { MAPS_PROXY_URL } from '../../constants/api';
 import { glassAlert } from '../../components/GlassAlert';
+import { startConnectOnboarding, getConnectStatus } from '../../services/payments';
 
 type Section = 'main' | 'properties' | 'income' | 'plaid' | 'cleanerFeeds' | 'tagRules' | 'billing' | 'transactions' | 'invoices' | 'notifications' | 'customTags';
 
@@ -173,6 +174,68 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
+  const [paying, setPaying] = useState<string | null>(null);
+
+  // Apple Pay / card payment
+  let usePaymentSheet: any;
+  try { usePaymentSheet = require('@stripe/stripe-react-native').usePaymentSheet; } catch {}
+
+  const paymentSheet = usePaymentSheet?.();
+
+  const handleApplePay = async (inv: any) => {
+    if (!paymentSheet) {
+      glassAlert('Not Available', 'Payment processing is not available in this build. Use "Paid Offline" instead.');
+      return;
+    }
+    setPaying(inv.id);
+    try {
+      // 1. Create payment intent
+      const { createInvoicePaymentIntent, checkPaymentStatus: checkStatus } = require('../../services/payments');
+      const amountCents = Math.round((inv.total || 0) * 100);
+      const res = await createInvoicePaymentIntent(inv.id, amountCents, inv.cleanerUserId || inv.cleaner_user_id);
+
+      if (res.error) {
+        glassAlert('Payment Error', res.error);
+        setPaying(null);
+        return;
+      }
+
+      // 2. Initialize payment sheet
+      const { error: initError } = await paymentSheet.initPaymentSheet({
+        paymentIntentClientSecret: res.client_secret,
+        merchantDisplayName: 'Portfolio Pigeon',
+        applePay: { merchantCountryCode: 'US' },
+        googlePay: { merchantCountryCode: 'US', testEnv: false },
+      });
+
+      if (initError) {
+        glassAlert('Error', initError.message);
+        setPaying(null);
+        return;
+      }
+
+      // 3. Present payment sheet
+      const { error: presentError } = await paymentSheet.presentPaymentSheet();
+      if (presentError) {
+        if (presentError.code !== 'Canceled') {
+          glassAlert('Payment Failed', presentError.message);
+        }
+        setPaying(null);
+        return;
+      }
+
+      // 4. Confirm payment succeeded
+      const status = await checkStatus(res.payment_intent_id);
+      if (status.status === 'succeeded') {
+        setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' } : i));
+        glassAlert('Payment Successful', `$${(inv.total || 0).toFixed(2)} sent to ${inv.cleanerName || 'cleaner'}.`);
+      }
+    } catch (e: any) {
+      glassAlert('Error', e?.serverError || e?.message || 'Payment failed.');
+    } finally {
+      setPaying(null);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -294,21 +357,28 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
                     <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>Share</Text>
                   </TouchableOpacity>
                   {!isPaid && (
-                    <TouchableOpacity
-                      activeOpacity={0.7}
-                      style={{ flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, backgroundColor: Colors.green, borderRadius: Radius.md }}
-                      onPress={() => handleMarkPaid(inv.id)}
-                      disabled={markingPaid === inv.id}
-                    >
-                      {markingPaid === inv.id ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <>
-                          <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
-                          <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: '#fff' }}>Mark as Paid</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
+                    <>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, backgroundColor: Colors.text, borderRadius: Radius.md }}
+                        onPress={() => handleApplePay(inv)}
+                      >
+                        <Ionicons name="logo-apple" size={16} color="#fff" />
+                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: '#fff' }}>Pay</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md }}
+                        onPress={() => handleMarkPaid(inv.id)}
+                        disabled={markingPaid === inv.id}
+                      >
+                        {markingPaid === inv.id ? (
+                          <ActivityIndicator size="small" color={Colors.text} />
+                        ) : (
+                          <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>Paid Offline</Text>
+                        )}
+                      </TouchableOpacity>
+                    </>
                   )}
                 </View>
               </View>
@@ -921,6 +991,7 @@ export function SettingsScreen() {
   const [customTagName, setCustomTagName] = useState('');
   const [customTagType, setCustomTagType] = useState<'income' | 'expense'>('expense');
   const [plaidAccounts, setPlaidAccounts] = useState<any[]>([]);
+  const [connectStatus, setConnectStatus] = useState<'active' | 'pending' | 'not_started'>('not_started');
   const [plaidLinkToken, setPlaidLinkToken] = useState('');
   const [showPlaidLink, setShowPlaidLink] = useState(false);
   // Legal links open externally (Apple requirement)
@@ -986,6 +1057,26 @@ export function SettingsScreen() {
     }
   }, []);
 
+  // Stripe Connect setup for cleaners
+  const handleConnectSetup = async () => {
+    try {
+      const res = await startConnectOnboarding();
+      if (res.status === 'active') {
+        setConnectStatus('active');
+        glassAlert('Already Set Up', 'Your payment account is active and ready to receive payments.');
+        return;
+      }
+      if (res.onboarding_url) {
+        setConnectStatus('pending');
+        await Linking.openURL(res.onboarding_url);
+      } else {
+        glassAlert('Error', 'Could not start payment setup. Please try again.');
+      }
+    } catch (e: any) {
+      glassAlert('Error', e?.serverError || e?.message || 'Could not set up payments.');
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     // Properties come from local userStore profile, not API
@@ -1008,6 +1099,13 @@ export function SettingsScreen() {
       const cats = await fetchCustomCategoriesApi(true);
       setCustomCategories(cats);
     } catch { setCustomCategories([]); }
+    // Fetch Connect status for cleaners
+    if (userProfile?.accountType === 'cleaner') {
+      try {
+        const cs = await getConnectStatus();
+        setConnectStatus(cs.status === 'active' ? 'active' : cs.status === 'pending' ? 'pending' : 'not_started');
+      } catch {}
+    }
     // Fetch referral data
     try {
       const ref = await apiFetch('/api/referral/code');
@@ -2192,6 +2290,17 @@ export function SettingsScreen() {
 
       {userProfile?.accountType === 'cleaner' ? (
         <>
+          <SectionTitle title="Payments" />
+          <CardGroup>
+            <SettingRow
+              icon="wallet-outline"
+              label="Receive Payments"
+              sub={connectStatus === 'active' ? 'Stripe connected — ready to receive' : 'Set up to receive invoice payments'}
+              onPress={handleConnectSetup}
+              right={connectStatus === 'active' ? <Ionicons name="checkmark-circle" size={18} color={Colors.green} /> : undefined}
+            />
+          </CardGroup>
+
           <SectionTitle title="Data Sources" />
           <CardGroup>
             <SettingRow icon="card-outline" label="Plaid Connections" sub={isReadOnly ? "Subscribe to Pro" : `${plaidAccounts.length} accounts connected`} onPress={isReadOnly ? handleProGate : () => setSection('plaid')} />

@@ -1603,6 +1603,252 @@ def billing_verify_session():
         return jsonify({"error": msg}), code
 
 
+# ── Stripe Connect + Invoice Payments ──────────────────────────────────────
+
+PLATFORM_FEE_PCT = 0.02  # 2% platform fee on invoice payments
+
+@app.route("/api/connect/onboard", methods=["POST"])
+def connect_onboard():
+    """Create a Stripe Connect Express account for a cleaner and return the onboarding URL."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+    if not stripe.api_key:
+        return jsonify({"error": "Payments not configured"}), 503
+
+    # Check if cleaner already has a Connect account
+    store = load_store()
+    connect_id = store.get("stripe_connect_id")
+
+    try:
+        if connect_id:
+            # Account exists — check if onboarding is complete
+            acct = stripe.Account.retrieve(connect_id)
+            if acct.charges_enabled and acct.payouts_enabled:
+                return jsonify({"ok": True, "status": "active", "connect_id": connect_id})
+            # Not fully onboarded — create new onboarding link
+            link = stripe.AccountLink.create(
+                account=connect_id,
+                refresh_url="https://portfoliopigeon.com/api/connect/refresh",
+                return_url="https://portfoliopigeon.com/api/connect/return",
+                type="account_onboarding",
+            )
+            return jsonify({"ok": True, "status": "pending", "onboarding_url": link.url, "connect_id": connect_id})
+
+        # Create new Express account
+        users = load_users()
+        email = ""
+        for em, u in users.items():
+            if u.get("id") == uid:
+                email = em
+                break
+
+        account = stripe.Account.create(
+            type="express",
+            country="US",
+            email=email or None,
+            capabilities={
+                "card_payments": {"requested": True},
+                "transfers": {"requested": True},
+            },
+            business_type="individual",
+            metadata={"user_id": uid, "platform": "portfolio_pigeon"},
+        )
+
+        # Save Connect account ID to user's store
+        store["stripe_connect_id"] = account.id
+        save_store(store)
+
+        # Create onboarding link
+        link = stripe.AccountLink.create(
+            account=account.id,
+            refresh_url="https://portfoliopigeon.com/api/connect/refresh",
+            return_url="https://portfoliopigeon.com/api/connect/return",
+            type="account_onboarding",
+        )
+
+        logger.info("Stripe Connect account created: %s for user %s", account.id, uid)
+        return jsonify({"ok": True, "status": "pending", "onboarding_url": link.url, "connect_id": account.id})
+    except Exception as e:
+        msg, _ = _safe_error(e, "Connect onboarding")
+        return jsonify({"error": msg}), 500
+
+
+@app.route("/api/connect/status", methods=["GET"])
+def connect_status():
+    """Check if the cleaner has a fully set up Stripe Connect account."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+
+    store = load_store()
+    connect_id = store.get("stripe_connect_id")
+    if not connect_id:
+        return jsonify({"connected": False, "status": "not_started"})
+
+    try:
+        acct = stripe.Account.retrieve(connect_id)
+        is_active = bool(acct.charges_enabled and acct.payouts_enabled)
+        return jsonify({
+            "connected": is_active,
+            "status": "active" if is_active else "pending",
+            "connect_id": connect_id,
+            "charges_enabled": acct.charges_enabled,
+            "payouts_enabled": acct.payouts_enabled,
+        })
+    except Exception as e:
+        return jsonify({"connected": False, "status": "error", "error": str(e)})
+
+
+@app.route("/api/connect/return")
+def connect_return():
+    """Redirect page after Stripe Connect onboarding completes."""
+    return """<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Setup Complete</title>
+    <style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#F8F9FA;}
+    .card{text-align:center;padding:40px;border-radius:20px;background:white;box-shadow:0 4px 20px rgba(0,0,0,0.08);}
+    h1{color:#1ECE6E;font-size:24px;}p{color:#6B7280;}</style></head>
+    <body><div class="card"><h1>Payment Setup Complete</h1>
+    <p>You can close this page and return to Portfolio Pigeon.</p></div></body></html>"""
+
+
+@app.route("/api/connect/refresh")
+def connect_refresh():
+    """Redirect if onboarding link expires — tells user to try again."""
+    return """<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Link Expired</title>
+    <style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#F8F9FA;}
+    .card{text-align:center;padding:40px;border-radius:20px;background:white;box-shadow:0 4px 20px rgba(0,0,0,0.08);}
+    h1{color:#EF4444;font-size:24px;}p{color:#6B7280;}</style></head>
+    <body><div class="card"><h1>Link Expired</h1>
+    <p>Go back to Portfolio Pigeon and try setting up payments again.</p></div></body></html>"""
+
+
+@app.route("/api/invoice/payment-intent", methods=["POST"])
+def create_invoice_payment_intent():
+    """Create a Stripe PaymentIntent for an invoice with Connect transfer.
+    Money goes: Host → Stripe → Cleaner (minus 2% platform fee)."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+    if not stripe.api_key:
+        return jsonify({"error": "Payments not configured"}), 503
+
+    body = request.get_json(force=True) or {}
+    invoice_id = body.get("invoice_id", "")
+    amount_cents = body.get("amount_cents", 0)
+    cleaner_user_id = body.get("cleaner_user_id", "")
+
+    if not invoice_id or amount_cents <= 0:
+        return jsonify({"error": "invoice_id and amount_cents required"}), 400
+
+    # Look up cleaner's Stripe Connect account
+    cleaner_connect_id = None
+    if cleaner_user_id:
+        try:
+            cleaner_store = _load_store_for_user(cleaner_user_id)
+            if cleaner_store:
+                cleaner_connect_id = cleaner_store.get("stripe_connect_id")
+        except Exception:
+            pass
+
+    if not cleaner_connect_id:
+        return jsonify({"error": "Cleaner has not set up payment receiving. Ask them to set up Stripe in their settings."}), 400
+
+    try:
+        # 2% platform fee
+        fee_amount = int(round(amount_cents * PLATFORM_FEE_PCT))
+
+        intent = stripe.PaymentIntent.create(
+            amount=int(amount_cents),
+            currency="usd",
+            application_fee_amount=fee_amount,
+            transfer_data={"destination": cleaner_connect_id},
+            metadata={
+                "invoice_id": invoice_id,
+                "payer_user_id": uid,
+                "cleaner_user_id": cleaner_user_id,
+                "type": "cleaner_invoice",
+            },
+            automatic_payment_methods={"enabled": True},
+        )
+        logger.info("PaymentIntent created: %s for invoice %s ($%.2f → %s, fee $%.2f)",
+                     intent.id, invoice_id, amount_cents / 100, cleaner_connect_id, fee_amount / 100)
+        return jsonify({
+            "client_secret": intent.client_secret,
+            "payment_intent_id": intent.id,
+            "publishable_key": STRIPE_PUBLISHABLE_KEY,
+        })
+    except Exception as e:
+        msg, _ = _safe_error(e, "Payment intent creation")
+        return jsonify({"error": msg}), 500
+
+
+@app.route("/api/invoice/payment-status", methods=["POST"])
+def check_invoice_payment_status():
+    """Check payment status after Apple Pay completes. Marks invoice as paid on success."""
+    uid = getattr(g, 'user_id', None)
+    if not uid:
+        return jsonify({"error": "Authentication required"}), 401
+
+    body = request.get_json(force=True) or {}
+    payment_intent_id = body.get("payment_intent_id", "")
+    if not payment_intent_id:
+        return jsonify({"error": "payment_intent_id required"}), 400
+
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        invoice_id = intent.metadata.get("invoice_id", "")
+        cleaner_user_id = intent.metadata.get("cleaner_user_id", "")
+
+        if intent.status == "succeeded" and invoice_id:
+            # Mark invoice as paid in the cleaner's store
+            if cleaner_user_id:
+                try:
+                    cleaner_store = _load_store_for_user(cleaner_user_id)
+                    if cleaner_store:
+                        invoices = cleaner_store.get("cleaner_invoices", [])
+                        for inv in invoices:
+                            if inv.get("id") == invoice_id:
+                                inv["status"] = "paid"
+                                inv["paid_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                                inv["payment_intent_id"] = payment_intent_id
+                                break
+                        cleaner_store["cleaner_invoices"] = invoices
+                        # Save to cleaner's per-user store
+                        user_sf = f"/data/store_{cleaner_user_id}.json" if _os.path.isdir("/data") else f"store_{cleaner_user_id}.json"
+                        _atomic_write_json(user_sf, cleaner_store, _get_store_lock(user_sf))
+                        logger.info("Invoice %s marked as paid via %s", invoice_id, payment_intent_id)
+                except Exception as e:
+                    logger.error("Error marking invoice paid: %s", e)
+
+            # Also mark in host's received invoices
+            store = load_store()
+            received = store.get("received_invoices", [])
+            for inv in received:
+                if inv.get("id") == invoice_id:
+                    inv["status"] = "paid"
+                    inv["paid_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    break
+            store["received_invoices"] = received
+            save_store(store)
+
+        return jsonify({
+            "status": intent.status,
+            "invoice_id": invoice_id,
+            "amount": intent.amount,
+        })
+    except Exception as e:
+        msg, _ = _safe_error(e, "Payment status check")
+        return jsonify({"error": msg}), 500
+
+
+@app.route("/api/invoice/publishable-key", methods=["GET"])
+def get_stripe_publishable_key():
+    """Return the Stripe publishable key for client-side payment sheet."""
+    return jsonify({"publishable_key": STRIPE_PUBLISHABLE_KEY})
+
+
 @app.route("/api/billing/success")
 def billing_success():
     return """<!DOCTYPE html>
