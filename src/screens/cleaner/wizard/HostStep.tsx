@@ -5,6 +5,7 @@ import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { FollowedOwner } from '../../../store/cleanerStore';
 import { apiFetch } from '../../../services/api';
 import { useCleanerStore } from '../../../store/cleanerStore';
+import { glassAlert } from '../../../components/GlassAlert';
 
 interface Props {
   owners: FollowedOwner[];
@@ -29,15 +30,15 @@ export function HostStep({ owners, onSelect }: Props) {
     try {
       const res = await followOwner(target);
       if (res.ok) {
-        Alert.alert('Host Followed', 'You are now following this host. Close and reopen this screen to see them.');
+        glassAlert('Host Followed', 'You are now following this host. Close and reopen this screen to see them.');
         setSearchInput('');
         setSelectedUser(null);
         setShowSearch(false);
       } else {
-        Alert.alert('Error', res.error || 'Could not follow this host.');
+        glassAlert('Error', res.error || 'Could not follow this host.');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Could not follow this host.');
+      glassAlert('Error', e?.message || 'Could not follow this host.');
     } finally {
       setSearching(false);
     }

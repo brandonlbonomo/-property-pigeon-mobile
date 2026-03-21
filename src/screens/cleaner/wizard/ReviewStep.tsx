@@ -8,6 +8,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { CleanerEvent, InvoiceLineItem } from '../../../store/cleanerStore';
 import { fmt$ , localDateStr } from '../../../utils/format';
+import { glassAlert } from '../../../components/GlassAlert';
 
 const CLEANING_TYPES = [
   'Standard Cleaning',
@@ -37,6 +38,7 @@ export function ReviewStep({
   onCreateInvoice, creating,
 }: Props) {
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   // Group cleanings by property
   const grouped = useMemo(() => {
@@ -94,7 +96,7 @@ export function ReviewStep({
 
   const handleCreate = () => {
     if (allLineItems.length === 0) {
-      Alert.alert('No Items', 'Add at least one cleaning or manual line item.');
+      glassAlert('No Items', 'Add at least one cleaning or manual line item.');
       return;
     }
     onCreateInvoice(allLineItems, total, period, eventUids);
@@ -161,7 +163,8 @@ export function ReviewStep({
         <View style={styles.propGroup}>
           <Text style={styles.propName}>Additional Items</Text>
           {manualLineItems.map((item, i) => (
-            <View key={i} style={styles.lineItem}>
+            <TouchableOpacity key={i} activeOpacity={0.6} style={styles.lineItem}
+              onPress={() => { setEditingIndex(i); setShowAddModal(true); }}>
               <View style={styles.lineLeft}>
                 <Text style={styles.lineDate}>{item.cleaningType}</Text>
                 {item.propertyName ? (
@@ -169,23 +172,28 @@ export function ReviewStep({
                 ) : null}
               </View>
               <Text style={styles.lineAmount}>{fmt$(item.amount)}</Text>
-              <TouchableOpacity
-                activeOpacity={0.7}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                onPress={() => onRemoveManualItem(i)}
-              >
-                <Ionicons name="close-circle" size={18} color={Colors.red} />
-              </TouchableOpacity>
-            </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity activeOpacity={0.5}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  onPress={() => { setEditingIndex(i); setShowAddModal(true); }}>
+                  <Ionicons name="pencil" size={16} color={Colors.textSecondary} />
+                </TouchableOpacity>
+                <TouchableOpacity activeOpacity={0.5}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  onPress={() => onRemoveManualItem(i)}>
+                  <Ionicons name="close-circle" size={18} color={Colors.red} />
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
           ))}
         </View>
       )}
 
       {/* Add manual item */}
       <TouchableOpacity
-        activeOpacity={0.7}
+        activeOpacity={0.6}
         style={styles.addBtn}
-        onPress={() => setShowAddModal(true)}
+        onPress={() => { setEditingIndex(null); setShowAddModal(true); }}
       >
         <Ionicons name="add-circle-outline" size={16} color={Colors.primary} />
         <Text style={styles.addBtnText}>Add Line Item</Text>
@@ -217,28 +225,61 @@ export function ReviewStep({
       {/* Add manual item modal */}
       <AddManualItemModal
         visible={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        onAdd={(item) => { onAddManualItem(item); setShowAddModal(false); }}
+        onClose={() => { setShowAddModal(false); setEditingIndex(null); }}
+        onAdd={(item) => {
+          if (editingIndex !== null) {
+            // Edit: remove old, add updated
+            onRemoveManualItem(editingIndex);
+            onAddManualItem(item);
+          } else {
+            onAddManualItem(item);
+          }
+          setShowAddModal(false);
+          setEditingIndex(null);
+        }}
+        editData={editingIndex !== null ? manualLineItems[editingIndex] : undefined}
+        properties={Array.from(grouped.entries()).map(([pid, g]) => ({
+          id: pid,
+          label: g.propName,
+          units: g.events.map(e => e.unit_name || e.prop_name).filter((v, i, a) => a.indexOf(v) === i),
+        }))}
       />
     </ScrollView>
   );
 }
 
-function AddManualItemModal({ visible, onClose, onAdd }: {
+function AddManualItemModal({ visible, onClose, onAdd, properties, editData }: {
   visible: boolean;
   onClose: () => void;
   onAdd: (item: InvoiceLineItem) => void;
+  properties: { id: string; label: string; units: string[] }[];
+  editData?: InvoiceLineItem;
 }) {
-  const [type, setType] = useState<string>(CLEANING_TYPES[2]); // Default to Deep Cleaning
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
+  const isEditing = !!editData;
+  const [type, setType] = useState<string>(editData?.cleaningType || CLEANING_TYPES[2]);
+  const [description, setDescription] = useState(editData?.propertyName?.split(' — ')[1] || '');
+  const [amount, setAmount] = useState(editData ? String(editData.amount) : '');
+  const [selectedProp, setSelectedProp] = useState<string>(
+    editData?.propertyName?.split(' — ')[0] || properties[0]?.label || ''
+  );
+  const hasMultiple = properties.length > 1 || properties.some(p => p.units.length > 1);
+
+  // Reset when modal opens with new data
+  React.useEffect(() => {
+    if (visible) {
+      setType(editData?.cleaningType || CLEANING_TYPES[2]);
+      setDescription(editData?.propertyName?.split(' — ')[1] || '');
+      setAmount(editData ? String(editData.amount) : '');
+      setSelectedProp(editData?.propertyName?.split(' — ')[0] || properties[0]?.label || '');
+    }
+  }, [visible, editData]);
 
   const handleAdd = () => {
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) return;
     onAdd({
       date: localDateStr(),
-      propertyName: description,
+      propertyName: selectedProp + (description ? ` — ${description}` : ''),
       cleaningType: type,
       rate: amountNum,
       amount: amountNum,
@@ -252,7 +293,34 @@ function AddManualItemModal({ visible, onClose, onAdd }: {
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={modalStyles.card}>
-          <Text style={modalStyles.title}>Add Line Item</Text>
+          <Text style={modalStyles.title}>{isEditing ? 'Edit Line Item' : 'Add Line Item'}</Text>
+
+          {/* Property picker — only show when multiple properties/units */}
+          {hasMultiple && (
+            <>
+              <Text style={modalStyles.label}>Property / Unit</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.sm }}>
+                <View style={modalStyles.typePills}>
+                  {properties.flatMap(p =>
+                    p.units.length > 1
+                      ? p.units.map(u => ({ key: u, label: u }))
+                      : [{ key: p.label, label: p.label }]
+                  ).map(opt => (
+                    <TouchableOpacity
+                      key={opt.key}
+                      activeOpacity={0.6}
+                      style={[modalStyles.typePill, selectedProp === opt.key && modalStyles.typePillActive]}
+                      onPress={() => setSelectedProp(opt.key)}
+                    >
+                      <Text style={[modalStyles.typePillText, selectedProp === opt.key && modalStyles.typePillTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            </>
+          )}
 
           <Text style={modalStyles.label}>Type</Text>
           <View style={modalStyles.typePills}>
@@ -300,7 +368,7 @@ function AddManualItemModal({ visible, onClose, onAdd }: {
               disabled={(parseFloat(amount) || 0) <= 0}
               onPress={handleAdd}
             >
-              <Text style={modalStyles.addText}>Add</Text>
+              <Text style={modalStyles.addText}>{isEditing ? 'Save' : 'Add'}</Text>
             </TouchableOpacity>
           </View>
         </View>

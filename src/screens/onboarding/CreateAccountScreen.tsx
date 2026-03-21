@@ -9,6 +9,7 @@ import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { useUserStore } from '../../store/userStore';
 import { useOnboardingStore } from '../../store/onboardingStore';
 import { apiFetch } from '../../services/api';
+import { glassAlert } from '../../components/GlassAlert';
 
 export function CreateAccountScreen({ navigation }: any) {
   const [username, setUsername] = useState('');
@@ -100,10 +101,10 @@ export function CreateAccountScreen({ navigation }: any) {
   }, [email]);
 
   const handleSubmit = async () => {
-    if (!usernameValid) { Alert.alert('Invalid', usernameTaken ? 'Username is already taken' : !usernameCharsValid ? 'Username can only contain letters, numbers, dots, dashes, and underscores' : 'Username must be at least 3 characters'); return; }
-    if (!emailValid) { Alert.alert('Invalid', 'Enter a valid email address'); return; }
-    if (!passwordValid) { Alert.alert('Invalid', 'Password must be at least 8 characters'); return; }
-    if (!passwordsMatch) { Alert.alert('Mismatch', 'Passwords do not match'); return; }
+    if (!usernameValid) { glassAlert('Invalid', usernameTaken ? 'Username is already taken' : !usernameCharsValid ? 'Username can only contain letters, numbers, dots, dashes, and underscores' : 'Username must be at least 3 characters'); return; }
+    if (!emailValid) { glassAlert('Invalid', 'Enter a valid email address'); return; }
+    if (!passwordValid) { glassAlert('Invalid', 'Password must be at least 8 characters'); return; }
+    if (!passwordsMatch) { glassAlert('Mismatch', 'Passwords do not match'); return; }
 
     // Store credentials locally — registration happens at end of onboarding
     setPendingCredentials({

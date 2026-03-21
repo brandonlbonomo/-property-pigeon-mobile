@@ -9,6 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { apiFetch } from '../../services/api';
 import { useMessageStore } from '../../store/messageStore';
+import { glassAlert } from '../../components/GlassAlert';
 
 interface UserResult {
   user_id: string;
@@ -62,7 +63,7 @@ export function ComposeGroupScreen() {
 
   const handleCreate = async () => {
     if (selected.length < 2) {
-      Alert.alert('Not Enough Members', 'Select at least 2 people to create a group.');
+      glassAlert('Not Enough Members', 'Select at least 2 people to create a group.');
       return;
     }
     setCreating(true);
@@ -77,10 +78,10 @@ export function ComposeGroupScreen() {
           groupName: groupName.trim() || 'Group Chat',
         });
       } else {
-        Alert.alert('Error', 'Could not create group. Please try again.');
+        glassAlert('Error', 'Could not create group. Please try again.');
       }
     } catch {
-      Alert.alert('Error', 'Could not create group. Please try again.');
+      glassAlert('Error', 'Could not create group. Please try again.');
     }
     setCreating(false);
   };

@@ -15,6 +15,7 @@ import {
   CATEGORIES, CATALOG_ITEMS, getCatalogByCategory, findCatalogItem,
   type InventoryCategory, type CatalogItem,
 } from '../../constants/inventoryCatalog';
+import { glassAlert } from '../../components/GlassAlert';
 
 type UnitType = 'count' | 'oz' | 'gal';
 const UNIT_LABELS: Record<UnitType, string> = { count: '', oz: 'oz', gal: 'gal' };
@@ -176,7 +177,7 @@ function RestockModal({ item, onClose, onSave }: {
 
   const handleSave = async () => {
     const num = parseFloat(qty);
-    if (isNaN(num) || num <= 0) { Alert.alert('Invalid', 'Enter a valid quantity'); return; }
+    if (isNaN(num) || num <= 0) { glassAlert('Invalid', 'Enter a valid quantity'); return; }
     setSaving(true);
     await onSave(item.id, (item.base_qty ?? item.current_qty ?? 0) + num);
     setSaving(false);
@@ -272,7 +273,7 @@ function AddItemForm({ onAdd, onCancel }: {
   };
 
   const handleAdd = () => {
-    if (!name.trim()) { Alert.alert('Required', 'Enter an item name'); return; }
+    if (!name.trim()) { glassAlert('Required', 'Enter an item name'); return; }
     const effectivePerStay = parseFloat(perStay) || defaultRate;
     onAdd({
       name: name.trim(),
@@ -475,20 +476,20 @@ export function InventoryScreen() {
       }
       useDataStore.setState({ invGroups: null });
     }).catch((e: any) => {
-      Alert.alert('Error', `Could not save group: ${e?.message || 'unknown error'}`);
+      glassAlert('Error', `Could not save group: ${e?.message || 'unknown error'}`);
       setGroups(prev => prev.filter(g => g.id !== tempId));
     });
   };
 
   const handleDeleteGroup = (groupId: string, name: string) => {
-    Alert.alert('Delete Group', `Delete "${name}" and all its items?`, [
+    glassAlert('Delete Group', `Delete "${name}" and all its items?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         try {
           await apiFetch(`/api/inv-groups/${groupId}`, { method: 'DELETE' });
           setGroups(prev => prev.filter(g => g.id !== groupId));
           useDataStore.setState({ invGroups: null });
-        } catch { Alert.alert('Error', 'Could not delete group.'); }
+        } catch { glassAlert('Error', 'Could not delete group.'); }
       }},
     ]);
   };
@@ -511,7 +512,7 @@ export function InventoryScreen() {
       setAddingItemGroup(null);
       useDataStore.setState({ invGroups: null });
       load(true);
-    } catch { Alert.alert('Error', 'Could not add item.'); }
+    } catch { glassAlert('Error', 'Could not add item.'); }
   };
 
   const handleRestock = async (itemId: string, newQty: number) => {
@@ -523,7 +524,7 @@ export function InventoryScreen() {
       setRestockItem(null);
       useDataStore.setState({ invGroups: null });
       load(true);
-    } catch { Alert.alert('Error', 'Could not update stock.'); }
+    } catch { glassAlert('Error', 'Could not update stock.'); }
   };
 
   // ── Derived data ──

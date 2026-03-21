@@ -12,6 +12,7 @@ import {
   ProductPricing, checkProEntitlement, isCustomerEntitled,
 } from '../services/revenueCat';
 import { navigationRef } from '../navigation/navigationRef';
+import { glassAlert } from './GlassAlert';
 
 const TERMS_URL = 'https://portfoliopigeon.com/terms';
 const PRIVACY_URL = 'https://portfoliopigeon.com/privacy';
@@ -48,6 +49,7 @@ const OWNER_FEATURES = [
 const CLEANER_FEATURES = [
   'Follow unlimited hosts & calendars',
   'Track all your cleanings',
+  'Revenue by host breakdown & analytics',
   'Expense tracking & Plaid bank sync',
   'Send invoices to hosts',
 ];
@@ -92,7 +94,7 @@ export function ProPaywallScreen() {
   const handleSubscribe = async () => {
     const pkg = plan === 'yearly' ? pricing.yearly?.pkg : pricing.monthly?.pkg;
     if (!pkg) {
-      Alert.alert('Products Loading', 'Please wait a moment and try again.');
+      glassAlert('Products Loading', 'Please wait a moment and try again.');
       return;
     }
     setLoading(true);
@@ -132,10 +134,10 @@ export function ProPaywallScreen() {
         await fetchBillingStatus();
         dismiss('restored');
       } else {
-        Alert.alert('No Purchases Found', 'We could not find any previous purchases to restore.');
+        glassAlert('No Purchases Found', 'We could not find any previous purchases to restore.');
       }
     } catch {
-      Alert.alert('Error', 'Could not restore purchases. Please try again.');
+      glassAlert('Error', 'Could not restore purchases. Please try again.');
     } finally {
       setRestoring(false);
     }

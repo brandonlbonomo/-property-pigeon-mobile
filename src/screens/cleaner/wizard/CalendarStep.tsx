@@ -7,6 +7,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { CleanerEvent } from '../../../store/cleanerStore';
 import { localDateStr } from '../../../utils/format';
+import { glassAlert } from '../../../components/GlassAlert';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = [
@@ -41,10 +42,11 @@ interface Props {
   selectedUnits: Map<string, Set<string>>;
   selectedCleanings: Map<string, CleanerEvent>;
   onToggleCleaning: (uid: string, event: CleanerEvent) => void;
+  onNext?: () => void;
 }
 
 export function CalendarStep({
-  events, invoicedUids, selectedUnits, selectedCleanings, onToggleCleaning,
+  events, invoicedUids, selectedUnits, selectedCleanings, onToggleCleaning, onNext,
 }: Props) {
   const todayStr = localDateStr();
   const [viewMonth, setViewMonth] = useState(() => {
@@ -52,6 +54,7 @@ export function CalendarStep({
     return { year: d.getFullYear(), month: d.getMonth() };
   });
   const [sheetDate, setSheetDate] = useState<string | null>(null);
+  const [activeQuick, setActiveQuick] = useState<'today' | 'week' | 'month' | null>(null);
   const [calGridLayout, setCalGridLayout] = useState({ width: 0, height: 0 });
   const calGlassX = useRef(new Animated.Value(0)).current;
   const calGlassY = useRef(new Animated.Value(0)).current;
@@ -117,7 +120,7 @@ export function CalendarStep({
     // Check if all are invoiced
     const allInvoiced = dayEvents.every(e => invoicedUids.has(e.uid));
     if (allInvoiced) {
-      Alert.alert('Already Invoiced', 'All cleanings on this date have been invoiced.');
+      glassAlert('Already Invoiced', 'All cleanings on this date have been invoiced.');
       return;
     }
 
@@ -125,7 +128,7 @@ export function CalendarStep({
   }, [calCellW, calCellH, dayEventsMap, invoicedUids, todayStr]);
 
   // Quick select helpers
-  const quickSelect = useCallback((range: 'today' | 'week' | 'month') => {
+  const getQuickRange = useCallback((range: 'today' | 'week' | 'month') => {
     const now = new Date();
     let start: string, end: string;
     if (range === 'today') {
@@ -143,14 +146,29 @@ export function CalendarStep({
       start = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
       end = todayStr;
     }
+    return { start, end };
+  }, [todayStr]);
 
+  const quickSelect = useCallback((range: 'today' | 'week' | 'month') => {
+    setActiveQuick(prev => prev === range ? null : range);
+    const { start, end } = getQuickRange(range);
     filteredEvents.forEach(e => {
       const d = (e.check_out || '').slice(0, 10);
       if (d >= start && d <= end && d <= todayStr && !invoicedUids.has(e.uid) && !selectedCleanings.has(e.uid)) {
         onToggleCleaning(e.uid, e);
       }
     });
-  }, [filteredEvents, invoicedUids, selectedCleanings, onToggleCleaning, todayStr]);
+  }, [filteredEvents, invoicedUids, selectedCleanings, onToggleCleaning, todayStr, getQuickRange]);
+
+  // Events in the active quick-select range (for the list below calendar)
+  const quickRangeEvents = useMemo(() => {
+    if (!activeQuick) return [];
+    const { start, end } = getQuickRange(activeQuick);
+    return filteredEvents.filter(e => {
+      const d = (e.check_out || '').slice(0, 10);
+      return d >= start && d <= end && d <= todayStr;
+    });
+  }, [activeQuick, filteredEvents, getQuickRange, todayStr]);
 
   const sheetEvents = sheetDate ? (dayEventsMap.get(sheetDate) || []) : [];
   const sheetDateObj = sheetDate ? new Date(sheetDate + 'T12:00:00') : null;
@@ -163,10 +181,10 @@ export function CalendarStep({
           <TouchableOpacity
             key={r}
             activeOpacity={0.7}
-            style={styles.quickPill}
+            style={[styles.quickPill, activeQuick === r && styles.quickPillActive]}
             onPress={() => quickSelect(r)}
           >
-            <Text style={styles.quickText}>
+            <Text style={[styles.quickText, activeQuick === r && styles.quickTextActive]}>
               {r === 'today' ? 'Today' : r === 'week' ? 'This Week' : 'This Month'}
             </Text>
           </TouchableOpacity>
@@ -288,14 +306,62 @@ export function CalendarStep({
         </View>
       </View>
 
-      {/* Shopping cart badge */}
+      {/* Cleaning list for active quick-select range */}
+      {activeQuick && quickRangeEvents.length > 0 && (
+        <View style={styles.rangeList}>
+          <Text style={styles.rangeListTitle}>
+            {activeQuick === 'today' ? "Today's Cleanings" : activeQuick === 'week' ? 'This Week' : 'This Month'}
+          </Text>
+          {quickRangeEvents.map(ev => {
+            const isInvoiced = invoicedUids.has(ev.uid);
+            const isChecked = selectedCleanings.has(ev.uid);
+            return (
+              <TouchableOpacity
+                key={ev.uid}
+                activeOpacity={isInvoiced ? 1 : 0.7}
+                style={styles.rangeListRow}
+                onPress={() => !isInvoiced && onToggleCleaning(ev.uid, ev)}
+                disabled={isInvoiced}
+              >
+                <Ionicons
+                  name={isInvoiced ? 'lock-closed' : isChecked ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={isInvoiced ? Colors.textDim : isChecked ? Colors.green : Colors.textDim}
+                />
+                <View style={{ flex: 1, marginLeft: Spacing.sm }}>
+                  <Text style={[styles.rangeListName, isInvoiced && { color: Colors.textDim }]}>
+                    {ev.unit_name || ev.prop_name}
+                  </Text>
+                  <Text style={styles.rangeListSub}>
+                    {new Date((ev.check_out || '') + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    {ev.guest_name ? ` · ${ev.guest_name}` : ''}
+                  </Text>
+                </View>
+                {isInvoiced && (
+                  <View style={styles.invoicedBadge}>
+                    <Text style={styles.invoicedText}>Invoiced</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+      {activeQuick && quickRangeEvents.length === 0 && (
+        <Text style={{ textAlign: 'center', color: Colors.textDim, fontSize: FontSize.sm, paddingVertical: Spacing.md }}>
+          No cleanings in this range
+        </Text>
+      )}
+
+      {/* Shopping cart badge — tappable to advance to next step */}
       {selectedCleanings.size > 0 && (
-        <View style={styles.cartBadge}>
+        <TouchableOpacity activeOpacity={0.7} style={styles.cartBadge} onPress={onNext}>
           <Ionicons name="cart" size={16} color="#fff" />
           <Text style={styles.cartText}>
             {selectedCleanings.size} cleaning{selectedCleanings.size !== 1 ? 's' : ''} selected
           </Text>
-        </View>
+          <Ionicons name="arrow-forward" size={14} color="#fff" style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
       )}
 
       {/* Bottom Sheet Modal */}
@@ -366,6 +432,11 @@ const styles = StyleSheet.create({
     borderWidth: 0.5, borderColor: Colors.glassBorder,
   },
   quickText: { fontSize: FontSize.xs, color: Colors.text, fontWeight: '600' },
+  quickPillActive: {
+    backgroundColor: Colors.green,
+    borderColor: Colors.green,
+  },
+  quickTextActive: { color: '#fff' },
   calHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, paddingBottom: Spacing.xs,
@@ -487,4 +558,18 @@ const styles = StyleSheet.create({
     marginTop: Spacing.md,
   },
   sheetDoneText: { color: '#fff', fontSize: FontSize.md, fontWeight: '600' },
+
+  // Range cleaning list
+  rangeList: { paddingHorizontal: Spacing.md, paddingTop: Spacing.sm },
+  rangeListTitle: {
+    fontSize: FontSize.xs, fontWeight: '700', color: Colors.textDim,
+    letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: Spacing.sm,
+  },
+  rangeListRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border,
+  },
+  rangeListName: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
+  rangeListSub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 1 },
 });

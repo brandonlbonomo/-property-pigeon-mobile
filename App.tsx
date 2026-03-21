@@ -13,6 +13,7 @@ import * as SecureStore from 'expo-secure-store';
 
 import { useOnboardingStore } from './src/store/onboardingStore';
 import { useUserStore } from './src/store/userStore';
+import { GlassAlertProvider } from './src/components/GlassAlert';
 import { useNotificationStore } from './src/store/notificationStore';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { CleanerAppNavigator } from './src/navigation/CleanerAppNavigator';
@@ -227,6 +228,7 @@ export default function App() {
       <SafeAreaProvider>
         <StatusBar style="dark" backgroundColor={Colors.bg} />
         <Navigator />
+        <GlassAlertProvider />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

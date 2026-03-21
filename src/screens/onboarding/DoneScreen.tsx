@@ -8,6 +8,7 @@ import { useOnboardingStore } from '../../store/onboardingStore';
 import { useUserStore } from '../../store/userStore';
 import { apiRegister, apiFetch } from '../../services/api';
 import { identifyUser } from '../../services/revenueCat';
+import { glassAlert } from '../../components/GlassAlert';
 
 const TYPE_LABELS: Record<string, string> = {
   str: 'Short-Term Rentals',
@@ -44,7 +45,7 @@ export function DoneScreen() {
       const compatible = await LocalAuthentication.hasHardwareAsync();
       const enrolled = await LocalAuthentication.isEnrolledAsync();
       if (compatible && enrolled) {
-        Alert.alert(
+        glassAlert(
           'Enable Face ID',
           'Would you like to enable Face ID for quick sign-in?',
           [
@@ -64,7 +65,7 @@ export function DoneScreen() {
 
   const handleEnter = async () => {
     if (!pendingCredentials) {
-      Alert.alert('Error', 'Account credentials not found. Please restart onboarding.');
+      glassAlert('Error', 'Account credentials not found. Please restart onboarding.');
       return;
     }
 
@@ -114,7 +115,7 @@ export function DoneScreen() {
       // 8. Complete onboarding
       await complete(portfolioType);
     } catch (e: any) {
-      Alert.alert('Registration Failed', e?.serverError || e?.message || 'Could not create your account. Please try again.');
+      glassAlert('Registration Failed', e?.serverError || e?.message || 'Could not create your account. Please try again.');
     } finally {
       setLoading(false);
     }

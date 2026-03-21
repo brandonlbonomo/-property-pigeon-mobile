@@ -7,6 +7,7 @@ import { useOnboardingStore } from '../../store/onboardingStore';
 import { useUserStore } from '../../store/userStore';
 import { apiRegister, apiFetch } from '../../services/api';
 import { identifyUser } from '../../services/revenueCat';
+import { glassAlert } from '../../components/GlassAlert';
 
 export function CleanerDoneScreen() {
   const complete = useOnboardingStore(s => s.complete);
@@ -19,7 +20,7 @@ export function CleanerDoneScreen() {
 
   const handleEnter = async () => {
     if (!pendingCredentials) {
-      Alert.alert('Error', 'Account credentials not found. Please restart onboarding.');
+      glassAlert('Error', 'Account credentials not found. Please restart onboarding.');
       return;
     }
 
@@ -71,7 +72,7 @@ export function CleanerDoneScreen() {
       // 7. Complete onboarding
       await complete('str');
     } catch (e: any) {
-      Alert.alert('Registration Failed', e?.serverError || e?.message || 'Could not create your account. Please try again.');
+      glassAlert('Registration Failed', e?.serverError || e?.message || 'Could not create your account. Please try again.');
     } finally {
       setLoading(false);
     }

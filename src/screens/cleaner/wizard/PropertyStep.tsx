@@ -11,13 +11,14 @@ interface Props {
   ownerId: string;
   selectedUnits: Map<string, Set<string>>; // prop_id → Set<feed_key>
   onToggleUnit: (propId: string, feedKey: string) => void;
+  onToggleProperty: (propId: string, unitKeys: string[], select: boolean) => void;
   onSelectAll: () => void;
   onDeselectAll: () => void;
   onPropertiesLoaded: (props: OwnerProperty[]) => void;
 }
 
 export function PropertyStep({
-  ownerId, selectedUnits, onToggleUnit, onSelectAll, onDeselectAll, onPropertiesLoaded,
+  ownerId, selectedUnits, onToggleUnit, onToggleProperty, onSelectAll, onDeselectAll, onPropertiesLoaded,
 }: Props) {
   const fetchOwnerUnits = useCleanerStore(s => s.fetchOwnerUnits);
   const [properties, setProperties] = useState<OwnerProperty[]>([]);
@@ -32,9 +33,23 @@ export function PropertyStep({
     })();
   }, [ownerId]);
 
-  const totalSelected = Array.from(selectedUnits.values()).reduce((s, set) => s + set.size, 0);
-  const totalUnits = properties.reduce((s, p) => s + p.units.length, 0);
-  const allSelected = totalSelected === totalUnits && totalUnits > 0;
+  // Property-level selection: a property is selected if ANY of its units are in selectedUnits
+  const isPropertySelected = (prop: OwnerProperty) => {
+    const selected = selectedUnits.get(prop.prop_id);
+    if (!selected || selected.size === 0) return false;
+    return prop.units.some(u => selected.has(u.feed_key || prop.prop_id));
+  };
+
+  const toggleProperty = (prop: OwnerProperty) => {
+    const isSelected = isPropertySelected(prop);
+    const keys = prop.units.map(u => u.feed_key || prop.prop_id);
+    onToggleProperty(prop.prop_id, keys, !isSelected);
+  };
+
+  const totalProps = properties.length;
+  const selectedProps = properties.filter(p => isPropertySelected(p)).length;
+  const allSelected = selectedProps === totalProps && totalProps > 0;
+  const someSelected = selectedProps > 0 && !allSelected;
 
   if (loading) {
     return (
@@ -48,47 +63,61 @@ export function PropertyStep({
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       <Text style={styles.heading}>Select properties to invoice</Text>
 
+      {/* Select All */}
       <TouchableOpacity
-        activeOpacity={0.7}
-        style={styles.selectAllBtn}
+        activeOpacity={0.5}
+        style={[
+          styles.selectAllBtn,
+          someSelected && styles.selectAllBtnPartial,
+          allSelected && styles.selectAllBtnActive,
+        ]}
         onPress={allSelected ? onDeselectAll : onSelectAll}
       >
         <Ionicons
-          name={allSelected ? 'checkbox' : 'square-outline'}
-          size={22}
-          color={allSelected ? Colors.primary : Colors.textDim}
+          name={allSelected ? 'checkbox' : someSelected ? 'remove-circle-outline' : 'square-outline'}
+          size={24}
+          color={allSelected ? Colors.green : someSelected ? Colors.yellow : Colors.textDim}
         />
-        <Text style={[styles.selectAllText, allSelected && { color: Colors.primary }]}>
-          {allSelected ? 'Deselect All' : 'Select All'}
+        <Text style={[
+          styles.selectAllText,
+          someSelected && { color: Colors.yellow },
+          allSelected && { color: Colors.green },
+        ]}>
+          {allSelected ? 'All Selected' : 'Select All'}
         </Text>
+        {!allSelected && (
+          <Text style={[styles.selectAllCount, someSelected && { color: Colors.yellow }]}>
+            {selectedProps}/{totalProps}
+          </Text>
+        )}
+        {allSelected && <Ionicons name="checkmark-circle" size={20} color={Colors.green} />}
       </TouchableOpacity>
 
+      {/* Property cards — one per property, not per unit */}
       {properties.map((prop) => {
-        const propSelected = selectedUnits.get(prop.prop_id) || new Set<string>();
+        const selected = isPropertySelected(prop);
+        const unitCount = prop.units.length;
         return (
-          <View key={prop.prop_id} style={styles.propSection}>
-            <Text style={styles.propLabel}>{prop.prop_label}</Text>
-            {prop.units.map((unit) => {
-              const isChecked = propSelected.has(unit.feed_key);
-              return (
-                <TouchableOpacity
-                  key={unit.feed_key || unit.unit_name}
-                  activeOpacity={0.7}
-                  style={styles.unitRow}
-                  onPress={() => onToggleUnit(prop.prop_id, unit.feed_key)}
-                >
-                  <Ionicons
-                    name={isChecked ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={isChecked ? Colors.primary : Colors.textDim}
-                  />
-                  <Text style={[styles.unitName, isChecked && { color: Colors.text }]}>
-                    {unit.unit_name || prop.prop_label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+          <TouchableOpacity
+            key={prop.prop_id}
+            activeOpacity={0.6}
+            style={[styles.propCard, selected && styles.propCardSelected]}
+            onPress={() => toggleProperty(prop)}
+          >
+            <Ionicons
+              name={selected ? 'checkbox' : 'square-outline'}
+              size={24}
+              color={selected ? Colors.green : Colors.textDim}
+            />
+            <View style={{ flex: 1, marginLeft: Spacing.sm }}>
+              <Text style={[styles.propName, selected && styles.propNameSelected]}>
+                {prop.prop_label}
+              </Text>
+              {unitCount > 1 && (
+                <Text style={styles.propUnits}>{unitCount} units</Text>
+              )}
+            </View>
+          </TouchableOpacity>
         );
       })}
     </ScrollView>
@@ -103,26 +132,41 @@ const styles = StyleSheet.create({
     fontSize: FontSize.lg, fontWeight: '700', color: Colors.text,
     marginBottom: Spacing.md,
   },
+
+  // Select All
   selectAllBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    paddingVertical: Spacing.sm, marginBottom: Spacing.sm,
+    paddingVertical: Spacing.sm + 2, paddingHorizontal: Spacing.md,
+    marginBottom: Spacing.md, borderRadius: Radius.lg,
+    backgroundColor: Colors.glassDark,
+    borderWidth: 1, borderColor: Colors.glassBorder,
   },
-  selectAllText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textSecondary },
-  propSection: { marginBottom: Spacing.md },
-  propLabel: {
-    fontSize: FontSize.sm, fontWeight: '700', color: Colors.textDim,
-    letterSpacing: 0.5, textTransform: 'uppercase',
-    marginBottom: Spacing.xs,
+  selectAllBtnPartial: {
+    backgroundColor: Colors.yellowDim,
+    borderColor: Colors.yellow + '40',
   },
-  unitRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+  selectAllBtnActive: {
+    backgroundColor: Colors.greenDim,
+    borderColor: Colors.green + '40',
+  },
+  selectAllText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.textSecondary, flex: 1 },
+  selectAllCount: { fontSize: FontSize.xs, fontWeight: '700', color: Colors.textDim },
+
+  // Property cards
+  propCard: {
+    flexDirection: 'row', alignItems: 'center',
     backgroundColor: Colors.glassHeavy, borderRadius: Radius.lg,
-    padding: Spacing.md, marginBottom: Spacing.xs,
-    borderWidth: 0.5, borderColor: Colors.glassBorder,
-    overflow: 'hidden',
+    padding: Spacing.md, marginBottom: Spacing.sm,
+    borderWidth: 1.5, borderColor: Colors.glassBorder,
     ...Platform.select({
       ios: { shadowColor: Colors.glassShadow, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 },
     }),
   },
-  unitName: { fontSize: FontSize.md, fontWeight: '500', color: Colors.textSecondary, flex: 1 },
+  propCardSelected: {
+    borderColor: Colors.green + '50',
+    backgroundColor: Colors.greenDim,
+  },
+  propName: { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },
+  propNameSelected: { color: Colors.text },
+  propUnits: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
 });

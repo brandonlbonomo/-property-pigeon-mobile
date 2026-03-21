@@ -11,6 +11,7 @@ import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { useOnboardingStore } from '../../store/onboardingStore';
 import { useUserStore } from '../../store/userStore';
 import { apiLogin, setToken } from '../../services/api';
+import { glassAlert } from '../../components/GlassAlert';
 
 export function SignInScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
@@ -84,14 +85,14 @@ export function SignInScreen({ navigation }: any) {
     try {
       const storedToken = await SecureStore.getItemAsync('pp_token');
       if (!storedToken) {
-        Alert.alert('Not Available', 'Sign in with your password first to enable Face ID / Touch ID for future logins.');
+        glassAlert('Not Available', 'Sign in with your password first to enable Face ID / Touch ID for future logins.');
         return;
       }
 
       const compatible = await LocalAuthentication.hasHardwareAsync();
       const enrolled = await LocalAuthentication.isEnrolledAsync();
       if (!compatible || !enrolled) {
-        Alert.alert('Not Available', 'Biometric authentication is not set up on this device.');
+        glassAlert('Not Available', 'Biometric authentication is not set up on this device.');
         return;
       }
 
@@ -106,7 +107,7 @@ export function SignInScreen({ navigation }: any) {
         await restoreWithToken(storedToken);
       }
     } catch {
-      Alert.alert('Error', 'Biometric authentication failed. Please use your password.');
+      glassAlert('Error', 'Biometric authentication failed. Please use your password.');
     }
   };
 
@@ -137,7 +138,7 @@ export function SignInScreen({ navigation }: any) {
       const bioEnabled = await SecureStore.getItemAsync('pp_biometric');
       if (bioEnabled === 'true') return; // Already enabled
 
-      Alert.alert(
+      glassAlert(
         'Enable Face ID',
         'Would you like to use Face ID / Touch ID for quick sign-in next time?',
         [
@@ -154,7 +155,7 @@ export function SignInScreen({ navigation }: any) {
 
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Required', 'Enter your email or username and password');
+      glassAlert('Required', 'Enter your email or username and password');
       return;
     }
 
@@ -190,7 +191,7 @@ export function SignInScreen({ navigation }: any) {
       await complete(isCleaner ? 'str' : storedPortfolio);
     } catch (err: any) {
       const msg = err.serverError || err.message || 'Sign in failed';
-      Alert.alert('Error', msg);
+      glassAlert('Error', msg);
     } finally {
       setLoading(false);
     }
@@ -255,7 +256,7 @@ export function SignInScreen({ navigation }: any) {
           style={[styles.primaryBtn, loading && styles.btnDisabled]}
           onPress={() => {
             if (!email.trim() || !password.trim()) {
-              Alert.alert('Required', 'Enter your email and password');
+              glassAlert('Required', 'Enter your email and password');
               return;
             }
             handleSignIn();

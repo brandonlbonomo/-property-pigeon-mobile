@@ -6,6 +6,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { apiFetch } from '../../services/api';
+import { glassAlert } from '../../components/GlassAlert';
 
 type Step = 'email' | 'code';
 
@@ -21,11 +22,11 @@ export function ForgotPasswordScreen({ navigation }: any) {
 
   const handleSendCode = async () => {
     if (!email.trim()) {
-      Alert.alert('Required', 'Enter your email address');
+      glassAlert('Required', 'Enter your email address');
       return;
     }
     if (!isValidEmail(email.trim())) {
-      Alert.alert('Invalid', 'Enter a valid email address');
+      glassAlert('Invalid', 'Enter a valid email address');
       return;
     }
 
@@ -36,9 +37,9 @@ export function ForgotPasswordScreen({ navigation }: any) {
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
       setStep('code');
-      Alert.alert('Code Sent', 'Check your email for a 6-digit reset code.');
+      glassAlert('Code Sent', 'Check your email for a 6-digit reset code.');
     } catch (err: any) {
-      Alert.alert('Error', err.serverError || err.message || 'Could not send reset code');
+      glassAlert('Error', err.serverError || err.message || 'Could not send reset code');
     } finally {
       setLoading(false);
     }
@@ -46,11 +47,11 @@ export function ForgotPasswordScreen({ navigation }: any) {
 
   const handleResetPassword = async () => {
     if (!code.trim()) {
-      Alert.alert('Required', 'Enter the 6-digit code from your email');
+      glassAlert('Required', 'Enter the 6-digit code from your email');
       return;
     }
     if (!newPassword || newPassword.length < 8) {
-      Alert.alert('Required', 'Password must be at least 8 characters');
+      glassAlert('Required', 'Password must be at least 8 characters');
       return;
     }
 
@@ -64,11 +65,11 @@ export function ForgotPasswordScreen({ navigation }: any) {
           new_password: newPassword,
         }),
       });
-      Alert.alert('Password Reset', 'Your password has been updated. Sign in with your new password.', [
+      glassAlert('Password Reset', 'Your password has been updated. Sign in with your new password.', [
         { text: 'Sign In', onPress: () => navigation.goBack() },
       ]);
     } catch (err: any) {
-      Alert.alert('Error', err.serverError || err.message || 'Could not reset password');
+      glassAlert('Error', err.serverError || err.message || 'Could not reset password');
     } finally {
       setLoading(false);
     }

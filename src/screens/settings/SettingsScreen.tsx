@@ -23,6 +23,7 @@ import { useProCheckout } from '../../hooks/useProCheckout';
 import { AddressAutocomplete, ResolvedAddress } from '../../components/AddressAutocomplete';
 import { PropertyStreetView } from '../../components/PropertyStreetView';
 import { MAPS_PROXY_URL } from '../../constants/api';
+import { glassAlert } from '../../components/GlassAlert';
 
 type Section = 'main' | 'properties' | 'income' | 'plaid' | 'cleanerFeeds' | 'tagRules' | 'billing' | 'transactions' | 'invoices' | 'notifications' | 'customTags';
 
@@ -107,10 +108,10 @@ function UsernameEditor({ currentUsername }: { currentUsername: string }) {
         await setProfile({ username: res.username });
         await SecureStore.setItemAsync('pp_username', res.username);
         setEditing(false);
-        Alert.alert('Updated', 'Username changed successfully.');
+        glassAlert('Updated', 'Username changed successfully.');
       }
     } catch (e: any) {
-      Alert.alert('Error', e.serverError || e.message || 'Could not update username');
+      glassAlert('Error', e.serverError || e.message || 'Could not update username');
     }
     setSaving(false);
   };
@@ -182,7 +183,7 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
   }, []);
 
   const handleMarkPaid = async (invoiceId: string) => {
-    Alert.alert('Mark as Paid', 'Confirm this invoice has been paid?', [
+    glassAlert('Mark as Paid', 'Confirm this invoice has been paid?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Mark Paid', onPress: async () => {
         setMarkingPaid(invoiceId);
@@ -195,7 +196,7 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
             inv.id === invoiceId ? { ...inv, status: 'paid' } : inv
           ));
         } catch {
-          Alert.alert('Error', 'Could not mark invoice as paid');
+          glassAlert('Error', 'Could not mark invoice as paid');
         } finally {
           setMarkingPaid(null);
         }
@@ -377,7 +378,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
   };
 
   const handleSave = async () => {
-    if (!name.trim()) { Alert.alert('Required', 'Enter a property name'); return; }
+    if (!name.trim()) { glassAlert('Required', 'Enter a property name'); return; }
     setSaving(true);
     try {
       const labels = unitCount > 1 ? unitLabels.slice(0, unitCount).map(l => l.trim()).filter(Boolean) : undefined;
@@ -399,7 +400,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
       setName(''); setAddress(''); setUnits('1'); setUnitLabels([]); setIsAirbnb(portfolioType !== 'ltr');
       setMarket(''); setResolvedAddress(null); setIcalUrls([]); onClose();
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Could not save property. Please try again.');
+      glassAlert('Error', e?.message || 'Could not save property. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -596,9 +597,9 @@ function AddCleanerFeedModal({ visible, onClose, properties, onSave }: {
   };
 
   const handleSave = () => {
-    if (!propId) { Alert.alert('Required', 'Select a property'); return; }
-    if (!selectedUser && !searchQuery.trim()) { Alert.alert('Required', 'Search and select a cleaner'); return; }
-    if (url.trim() && !isValidUrl(url.trim())) { Alert.alert('Invalid', 'Enter a valid URL starting with http:// or https://'); return; }
+    if (!propId) { glassAlert('Required', 'Select a property'); return; }
+    if (!selectedUser && !searchQuery.trim()) { glassAlert('Required', 'Search and select a cleaner'); return; }
+    if (url.trim() && !isValidUrl(url.trim())) { glassAlert('Invalid', 'Enter a valid URL starting with http:// or https://'); return; }
     const cleanerName = selectedUser?.username || searchQuery.trim();
     onSave({
       propId,
@@ -689,8 +690,8 @@ function AddTagRuleModal({ visible, onClose, properties, onSave }: {
   const [propId, setPropId] = useState('');
 
   const handleSave = () => {
-    if (!payee.trim()) { Alert.alert('Required', 'Enter a payee name'); return; }
-    if (!propId) { Alert.alert('Required', 'Select a tag'); return; }
+    if (!payee.trim()) { glassAlert('Required', 'Enter a payee name'); return; }
+    if (!propId) { glassAlert('Required', 'Select a tag'); return; }
     onSave({ payee: payee.trim().toUpperCase(), propId });
     setPayee(''); setPropId(''); onClose();
   };
@@ -763,15 +764,15 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
   const handleSave = () => {
     const parsed = parseFloat(amount);
     if (!amount.trim() || isNaN(parsed) || parsed <= 0) {
-      Alert.alert('Required', 'Enter a valid positive amount'); return;
+      glassAlert('Required', 'Enter a valid positive amount'); return;
     }
     if (parsed > 1000000) {
-      Alert.alert('Invalid', 'Amount seems too large. Please check and try again.'); return;
+      glassAlert('Invalid', 'Amount seems too large. Please check and try again.'); return;
     }
 
     // For LTR or "property" mode in Both, require a property
     if ((isLTR || incomeType === 'property') && !propId) {
-      Alert.alert('Required', 'Select a property'); return;
+      glassAlert('Required', 'Select a property'); return;
     }
 
     onSave({
@@ -969,11 +970,11 @@ export function SettingsScreen() {
           setCheckoutUrl(res.checkout_url);
           setShowCheckout(true);
         } else {
-          Alert.alert('Error', 'Could not start checkout.');
+          glassAlert('Error', 'Could not start checkout.');
         }
       }
     } catch {
-      if (Platform.OS !== 'ios') Alert.alert('Error', 'Could not connect to billing.');
+      if (Platform.OS !== 'ios') glassAlert('Error', 'Could not connect to billing.');
     }
   };
 
@@ -1050,9 +1051,9 @@ export function SettingsScreen() {
     const txName = (txEditFields.name || '').trim();
     const txDate = (txEditFields.date || '').trim();
     const txAmount = parseFloat(txEditFields.amount || '0');
-    if (!txName) { Alert.alert('Required', 'Enter a transaction name'); return; }
-    if (!txDate || !isValidDate(txDate)) { Alert.alert('Invalid', 'Enter a valid date in YYYY-MM-DD format'); return; }
-    if (isNaN(txAmount)) { Alert.alert('Invalid', 'Enter a valid amount'); return; }
+    if (!txName) { glassAlert('Required', 'Enter a transaction name'); return; }
+    if (!txDate || !isValidDate(txDate)) { glassAlert('Invalid', 'Enter a valid date in YYYY-MM-DD format'); return; }
+    if (isNaN(txAmount)) { glassAlert('Invalid', 'Enter a valid amount'); return; }
     setTxSaving(true);
     try {
       const tx = allTransactions.find((t: any) => t.id === txEditingId);
@@ -1078,7 +1079,7 @@ export function SettingsScreen() {
       invalidateAll();
       await loadTransactions();
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Could not save changes.');
+      glassAlert('Error', e.message || 'Could not save changes.');
     } finally { setTxSaving(false); }
   };
 
@@ -1086,7 +1087,7 @@ export function SettingsScreen() {
 
   const handleSync = async () => {
     if (plaidAccounts.length === 0) {
-      Alert.alert('No Accounts', 'Connect a bank account through Plaid first to sync transactions.');
+      glassAlert('No Accounts', 'Connect a bank account through Plaid first to sync transactions.');
       return;
     }
     setSyncing(true);
@@ -1094,16 +1095,16 @@ export function SettingsScreen() {
       await apiFetch('/api/sync', { method: 'POST' });
       await activateData();
       invalidateAll();
-      Alert.alert('Synced', 'Transactions synced successfully.');
+      glassAlert('Synced', 'Transactions synced successfully.');
     } catch (e: any) {
-      Alert.alert('Sync Error', e?.serverError || e?.message || 'Could not sync transactions. Please try again.');
+      glassAlert('Sync Error', e?.serverError || e?.message || 'Could not sync transactions. Please try again.');
     }
     finally { setSyncing(false); }
   };
 
   const handleRefreshAll = () => {
     invalidateAll();
-    Alert.alert('Cache Cleared', 'Data will reload on next visit to each tab.');
+    glassAlert('Cache Cleared', 'Data will reload on next visit to each tab.');
   };
 
   const FREE_ICAL_LIMIT = 3;
@@ -1119,7 +1120,7 @@ export function SettingsScreen() {
       const existingIcalCount = currentProps.reduce((sum, prop) => sum + (prop.icalUrls?.filter(u => u?.trim()).length || 0), 0);
       const newIcalCount = p.icalUrls.filter(u => u?.trim()).length;
       if (existingIcalCount + newIcalCount > FREE_ICAL_LIMIT) {
-        Alert.alert('Pro Required', `Free accounts are limited to ${FREE_ICAL_LIMIT} iCal feeds. Subscribe to Pro for unlimited iCal feeds.`);
+        glassAlert('Pro Required', `Free accounts are limited to ${FREE_ICAL_LIMIT} iCal feeds. Subscribe to Pro for unlimited iCal feeds.`);
         handleProGate();
         return;
       }
@@ -1167,12 +1168,12 @@ export function SettingsScreen() {
       upgraded = true;
     }
     if (upgraded && p.isAirbnb && (currentType === 'ltr')) {
-      Alert.alert(
+      glassAlert(
         'Dashboard Updated',
         'Your dashboard now includes Airbnb features like occupancy tracking, calendar sync, and inventory auto-depletion. You can manage all property types from one place.',
       );
     } else if (upgraded && !p.isAirbnb && (currentType === 'str')) {
-      Alert.alert(
+      glassAlert(
         'Dashboard Updated',
         'Your dashboard now supports both short-term and long-term rental properties.',
       );
@@ -1186,7 +1187,7 @@ export function SettingsScreen() {
     const prop = currentProps[idx];
     const propId = prop?.id || prop?.name;
 
-    Alert.alert(
+    glassAlert(
       'Delete Property',
       `Deleting "${label}" will permanently remove all associated data including units, calendar events, transaction tags, inventory, and P&L history.\n\nThis cannot be undone.`,
       [
@@ -1207,7 +1208,7 @@ export function SettingsScreen() {
             await setUserProfile({ properties: updatedProps });
             setProperties(updatedProps);
           } catch (e: any) {
-            Alert.alert('Error', e.message || 'Could not delete property. Please try again.');
+            glassAlert('Error', e.message || 'Could not delete property. Please try again.');
           }
         }},
       ],
@@ -1219,8 +1220,8 @@ export function SettingsScreen() {
       await apiFetch('/api/income/manual', { method: 'POST', body: JSON.stringify(entry) });
       await activateData();
       invalidateAll();
-      Alert.alert('Added', `$${entry.amount} income added.`);
-    } catch { Alert.alert('Error', 'Could not save income entry. Please try again.'); }
+      glassAlert('Added', `$${entry.amount} income added.`);
+    } catch { glassAlert('Error', 'Could not save income entry. Please try again.'); }
   };
 
   const handleSaveCleanerFeed = async (feed: { propId: string; cleanerName: string; url: string; user_id?: string; username?: string }) => {
@@ -1235,12 +1236,12 @@ export function SettingsScreen() {
       if (feed.username) {
         try { await apiFollowRequest(feed.username); } catch { /* follow may already exist */ }
       }
-      Alert.alert('Saved', 'Cleaner added.');
-    } catch { Alert.alert('Error', 'Could not save cleaner. Please try again.'); }
+      glassAlert('Saved', 'Cleaner added.');
+    } catch { glassAlert('Error', 'Could not save cleaner. Please try again.'); }
   };
 
   const handleDeleteCleanerFeed = (idx: number) => {
-    Alert.alert('Remove Cleaner', 'Remove this cleaner feed?', [
+    glassAlert('Remove Cleaner', 'Remove this cleaner feed?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: async () => {
         const updated = cleanerFeeds.filter((_, i) => i !== idx);
@@ -1254,12 +1255,12 @@ export function SettingsScreen() {
     try {
       await apiFetch('/api/tags/rule', { method: 'POST', body: JSON.stringify(rule) });
       setTagRules(prev => ({ ...prev, [rule.payee]: rule.propId }));
-      Alert.alert('Saved', `Transactions from "${rule.payee}" will auto-tag to this property.`);
-    } catch { Alert.alert('Error', 'Could not save tag rule. Please try again.'); }
+      glassAlert('Saved', `Transactions from "${rule.payee}" will auto-tag to this property.`);
+    } catch { glassAlert('Error', 'Could not save tag rule. Please try again.'); }
   };
 
   const handleDeleteTagRule = (payee: string) => {
-    Alert.alert('Delete Rule', `Remove auto-tag rule for "${payee}"?`, [
+    glassAlert('Delete Rule', `Remove auto-tag rule for "${payee}"?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         try { await apiFetch('/api/tags/rule', { method: 'DELETE', body: JSON.stringify({ payee }) });
@@ -1281,10 +1282,10 @@ export function SettingsScreen() {
         setPlaidLinkToken(res.link_token);
         setShowPlaidLink(true);
       } else {
-        Alert.alert('Error', res.error || 'Could not create Plaid link token.');
+        glassAlert('Error', res.error || 'Could not create Plaid link token.');
       }
     } catch {
-      Alert.alert('Connection Error', 'Could not connect to Plaid. Please try again later.');
+      glassAlert('Connection Error', 'Could not connect to Plaid. Please try again later.');
     } finally {
       setSyncing(false);
     }
@@ -1306,9 +1307,9 @@ export function SettingsScreen() {
       await activateData();
       invalidateAll();
       loadData();
-      Alert.alert('Connected', `${accountName} connected successfully.`);
+      glassAlert('Connected', `${accountName} connected successfully.`);
     } catch {
-      Alert.alert('Error', 'Could not complete bank connection. Please try again.');
+      glassAlert('Error', 'Could not complete bank connection. Please try again.');
     } finally {
       setSyncing(false);
     }
@@ -1317,12 +1318,12 @@ export function SettingsScreen() {
   const handlePlaidExit = (error?: any) => {
     setShowPlaidLink(false);
     if (error?.error_message) {
-      Alert.alert('Plaid', error.error_message);
+      glassAlert('Plaid', error.error_message);
     }
   };
 
   const handleRemovePlaidAccount = (itemId: string, name: string) => {
-    Alert.alert('Remove Account', `Disconnect "${name}"?`, [
+    glassAlert('Remove Account', `Disconnect "${name}"?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: async () => {
         try { await apiFetch(`/api/plaid/accounts/${itemId}`, { method: 'DELETE' }); }
@@ -1333,14 +1334,14 @@ export function SettingsScreen() {
   };
 
   const handleResetOnboarding = () => {
-    Alert.alert('Reset Onboarding', 'This will show the welcome screen again on next launch.', [
+    glassAlert('Reset Onboarding', 'This will show the welcome screen again on next launch.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reset', style: 'destructive', onPress: resetOnboarding },
     ]);
   };
 
   const handleDeleteAccount = () => {
-    Alert.alert('Delete Account', 'This will permanently delete all your data. This cannot be undone.', [
+    glassAlert('Delete Account', 'This will permanently delete all your data. This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         // 1. Delete account on server
@@ -1366,7 +1367,7 @@ export function SettingsScreen() {
   };
 
   const handleSignOut = () => {
-    Alert.alert('Sign Out', "You'll need to sign in again to access your account.", [
+    glassAlert('Sign Out', "You'll need to sign in again to access your account.", [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: async () => {
         // Save email before wiping profile so it can be restored on sign in
@@ -1522,7 +1523,7 @@ export function SettingsScreen() {
               }, 0);
               const newIcalCount = p.icalUrls.filter(u => u?.trim()).length;
               if (existingIcalCount + newIcalCount > FREE_ICAL_LIMIT) {
-                Alert.alert('Pro Required', `Free accounts are limited to ${FREE_ICAL_LIMIT} iCal feeds. Subscribe to Pro for unlimited iCal feeds.`);
+                glassAlert('Pro Required', `Free accounts are limited to ${FREE_ICAL_LIMIT} iCal feeds. Subscribe to Pro for unlimited iCal feeds.`);
                 handleProGate();
                 return;
               }
@@ -1583,7 +1584,7 @@ export function SettingsScreen() {
                 </View>
                 <TouchableOpacity activeOpacity={0.7}
                   onPress={() => {
-                    Alert.alert('Delete Tag', `Remove "${cat.label}"?`, [
+                    glassAlert('Delete Tag', `Remove "${cat.label}"?`, [
                       { text: 'Cancel', style: 'cancel' },
                       { text: 'Delete', style: 'destructive', onPress: async () => {
                         await deleteCustomCategoryApi(cat.id);
@@ -1700,7 +1701,7 @@ export function SettingsScreen() {
           <SettingRow icon="download-outline" label="Pull Full History" sub="Backfills up to 2 years of transactions"
             onPress={async () => {
               if (plaidAccounts.length === 0) {
-                Alert.alert('No Accounts', 'Connect a bank account first to pull history.');
+                glassAlert('No Accounts', 'Connect a bank account first to pull history.');
                 return;
               }
               setSyncing(true);
@@ -1708,9 +1709,9 @@ export function SettingsScreen() {
                 await apiFetch('/api/plaid/history', { method: 'POST' });
                 await activateData();
                 invalidateAll();
-                Alert.alert('Done', 'Full transaction history pulled.');
+                glassAlert('Done', 'Full transaction history pulled.');
               } catch (e: any) {
-                Alert.alert('Error', e?.serverError || e?.message || 'Could not pull transaction history. Please try again.');
+                glassAlert('Error', e?.serverError || e?.message || 'Could not pull transaction history. Please try again.');
               }
               finally { setSyncing(false); }
             }} />
@@ -1730,7 +1731,7 @@ export function SettingsScreen() {
       try {
         const res = await apiGetFollowCode();
         await Share.share({ message: `Follow me on Portfolio Pigeon! Use code: ${res.follow_code}` });
-      } catch { Alert.alert('Error', 'Could not get your follow code.'); }
+      } catch { glassAlert('Error', 'Could not get your follow code.'); }
     };
 
     return (
@@ -1870,8 +1871,8 @@ export function SettingsScreen() {
                 if (!tagName?.trim()) return;
                 try {
                   await apiFetch('/api/tags', { method: 'POST', body: JSON.stringify({ tag_name: tagName.trim() }) });
-                  Alert.alert('Created', `Tag "${tagName.trim()}" created.`);
-                } catch { Alert.alert('Error', 'Could not create tag.'); }
+                  glassAlert('Created', `Tag "${tagName.trim()}" created.`);
+                } catch { glassAlert('Error', 'Could not create tag.'); }
               }},
             ], 'plain-text');
           }}>
@@ -1917,7 +1918,7 @@ export function SettingsScreen() {
           }
         }
       } catch {
-        if (Platform.OS !== 'ios') Alert.alert('Error', 'Could not start checkout.');
+        if (Platform.OS !== 'ios') glassAlert('Error', 'Could not start checkout.');
       }
     };
 
@@ -1935,7 +1936,7 @@ export function SettingsScreen() {
           }
         }
       } catch {
-        Alert.alert('Error', Platform.OS === 'ios' ? 'Could not open subscription management.' : 'Could not open billing portal.');
+        glassAlert('Error', Platform.OS === 'ios' ? 'Could not open subscription management.' : 'Could not open billing portal.');
       } finally { setSyncing(false); }
     };
 
@@ -1945,9 +1946,9 @@ export function SettingsScreen() {
         const Purchases = require('react-native-purchases').default;
         await Purchases.restorePurchases();
         await fetchBillingStatus();
-        Alert.alert('Restored', 'Purchases have been restored.');
+        glassAlert('Restored', 'Purchases have been restored.');
       } catch {
-        Alert.alert('Error', 'Could not restore purchases.');
+        glassAlert('Error', 'Could not restore purchases.');
       } finally { setSyncing(false); }
     };
 

@@ -15,6 +15,7 @@ import { useProCheckout } from '../../hooks/useProCheckout';
 import { Card } from '../../components/Card';
 import { SwipePills } from '../../components/SwipePills';
 import { fmt$ , localDateStr } from '../../utils/format';
+import { glassAlert } from '../../components/GlassAlert';
 
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -395,14 +396,14 @@ export function CleanerInvoicesScreen() {
   }
 
   const handleSend = async (id: string) => {
-    Alert.alert('Send Invoice', 'Mark this invoice as sent to the host?', [
+    glassAlert('Send Invoice', 'Mark this invoice as sent to the host?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Send', onPress: () => sendInvoice(id) },
     ]);
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert('Delete Invoice', 'Are you sure you want to delete this draft?', [
+    glassAlert('Delete Invoice', 'Are you sure you want to delete this draft?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => deleteInvoice(id) },
     ]);
@@ -469,7 +470,7 @@ export function CleanerInvoicesScreen() {
 
   const handleCreate = async () => {
     if (owners.length === 0) {
-      Alert.alert('No Hosts', 'Follow an owner first to create invoices.');
+      glassAlert('No Hosts', 'Follow an owner first to create invoices.');
       return;
     }
 
@@ -508,7 +509,7 @@ export function CleanerInvoicesScreen() {
       });
 
     if (byHost.size === 0) {
-      Alert.alert('No Cleanings', `No cleanings found for ${periodLabel}. Invoices are generated from your schedule.`);
+      glassAlert('No Cleanings', `No cleanings found for ${periodLabel}. Invoices are generated from your schedule.`);
       return;
     }
 
@@ -536,7 +537,7 @@ export function CleanerInvoicesScreen() {
     }
     setCreating(false);
     if (created > 0) {
-      Alert.alert('Created', `${created} invoice${created > 1 ? 's' : ''} created for ${periodLabel}. Tap to edit line items.`);
+      glassAlert('Created', `${created} invoice${created > 1 ? 's' : ''} created for ${periodLabel}. Tap to edit line items.`);
     }
   };
 

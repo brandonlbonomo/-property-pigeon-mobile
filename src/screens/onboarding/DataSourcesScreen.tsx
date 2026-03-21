@@ -11,6 +11,7 @@ import { apiFetch } from '../../services/api';
 import { useSubscriptionGate } from '../../hooks/useSubscriptionGate';
 import { useProCheckout } from '../../hooks/useProCheckout';
 import { PlaidLinkModal } from '../../components/PlaidLink';
+import { glassAlert } from '../../components/GlassAlert';
 
 
 export function DataSourcesScreen({ navigation }: any) {
@@ -44,10 +45,10 @@ export function DataSourcesScreen({ navigation }: any) {
         setPlaidLinkToken(res.link_token);
         setShowPlaidLink(true);
       } else {
-        Alert.alert('Error', res.error || 'Could not create Plaid link token.');
+        glassAlert('Error', res.error || 'Could not create Plaid link token.');
       }
     } catch {
-      Alert.alert('Connection Error', 'Could not connect to Plaid. Please try again later.');
+      glassAlert('Connection Error', 'Could not connect to Plaid. Please try again later.');
     } finally {
       setPlaidLoading(false);
     }
@@ -63,7 +64,7 @@ export function DataSourcesScreen({ navigation }: any) {
       await setProfile({ plaidConnected: true });
       setPlaidConnected(true);
     } catch {
-      Alert.alert('Error', 'Could not link your bank account. You can try again from Settings.');
+      glassAlert('Error', 'Could not link your bank account. You can try again from Settings.');
     }
   };
 

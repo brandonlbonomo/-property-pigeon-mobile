@@ -11,6 +11,7 @@ import { useDataStore } from '../store/dataStore';
 import { useUserStore } from '../store/userStore';
 import { apiFetch } from '../services/api';
 import { fmt$ } from '../utils/format';
+import { glassAlert } from './GlassAlert';
 
 interface Props {
   visible: boolean;
@@ -144,7 +145,7 @@ export function MonthDetailModal({ visible, yearMonth, onClose }: Props) {
       invalidateAll();
       await reload();
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Could not save changes.');
+      glassAlert('Error', e.message || 'Could not save changes.');
     } finally {
       setSaving(false);
     }

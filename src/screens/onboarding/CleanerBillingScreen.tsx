@@ -10,6 +10,7 @@ import {
   getProductPrices, purchaseProduct, restorePurchases,
   ProductPricing, checkProEntitlement, isCustomerEntitled,
 } from '../../services/revenueCat';
+import { glassAlert } from '../../components/GlassAlert';
 
 const TERMS_URL = 'https://portfoliopigeon.com/terms';
 const PRIVACY_URL = 'https://portfoliopigeon.com/privacy';
@@ -41,7 +42,7 @@ export function CleanerBillingScreen({ navigation }: any) {
     try {
       const pkg = plan === 'yearly' ? pricing.yearly?.pkg : pricing.monthly?.pkg;
       if (!pkg) {
-        Alert.alert('Error', 'Products not yet loaded. Please try again.');
+        glassAlert('Error', 'Products not yet loaded. Please try again.');
         return;
       }
       const customerInfo = await purchaseProduct(pkg);
@@ -57,7 +58,7 @@ export function CleanerBillingScreen({ navigation }: any) {
         await setProfile({ isSubscriptionActive: true });
         navigation.replace('CleanerPlaid');
       } else {
-        Alert.alert('Error', e?.message || 'Purchase failed.');
+        glassAlert('Error', e?.message || 'Purchase failed.');
       }
     } finally {
       setLoading(false);
@@ -70,7 +71,7 @@ export function CleanerBillingScreen({ navigation }: any) {
       const info = await restorePurchases();
       if (info && isCustomerEntitled(info)) {
         await setProfile({ isSubscriptionActive: true });
-        Alert.alert('Restored', 'Your subscription has been restored.');
+        glassAlert('Restored', 'Your subscription has been restored.');
         navigation.replace('CleanerPlaid');
         return;
       }
@@ -78,13 +79,13 @@ export function CleanerBillingScreen({ navigation }: any) {
       const isActive = await checkProEntitlement();
       if (isActive) {
         await setProfile({ isSubscriptionActive: true });
-        Alert.alert('Restored', 'Your subscription has been restored.');
+        glassAlert('Restored', 'Your subscription has been restored.');
         navigation.replace('CleanerPlaid');
       } else {
-        Alert.alert('No Purchases Found', 'We could not find any previous purchases to restore.');
+        glassAlert('No Purchases Found', 'We could not find any previous purchases to restore.');
       }
     } catch {
-      Alert.alert('Error', 'Could not restore purchases.');
+      glassAlert('Error', 'Could not restore purchases.');
     } finally {
       setRestoring(false);
     }

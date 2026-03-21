@@ -213,7 +213,11 @@ export function CleanerScheduleScreen() {
   const uniqueProps = useMemo(() => {
     const set = new Map<string, string>();
     schedule.forEach(e => {
-      if (e.prop_id && !set.has(e.prop_id)) set.set(e.prop_id, e.prop_name);
+      if (!e.prop_id) return;
+      if (!set.has(e.prop_id)) {
+        // Use prop_label (property-level name) if available, otherwise prop_name
+        set.set(e.prop_id, e.prop_label || e.prop_name || e.prop_id);
+      }
     });
     return Array.from(set.entries());
   }, [schedule]);

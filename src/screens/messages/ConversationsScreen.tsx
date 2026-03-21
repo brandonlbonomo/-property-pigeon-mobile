@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { useMessageStore, Conversation } from '../../store/messageStore';
+import { glassAlert } from '../../components/GlassAlert';
 
 function timeAgo(ts: string): string {
   const diff = Date.now() - new Date(ts).getTime();
@@ -285,7 +286,7 @@ export function ConversationsScreen() {
               convo={convo}
               onPress={() => handleConvoPress(convo)}
               onDelete={() => {
-                Alert.alert(
+                glassAlert(
                   'Delete Conversation',
                   'This conversation will be removed from your inbox.',
                   [

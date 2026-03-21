@@ -14,6 +14,7 @@ import { HostStep } from './wizard/HostStep';
 import { PropertyStep } from './wizard/PropertyStep';
 import { CalendarStep } from './wizard/CalendarStep';
 import { ReviewStep } from './wizard/ReviewStep';
+import { glassAlert } from '../../components/GlassAlert';
 
 const RATES_KEY = 'pp_cleaning_rates';
 const STEP_LABELS = ['Host', 'Properties', 'Calendar', 'Review'];
@@ -79,13 +80,26 @@ export function InvoiceWizardScreen({ navigation }: any) {
   };
 
   const handleToggleUnit = (propId: string, feedKey: string) => {
+    const key = feedKey || propId; // Use propId as fallback for empty feed_keys
     setSelectedUnits(prev => {
       const next = new Map(prev);
       const set = new Set(next.get(propId) || []);
-      if (set.has(feedKey)) set.delete(feedKey);
-      else set.add(feedKey);
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
       if (set.size === 0) next.delete(propId);
       else next.set(propId, set);
+      return next;
+    });
+  };
+
+  const handleToggleProperty = (propId: string, unitKeys: string[], select: boolean) => {
+    setSelectedUnits(prev => {
+      const next = new Map(prev);
+      if (select) {
+        next.set(propId, new Set(unitKeys));
+      } else {
+        next.delete(propId);
+      }
       return next;
     });
   };
@@ -93,7 +107,7 @@ export function InvoiceWizardScreen({ navigation }: any) {
   const handleSelectAll = () => {
     const units = new Map<string, Set<string>>();
     ownerProperties.forEach(p => {
-      units.set(p.prop_id, new Set(p.units.map(u => u.feed_key)));
+      units.set(p.prop_id, new Set(p.units.map(u => u.feed_key || p.prop_id)));
     });
     setSelectedUnits(units);
   };
@@ -158,14 +172,14 @@ export function InvoiceWizardScreen({ navigation }: any) {
         await SecureStore.setItemAsync(RATES_KEY, JSON.stringify(rates));
         // Refresh invoiced UIDs
         await fetchInvoicedUids();
-        Alert.alert('Invoice Created', 'Your draft invoice has been created. You can review and send it from the Invoices tab.');
+        glassAlert('Invoice Created', 'Your draft invoice has been created. You can review and send it from the Invoices tab.');
         navigation.goBack();
       } else {
-        Alert.alert('Error', 'Could not create invoice. Some cleanings may have already been invoiced.');
+        glassAlert('Error', 'Could not create invoice. Some cleanings may have already been invoiced.');
       }
     } catch (err: any) {
       const msg = err?.serverError || err?.message || 'Failed to create invoice';
-      Alert.alert('Error', msg);
+      glassAlert('Error', msg);
     } finally {
       setCreating(false);
     }
@@ -184,22 +198,25 @@ export function InvoiceWizardScreen({ navigation }: any) {
       {/* Header */}
       <View style={styles.header}>
         {step > 0 ? (
-          <TouchableOpacity activeOpacity={0.7} onPress={() => setStep(s => s - 1)}>
+          <TouchableOpacity activeOpacity={0.5} onPress={() => setStep(s => s - 1)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Ionicons name="chevron-back" size={22} color={Colors.primary} />
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.goBack()}>
+          <TouchableOpacity activeOpacity={0.5} onPress={() => navigation.goBack()}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
         )}
         <Text style={styles.headerTitle}>{STEP_LABELS[step]}</Text>
-        {step < 3 && step > 0 ? (
+        {step < 3 ? (
           <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={() => canGoNext() && setStep(s => s + 1)}
+            activeOpacity={0.5}
+            onPress={() => setStep(s => s + 1)}
             disabled={!canGoNext()}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
-            <Text style={[styles.nextText, !canGoNext() && { opacity: 0.4 }]}>Next</Text>
+            <Text style={[styles.nextText, !canGoNext() && { opacity: 0.3 }]}>Next</Text>
           </TouchableOpacity>
         ) : (
           <View style={{ width: 50 }} />
@@ -230,6 +247,7 @@ export function InvoiceWizardScreen({ navigation }: any) {
             ownerId={selectedOwner.user_id}
             selectedUnits={selectedUnits}
             onToggleUnit={handleToggleUnit}
+            onToggleProperty={handleToggleProperty}
             onSelectAll={handleSelectAll}
             onDeselectAll={handleDeselectAll}
             onPropertiesLoaded={handlePropertiesLoaded}
@@ -242,6 +260,7 @@ export function InvoiceWizardScreen({ navigation }: any) {
             selectedUnits={selectedUnits}
             selectedCleanings={selectedCleanings}
             onToggleCleaning={handleToggleCleaning}
+            onNext={() => selectedCleanings.size > 0 && setStep(3)}
           />
         )}
         {step === 3 && selectedOwner && (

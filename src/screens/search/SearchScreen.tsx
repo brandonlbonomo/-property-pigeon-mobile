@@ -9,6 +9,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
 import { apiFetch } from '../../services/api';
 import { PortfolioScoreBubble } from '../../components/PortfolioScoreBubble';
+import { glassAlert } from '../../components/GlassAlert';
 
 interface SearchResult {
   user_id: string;
@@ -75,7 +76,7 @@ export function SearchScreen() {
       if (msg.includes('Already following')) {
         setFollowingIds(prev => new Set(prev).add(userId));
       } else {
-        Alert.alert('Follow Failed', msg);
+        glassAlert('Follow Failed', msg);
       }
     }
   };

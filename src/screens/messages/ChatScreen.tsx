@@ -19,6 +19,7 @@ import {
   pickImage, takePhoto, pickDocument,
   uploadAndGetAttachment, showAttachmentMenu,
 } from '../../components/AttachmentPicker';
+import { glassAlert } from '../../components/GlassAlert';
 
 function formatTimeSeparator(ts: string): string {
   const d = new Date(ts);
@@ -737,7 +738,7 @@ export function ChatScreen() {
         setPendingAttachments(prev => [...prev, att]);
       }
     } catch (err: any) {
-      Alert.alert('Upload Failed', err.message || 'Could not upload file.');
+      glassAlert('Upload Failed', err.message || 'Could not upload file.');
     } finally {
       setUploading(false);
     }
@@ -773,7 +774,7 @@ export function ChatScreen() {
     if (!result) {
       setText(savedText);
       setPendingAttachments(savedAttachments);
-      Alert.alert('Send Failed', 'Could not send message. Please try again.');
+      glassAlert('Send Failed', 'Could not send message. Please try again.');
     }
     setSending(false);
     scrollRef.current?.scrollToEnd({ animated: true });
@@ -795,7 +796,7 @@ export function ChatScreen() {
       if (isGroup) fetchConvMessages(convId);
       else fetchMessages(userId);
     } else {
-      Alert.alert('Error', res.error || 'Could not respond to request.');
+      glassAlert('Error', res.error || 'Could not respond to request.');
     }
   }, [respondToRequest, isGroup, convId, userId, fetchConvMessages, fetchMessages]);
 
@@ -813,11 +814,11 @@ export function ChatScreen() {
     setInviteLoading(false);
     if (res.ok) {
       setShowInvitePicker(false);
-      Alert.alert('Invite Sent', 'Property invite sent. They will be notified.');
+      glassAlert('Invite Sent', 'Property invite sent. They will be notified.');
       // Re-fetch messages to show new system card
       fetchMessages(userId);
     } else {
-      Alert.alert('Error', res.error || 'Could not send invite.');
+      glassAlert('Error', res.error || 'Could not send invite.');
     }
   }, [createRequest, userId, fetchMessages]);
 

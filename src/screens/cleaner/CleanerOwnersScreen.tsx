@@ -11,6 +11,7 @@ import { useCleanerStore, FollowedOwner } from '../../store/cleanerStore';
 import { usePropertyRequestStore } from '../../store/propertyRequestStore';
 import { apiFetch } from '../../services/api';
 import { PortfolioScoreBubble } from '../../components/PortfolioScoreBubble';
+import { glassAlert } from '../../components/GlassAlert';
 
 function OwnerCard({ owner, onSelectProperties, onUnfollow, onMessage }: {
   owner: FollowedOwner;
@@ -103,14 +104,14 @@ export function CleanerOwnersScreen() {
       setShowFollow(false);
       setFollowInput('');
       fetchOwners();
-      Alert.alert('Following', 'You are now following this owner.');
+      glassAlert('Following', 'You are now following this owner.');
     } else {
-      Alert.alert('Error', res.error || 'Could not follow this owner.');
+      glassAlert('Error', res.error || 'Could not follow this owner.');
     }
   };
 
   const handleUnfollow = (followId: string) => {
-    Alert.alert('Unfollow', 'Stop following this owner?', [
+    glassAlert('Unfollow', 'Stop following this owner?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Unfollow', style: 'destructive', onPress: async () => {
@@ -130,7 +131,7 @@ export function CleanerOwnersScreen() {
         selected: [...owner.selected_properties],
       });
     } catch {
-      Alert.alert('Error', 'Could not load properties.');
+      glassAlert('Error', 'Could not load properties.');
     }
   };
 
@@ -161,17 +162,17 @@ export function CleanerOwnersScreen() {
       const res = await createRequest(propertyPicker.owner.user_id, newProps, 'request');
       if (res.ok) {
         setPropertyPicker(null);
-        Alert.alert('Access Requested', 'Property access requested. Host will be notified.');
+        glassAlert('Access Requested', 'Property access requested. Host will be notified.');
         return;
       } else {
-        Alert.alert('Error', res.error || 'Could not request access.');
+        glassAlert('Error', res.error || 'Could not request access.');
         return;
       }
     }
 
     setPropertyPicker(null);
     if (removedProps.length > 0) {
-      Alert.alert('Saved', 'Property selections updated.');
+      glassAlert('Saved', 'Property selections updated.');
     }
   };
 

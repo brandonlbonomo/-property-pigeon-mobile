@@ -6360,6 +6360,7 @@ def cleaner_schedule():
                     "check_in": b.get("check_in", ""),
                     "check_out": b.get("check_out", ""),
                     "prop_id": prop_id,
+                    "prop_label": prop_labels.get(prop_id, prop_id),
                     "prop_name": listing_name or prop_labels.get(prop_id, prop_id),
                     "owner": owner_name,
                     "owner_id": owner_id,

@@ -11,6 +11,7 @@ import { useProCheckout } from '../../hooks/useProCheckout';
 import type { PaywallResult } from '../../hooks/useProCheckout';
 import { apiFetch } from '../../services/api';
 import { PlaidLinkModal } from '../../components/PlaidLink';
+import { glassAlert } from '../../components/GlassAlert';
 
 
 export function CleanerPlaidScreen({ navigation }: any) {
@@ -38,10 +39,10 @@ export function CleanerPlaidScreen({ navigation }: any) {
         setPlaidLinkToken(res.link_token);
         setShowPlaidLink(true);
       } else {
-        Alert.alert('Error', res.error || 'Could not create Plaid link token.');
+        glassAlert('Error', res.error || 'Could not create Plaid link token.');
       }
     } catch {
-      Alert.alert('Connection Error', 'Could not connect to Plaid. Please try again later.');
+      glassAlert('Connection Error', 'Could not connect to Plaid. Please try again later.');
     } finally {
       setPlaidLoading(false);
     }
@@ -65,7 +66,7 @@ export function CleanerPlaidScreen({ navigation }: any) {
       setPlaidConnected(true);
       setPlaidAccountName(accountName);
     } catch {
-      Alert.alert('Error', 'Could not complete bank connection. Please try again.');
+      glassAlert('Error', 'Could not complete bank connection. Please try again.');
     } finally {
       setPlaidLoading(false);
     }
@@ -74,7 +75,7 @@ export function CleanerPlaidScreen({ navigation }: any) {
   const handlePlaidExit = (error?: any) => {
     setShowPlaidLink(false);
     if (error?.error_message) {
-      Alert.alert('Plaid', error.error_message);
+      glassAlert('Plaid', error.error_message);
     }
   };
 

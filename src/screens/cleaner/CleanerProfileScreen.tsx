@@ -18,6 +18,7 @@ import {
   CLEANER_CATEGORIES, SPECIAL_TAGS as CATEGORY_SPECIAL_TAGS,
   getCategoryById, isExcludedTag,
 } from '../../constants/categoryTags';
+import { glassAlert } from '../../components/GlassAlert';
 
 const RATES_KEY = 'pp_cleaning_rates';
 
@@ -86,7 +87,7 @@ export function CleanerProfileScreen({ sqftRates, onOpenRates }: { sqftRates?: S
 
   const saveRate = async (propId: string) => {
     const val = parseFloat(rateInput);
-    if (isNaN(val) || val <= 0) { Alert.alert('Invalid', 'Enter a valid rate'); return; }
+    if (isNaN(val) || val <= 0) { glassAlert('Invalid', 'Enter a valid rate'); return; }
     const updated = { ...rates, [propId]: val };
     await SecureStore.setItemAsync(RATES_KEY, JSON.stringify(updated));
     setRates(updated);

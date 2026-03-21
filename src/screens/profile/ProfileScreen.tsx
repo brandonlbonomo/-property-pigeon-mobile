@@ -24,6 +24,7 @@ import {
 import { MonthDetailModal } from '../../components/MonthDetailModal';
 import { PropertyStreetView } from '../../components/PropertyStreetView';
 import * as ImagePicker from 'expo-image-picker';
+import { glassAlert } from '../../components/GlassAlert';
 
 
 // Module-level trigger for opening customize modal from outside (e.g. FAB)
@@ -335,7 +336,7 @@ export function ProfileScreen() {
     const tagLabel = tagValue.startsWith('__')
       ? (tagValue === '__rental_income__' ? 'Rental Income' : tagValue === '__internal_transfer__' ? 'Internal Transfer' : tagValue)
       : propLabel(tagValue);
-    Alert.alert(
+    glassAlert(
       'Create Auto-Tag Rule?',
       `Automatically tag all future "${payee}" transactions as "${tagLabel}"?`,
       [
@@ -370,7 +371,7 @@ export function ProfileScreen() {
       useDataStore.setState({ cockpit: null, transactions: null });
     }).catch(() => {
       setTransactions(prev => prev.map(t => t.id === txId ? { ...t, property_tag: null } : t));
-      Alert.alert('Error', 'Failed to save tag. Please try again.');
+      glassAlert('Error', 'Failed to save tag. Please try again.');
     });
   }, []);
 
@@ -391,7 +392,7 @@ export function ProfileScreen() {
     }).catch(() => {
       setCategoryTags(prev => { const u = { ...prev }; delete u[txId]; return u; });
       setTransactions(prev => prev.map(t => t.id === txId ? { ...t, category_tag: null } : t));
-      Alert.alert('Error', 'Failed to save tag. Please try again.');
+      glassAlert('Error', 'Failed to save tag. Please try again.');
     });
   }, [saveCategoryTag]);
 
@@ -417,7 +418,7 @@ export function ProfileScreen() {
       useDataStore.setState({ cockpit: null, transactions: null });
     }).catch(() => {
       setTransactions(prevTransactions);
-      Alert.alert('Error', 'Some tags failed to save. Please try again.');
+      glassAlert('Error', 'Some tags failed to save. Please try again.');
     });
   }, [selectedTxIds, transactions]);
 
@@ -448,7 +449,7 @@ export function ProfileScreen() {
     ).catch(() => {
       setTransactions(prevTransactions);
       setCategoryTags(prevCategoryTags);
-      Alert.alert('Error', 'Some tags failed to save. Please try again.');
+      glassAlert('Error', 'Some tags failed to save. Please try again.');
     });
   }, [selectedTxIds, saveCategoryTag, transactions, categoryTags]);
 
@@ -1365,7 +1366,7 @@ export function ProfileScreen() {
                       ));
                       useDataStore.setState({ cockpit: null, transactions: null });
                     } catch {
-                      Alert.alert('Error', 'Failed to apply split.');
+                      glassAlert('Error', 'Failed to apply split.');
                     }
                     setTxTagStep('idle');
                     setTxTaggingId(null);
