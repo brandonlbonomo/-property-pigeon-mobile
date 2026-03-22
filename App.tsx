@@ -43,6 +43,7 @@ export default function App() {
 
   const [authGate, setAuthGate] = useState<AuthGate>('loading');
   const backgroundedAt = useRef<number | null>(null);
+  const [stripeKey, setStripeKey] = useState<string | null>(null);
 
   // On 401, clear auth state and redirect to login
   useEffect(() => {
@@ -166,6 +167,17 @@ export default function App() {
     return () => sub.remove();
   }, [hasCompleted, isLoading, userHydrated]);
 
+  // Fetch Stripe publishable key (must be before early returns — Rules of Hooks)
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    fetch('https://portfoliopigeon.com/api/invoice/publishable-key', { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.publishable_key) setStripeKey(d.publishable_key); })
+      .catch(() => {})
+      .finally(() => clearTimeout(timer));
+  }, []);
+
   const handleBiometricSuccess = useCallback(() => {
     setAuthGate('authenticated');
   }, []);
@@ -223,15 +235,6 @@ export default function App() {
   }
 
   const Navigator = accountType === 'cleaner' ? CleanerAppNavigator : AppNavigator;
-
-  // Fetch Stripe publishable key for payment sheet
-  const [stripeKey, setStripeKey] = useState<string | null>(null);
-  useEffect(() => {
-    fetch('https://portfoliopigeon.com/api/invoice/publishable-key')
-      .then(r => r.json())
-      .then(d => { if (d.publishable_key) setStripeKey(d.publishable_key); })
-      .catch(() => {});
-  }, []);
 
   return (
     <GestureHandlerRootView style={styles.root}>
