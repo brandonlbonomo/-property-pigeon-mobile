@@ -25,11 +25,12 @@ import { SectionHeader } from '../../components/SectionHeader';
 import { GlossyHorizontalBar } from '../../components/GlossyHorizontalBar';
 import { fmt$ , localDateStr } from '../../utils/format';
 import { InventoryScreen } from '../inventory/InventoryScreen';
+import { glassAlert } from '../../components/GlassAlert';
 
 
-type SubTab = 'Calendar' | 'Inventory' | 'Cost';
+type SubTab = 'Calendar' | 'Inventory' | 'Cost' | 'Invoices';
 const SCREEN_W = Dimensions.get('window').width;
-const SUB_TABS: SubTab[] = ['Calendar', 'Inventory', 'Cost'];
+const SUB_TABS: SubTab[] = ['Calendar', 'Inventory', 'Cost', 'Invoices'];
 const RATES_KEY = 'pp_cleaning_rates';
 const MONTH_NAMES_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -98,6 +99,165 @@ function LockedSubTab() {
         </TouchableOpacity>
       )}
     </View>
+  );
+}
+
+/* ── Host Invoices Sub-Page ─────────────────────────────────── */
+function HostInvoicesPage() {
+  const fetchReceivedInvoicesPage = useDataStore(s => s.fetchReceivedInvoices);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [paying, setPaying] = useState<string | null>(null);
+
+  const handlePay = async (inv: any) => {
+    let stripe: any = null;
+    try { stripe = require('@stripe/stripe-react-native'); } catch {}
+    if (!stripe) {
+      glassAlert('Not Available', 'Stripe payments require a production build. Use Settings to mark invoices as paid offline.');
+      return;
+    }
+    setPaying(inv.id);
+    try {
+      const { createInvoicePaymentIntent, checkPaymentStatus: checkStatus } = require('../../services/payments');
+      const amountCents = Math.round((inv.total || 0) * 100);
+      const res = await createInvoicePaymentIntent(inv.id, amountCents, inv.cleanerUserId || inv.cleaner_user_id);
+      if (res.error) { glassAlert('Error', res.error); setPaying(null); return; }
+
+      const { error: initError } = await stripe.initPaymentSheet({
+        paymentIntentClientSecret: res.client_secret,
+        merchantDisplayName: 'Portfolio Pigeon',
+      });
+      if (initError) { glassAlert('Error', initError.message); setPaying(null); return; }
+
+      const { error: presentError } = await stripe.presentPaymentSheet();
+      if (presentError) {
+        if (presentError.code !== 'Canceled') glassAlert('Payment Failed', presentError.message);
+        setPaying(null);
+        return;
+      }
+
+      const status = await checkStatus(res.payment_intent_id);
+      if (status.status === 'succeeded') {
+        setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' } : i));
+        glassAlert('Payment Successful', `${fmt$((inv.total || 0))} sent to ${inv.cleanerName || 'cleaner'}.`);
+      }
+    } catch (e: any) {
+      glassAlert('Error', e?.serverError || e?.message || 'Payment failed.');
+    } finally {
+      setPaying(null);
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
+      const invs = await fetchReceivedInvoicesPage(true);
+      setInvoices(invs);
+      setLoading(false);
+    })();
+  }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    const invs = await fetchReceivedInvoicesPage(true);
+    setInvoices(invs);
+    setRefreshing(false);
+  };
+
+  // Group by cleaner
+  const grouped = useMemo(() => {
+    const map = new Map<string, { cleanerName: string; invoices: any[]; outstanding: number }>();
+    invoices.forEach(inv => {
+      const key = inv.cleanerName || inv.cleaner_user_id || 'Unknown';
+      if (!map.has(key)) map.set(key, { cleanerName: key, invoices: [], outstanding: 0 });
+      const g = map.get(key)!;
+      g.invoices.push(inv);
+      if (inv.status !== 'paid') g.outstanding += (inv.total || 0);
+    });
+    return Array.from(map.values());
+  }, [invoices]);
+
+  const STATUS_COLORS_HOST: Record<string, { bg: string; text: string }> = {
+    sent: { bg: 'rgba(59,130,246,0.08)', text: '#3B82F6' },
+    viewed: { bg: 'rgba(59,130,246,0.08)', text: '#3B82F6' },
+    overdue: { bg: Colors.redDim, text: Colors.red },
+    paid: { bg: Colors.greenDim, text: Colors.green },
+  };
+
+  return (
+    <ScrollView
+      style={{ width: SCREEN_W }}
+      contentContainerStyle={{ padding: Spacing.md, paddingTop: 350, paddingBottom: Spacing.xl * 2 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" colors={["#1A1A1A"]} />}
+    >
+      {loading ? (
+        <ActivityIndicator size="large" color={Colors.green} style={{ marginTop: Spacing.xl }} />
+      ) : invoices.length === 0 ? (
+        <View style={{ alignItems: 'center', paddingVertical: Spacing.xl * 2 }}>
+          <Ionicons name="document-text-outline" size={48} color={Colors.textDim} />
+          <Text style={{ fontSize: FontSize.lg, fontWeight: '700', color: Colors.text, marginTop: Spacing.md }}>No invoices</Text>
+          <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', marginTop: Spacing.xs }}>
+            Invoices from your cleaners will appear here.
+          </Text>
+        </View>
+      ) : (
+        grouped.map(group => (
+          <View key={group.cleanerName} style={{ marginBottom: Spacing.lg }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.sm }}>
+              <Text style={{ fontSize: FontSize.md, fontWeight: '700', color: Colors.text }}>{group.cleanerName}</Text>
+              {group.outstanding > 0 && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={{ fontSize: FontSize.xs, color: Colors.red, fontWeight: '600' }}>Outstanding:</Text>
+                  <Text style={{ fontSize: FontSize.sm, fontWeight: '700', color: Colors.red }}>{fmt$(group.outstanding)}</Text>
+                </View>
+              )}
+            </View>
+            {group.invoices.map((inv: any) => {
+              const sc = STATUS_COLORS_HOST[inv.status] || STATUS_COLORS_HOST.sent;
+              const isPaid = inv.status === 'paid';
+              return (
+                <Card key={inv.id} style={{ marginBottom: Spacing.sm }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <View style={{ flex: 1 }}>
+                      {inv.invoiceNumber && (
+                        <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary }}>{inv.invoiceNumber}</Text>
+                      )}
+                      <Text style={{ fontSize: FontSize.xs, color: Colors.textDim }}>{inv.period}</Text>
+                      {inv.dueDate && (
+                        <Text style={{ fontSize: FontSize.xs, color: inv.status === 'overdue' ? Colors.red : Colors.textDim, marginTop: 2 }}>
+                          Due {new Date(inv.dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <Text style={{ fontSize: FontSize.lg, fontWeight: '700', color: isPaid ? Colors.green : Colors.text }}>{fmt$(inv.total || 0)}</Text>
+                      <View style={{ backgroundColor: sc.bg, paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.pill }}>
+                        <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: sc.text }}>
+                          {(inv.status || 'sent').charAt(0).toUpperCase() + (inv.status || 'sent').slice(1)}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                  {!isPaid && (
+                    <View style={{ flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm }}>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, backgroundColor: Colors.primary, borderRadius: Radius.md }}
+                        onPress={() => handlePay(inv)}
+                        disabled={paying === inv.id}
+                      >
+                        <Ionicons name="card-outline" size={14} color="#fff" />
+                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: '#fff' }}>Pay Now</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </Card>
+              );
+            })}
+          </View>
+        ))
+      )}
+    </ScrollView>
   );
 }
 
@@ -588,6 +748,7 @@ export function CleaningsScreen() {
             { key: 'Calendar' as SubTab, label: 'Calendar' },
             { key: 'Inventory' as SubTab, label: 'Inventory' },
             { key: 'Cost' as SubTab, label: 'Cost' },
+            { key: 'Invoices' as SubTab, label: 'Invoices' },
           ]}
           selected={subTab}
           onSelect={handlePillSelect}
@@ -616,7 +777,7 @@ export function CleaningsScreen() {
         {/* ═══ CALENDAR PAGE ═══ */}
         <ScrollView
           style={{ width: SCREEN_W }}
-          contentContainerStyle={{ padding: Spacing.md, paddingTop: 310, paddingBottom: Spacing.xl * 2 }}
+          contentContainerStyle={{ padding: Spacing.md, paddingTop: 350, paddingBottom: Spacing.xl * 2 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
           keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets
           onTouchStart={dismissAllChartTooltips}
@@ -843,7 +1004,7 @@ export function CleaningsScreen() {
         {/* ═══ COST PAGE (merged Cost + Rates) ═══ */}
         <ScrollView
           style={{ width: SCREEN_W }}
-          contentContainerStyle={{ padding: Spacing.md, paddingTop: 310, paddingBottom: Spacing.xl * 2 }}
+          contentContainerStyle={{ padding: Spacing.md, paddingTop: 350, paddingBottom: Spacing.xl * 2 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
           onTouchStart={dismissAllChartTooltips}
         >
@@ -989,6 +1150,9 @@ export function CleaningsScreen() {
             </>
           )}
         </ScrollView>
+
+        {/* ═══ INVOICES PAGE ═══ */}
+        <HostInvoicesPage />
       </Animated.ScrollView>
 
       {/* ═══ FOLLOW CODE MODAL (outside horizontal scroll) ═══ */}

@@ -15,6 +15,7 @@ import { ComposeMessageScreen } from '../screens/messages/ComposeMessageScreen';
 import { ComposeGroupScreen } from '../screens/messages/ComposeGroupScreen';
 import { CleanerPillNavigator } from './CleanerNavigator';
 import { InvoiceWizardScreen } from '../screens/cleaner/InvoiceWizardScreen';
+import { ViewUserProfileScreen } from '../screens/profile/ViewUserProfileScreen';
 
 const RootStack = createNativeStackNavigator();
 
@@ -102,6 +103,28 @@ export function CleanerAppNavigator() {
             presentation: 'fullScreenModal',
             headerShown: false,
             animation: 'slide_from_bottom',
+          }}
+        />
+        <RootStack.Screen
+          name="ViewUserProfile"
+          component={ViewUserProfileScreen}
+          options={{
+            presentation: 'modal',
+            headerTitle: 'Profile',
+            headerStyle: { backgroundColor: Colors.bg },
+            contentStyle: { backgroundColor: Colors.bg },
+            headerTintColor: Colors.text,
+            headerTitleStyle: { fontWeight: '600', color: Colors.text },
+            headerShadowVisible: false,
+            headerLeft: () => null,
+            headerRight: () => {
+              const navigation = useNavigation<any>();
+              return (
+                <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.goBack()}>
+                  <Text style={{ color: Colors.primary, fontSize: 16, fontWeight: '500' }}>Done</Text>
+                </TouchableOpacity>
+              );
+            },
           }}
         />
       </RootStack.Navigator>

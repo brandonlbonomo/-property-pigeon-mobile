@@ -144,9 +144,9 @@ export function NotificationsScreen() {
       case 'follow':
       case 'follow_request':
         if (data.sender_id) {
-          navigation.navigate('Chat', {
-            otherUserId: data.sender_id,
-            otherUsername: data.sender_name || notif.title,
+          navigation.navigate('ViewUserProfile', {
+            userId: data.sender_id,
+            username: data.sender_name || '',
           });
         }
         break;
@@ -161,12 +161,8 @@ export function NotificationsScreen() {
         }
         break;
       case 'invoice':
-        if (data.sender_id) {
-          navigation.navigate('Chat', {
-            otherUserId: data.sender_id,
-            otherUsername: data.sender_name || notif.title,
-          });
-        }
+        // Navigate to Settings invoices section
+        navigation.navigate('Settings', { section: 'invoices' });
         break;
       default:
         // No specific navigation for other types

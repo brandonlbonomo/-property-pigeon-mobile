@@ -98,17 +98,22 @@ export function LiquidPillBar({ tabs, activeIndex, scrollOffset, onPressTab }: P
     extrapolate: 'clamp',
   });
 
-  /* ── Blob position (slides to pill) ── */
+  /* ── Blob position (slides to pill, accounting for active scale) ── */
+  const ACTIVE_SCALE = 1.04;
   const blobTranslateX = (scrollOffset as any).interpolate({
     inputRange: indices,
-    outputRange: pills.map(p => p.x - BLOB_PAD / 2),
+    outputRange: pills.map(p => {
+      const scaledW = p.w * ACTIVE_SCALE;
+      const offset = (scaledW - p.w) / 2;
+      return p.x - BLOB_PAD / 2 - offset;
+    }),
     extrapolate: 'clamp',
   });
 
-  /* ── Blob width (morphs to pill width) ── */
+  /* ── Blob width (morphs to pill width, matching active scale) ── */
   const blobWidth = (scrollOffset as any).interpolate({
     inputRange: indices,
-    outputRange: pills.map(p => p.w + BLOB_PAD),
+    outputRange: pills.map(p => p.w * ACTIVE_SCALE + BLOB_PAD),
     extrapolate: 'clamp',
   });
 

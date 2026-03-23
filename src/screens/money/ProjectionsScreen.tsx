@@ -88,41 +88,98 @@ function generate30YearProjection(
 
 // ── Milestone Cards ──
 
-function MilestoneCard({ row }: { row: YearRow }) {
+// ── Wealth Builder Card — cumulative revenue + portfolio value over time ──
+function WealthBuilderCard({ data }: { data: YearRow[] }) {
+  if (data.length < 2) return null;
+
+  // Annual revenue at each milestone — shows growth trajectory clearly
+  const revBars: BarData[] = data.map((row, i) => ({
+    label: `Yr${row.yearOffset}`,
+    value: row.revenue,
+    isActual: row.yearOffset === 0,
+    isCurrent: row.yearOffset === 0,
+    priorValue: i > 0 ? data[i - 1].revenue : undefined,
+    priorLabel: i > 0 ? `Yr${data[i - 1].yearOffset}` : undefined,
+  }));
+
+  // Total cumulative for display
+  const cumulativeRev = data.reduce((s, r) => s + r.revenue * 5, 0); // ~5yr per interval
+
+
+  // Key milestones
+  const yr10 = data.find(r => r.yearOffset === 10);
+  const yr20 = data.find(r => r.yearOffset === 20);
+  const yr30 = data.find(r => r.yearOffset === 30);
+
   return (
-    <View style={milestoneStyles.card}>
-      <Text style={milestoneStyles.yearLabel}>YEAR {row.yearOffset}</Text>
-      <Text style={milestoneStyles.units}>{row.units} units</Text>
-      <Text style={milestoneStyles.netCF}>{fmtCompact(row.netCF)}</Text>
-      <Text style={milestoneStyles.netCFLabel}>net CF/yr</Text>
-      <Text style={milestoneStyles.value}>{fmtCompact(row.portfolioValue)}</Text>
-      <Text style={milestoneStyles.valueLabel}>portfolio value</Text>
-    </View>
+    <Card>
+      <Text style={wbStyles.title}>Wealth Accumulation</Text>
+      <Text style={wbStyles.subtitle}>Annual revenue at each milestone</Text>
+      <BarChart
+        bars={revBars}
+        color={Colors.green}
+        height={140}
+      />
+      <View style={wbStyles.milestonesRow}>
+        {yr10 && (
+          <View style={wbStyles.milestone}>
+            <Text style={wbStyles.milestoneLabel}>YEAR 10</Text>
+            <Text style={wbStyles.milestoneUnits}>{yr10.units} units</Text>
+            <Text style={wbStyles.milestoneValue}>{fmtCompact(yr10.portfolioValue)}</Text>
+            <Text style={wbStyles.milestoneSub}>portfolio</Text>
+          </View>
+        )}
+        {yr20 && (
+          <View style={wbStyles.milestone}>
+            <Text style={wbStyles.milestoneLabel}>YEAR 20</Text>
+            <Text style={wbStyles.milestoneUnits}>{yr20.units} units</Text>
+            <Text style={wbStyles.milestoneValue}>{fmtCompact(yr20.portfolioValue)}</Text>
+            <Text style={wbStyles.milestoneSub}>portfolio</Text>
+          </View>
+        )}
+        {yr30 && (
+          <View style={wbStyles.milestone}>
+            <Text style={wbStyles.milestoneLabel}>YEAR 30</Text>
+            <Text style={wbStyles.milestoneUnits}>{yr30.units} units</Text>
+            <Text style={wbStyles.milestoneValue}>{fmtCompact(yr30.portfolioValue)}</Text>
+            <Text style={wbStyles.milestoneSub}>portfolio</Text>
+          </View>
+        )}
+      </View>
+      <View style={wbStyles.totalRow}>
+        <Text style={wbStyles.totalLabel}>Est. 30yr total revenue</Text>
+        <Text style={wbStyles.totalValue}>{fmtCompact(cumulativeRev)}</Text>
+      </View>
+      <View style={wbStyles.totalRow}>
+        <Text style={wbStyles.totalLabel}>30yr total equity</Text>
+        <Text style={[wbStyles.totalValue, { color: Colors.green }]}>{fmtCompact(yr30?.equity || 0)}</Text>
+      </View>
+    </Card>
   );
 }
 
-const milestoneStyles = StyleSheet.create({
-  card: {
-    width: (SCREEN_W - Spacing.md * 2 - Spacing.sm * 3) / 3.5,
-    backgroundColor: Colors.glassHeavy,
-    borderRadius: Radius.xl,
-    borderWidth: 0.5,
-    borderColor: Colors.glassBorder,
-    borderTopColor: Colors.glassHighlight,
-    borderTopWidth: 1,
-    padding: Spacing.sm,
-    alignItems: 'center',
-    ...Platform.select({
-      ios: { shadowColor: Colors.glassShadow, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 20 },
-      android: { elevation: 2 },
-    }),
+const wbStyles = StyleSheet.create({
+  title: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
+  subtitle: { fontSize: FontSize.xs, color: Colors.textDim, marginBottom: Spacing.md },
+  milestonesRow: {
+    flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.md,
   },
-  yearLabel: { fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
-  units: { fontSize: 11, color: Colors.textSecondary, marginBottom: 4 },
-  netCF: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.green },
-  netCFLabel: { fontSize: 9, color: Colors.textDim, marginBottom: 6 },
-  value: { fontSize: FontSize.md, fontWeight: '700', color: Colors.primary },
-  valueLabel: { fontSize: 9, color: Colors.textDim },
+  milestone: {
+    flex: 1, alignItems: 'center', paddingVertical: Spacing.sm,
+    backgroundColor: Colors.glassDark, borderRadius: Radius.md,
+    borderWidth: 0.5, borderColor: Colors.glassBorder,
+  },
+  milestoneLabel: { fontSize: 8, fontWeight: '800', color: Colors.textDim, letterSpacing: 0.5 },
+  milestoneUnits: { fontSize: 10, color: Colors.textSecondary, marginBottom: 2 },
+  milestoneValue: { fontSize: FontSize.md, fontWeight: '800', color: Colors.green },
+  milestoneSub: { fontSize: 8, color: Colors.textDim },
+  totalRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingTop: Spacing.xs, marginTop: Spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.border,
+  },
+  totalLabel: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  totalValue: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
 });
 
 // ── Projection Bar Chart using shared BarChart ──
@@ -215,10 +272,16 @@ export function ProjectionsScreen() {
   const prior = cockpit?.prior || {};
   const priorRev = prior.revenue ?? 0;
 
-  // YTD (current month * month index gives rough YTD)
+  // YTD — sum actual months from timeline (not MTD × month count)
   const curMonth = new Date().getMonth() + 1; // 1-indexed
-  const ytdRevenue = revenue * curMonth;
-  const ytdExpenses = expenses * curMonth;
+  const ytdRevenue = useMemo(() => {
+    const timeline = generateYearTimeline(revenue, priorRev, projStyle, new Date().getFullYear());
+    return timeline.filter(m => m.month < curMonth).reduce((s, m) => s + m.value, 0) + revenue;
+  }, [revenue, priorRev, projStyle, curMonth]);
+  const ytdExpenses = useMemo(() => {
+    const timeline = generateYearTimeline(expenses, prior.expenses ?? 0, projStyle, new Date().getFullYear());
+    return timeline.filter(m => m.month < curMonth).reduce((s, m) => s + m.value, 0) + expenses;
+  }, [expenses, prior.expenses, projStyle, curMonth]);
   const ytdNet = ytdRevenue - ytdExpenses;
   const ytdMargin = ytdRevenue > 0 ? (ytdNet / ytdRevenue) * 100 : 0;
 
@@ -239,10 +302,11 @@ export function ProjectionsScreen() {
   const yoyDiff = fyRevenue - priorFYRev;
   const yoyPct = priorFYRev > 0 ? (yoyDiff / priorFYRev) * 100 : 0;
 
-  // 30-year projection
+  // 30-year projection — pass monthly equivalent of FY totals
+  // generate30YearProjection internally does (monthly * 12 / units) to get per-unit annual
   const projection = useMemo(
-    () => generate30YearProjection(startingUnits, unitsPerYear, revenue, expenses, projStyle),
-    [startingUnits, unitsPerYear, revenue, expenses, projStyle],
+    () => generate30YearProjection(startingUnits, unitsPerYear, fyRevenue / 12, fyExpenses / 12, projStyle),
+    [startingUnits, unitsPerYear, fyRevenue, fyExpenses, projStyle],
   );
 
   const handleUnitsChange = (delta: number) => {
@@ -385,7 +449,7 @@ export function ProjectionsScreen() {
             Equity today: <Text style={{ fontWeight: '700', color: Colors.green }}>{fmtCompact(projection[0]?.equity || 0)}</Text>
           </Text>
           <Text style={styles.projSummaryText}>
-            Starting units: <Text style={{ fontWeight: '700' }}>{startingUnits}</Text>
+            Current units: <Text style={{ fontWeight: '700' }}>{startingUnits}</Text>
           </Text>
         </View>
 
@@ -408,17 +472,10 @@ export function ProjectionsScreen() {
         ))}
       </Card>
 
-      {/* ── Milestone Cards ── */}
-      <Text style={styles.milestoneTitle}>30-Year Portfolio Projection</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.milestoneScroll}>
-        {projection.filter(r => r.yearOffset > 0).map(row => (
-          <View key={row.yearOffset} style={{ marginRight: Spacing.sm }}>
-            <MilestoneCard row={row} />
-          </View>
-        ))}
-      </ScrollView>
+      {/* ── Wealth Accumulation Chart ── */}
+      <WealthBuilderCard data={projection} />
 
-      {/* ── Bar Chart ── */}
+      {/* ── Net Cash Flow Bar Chart ── */}
       <ProjectionBarChartCard data={projection} />
 
       {/* ── Projection Note ── */}

@@ -125,26 +125,29 @@ export function SearchScreen() {
           const isDone = isFollowing || isPending;
           return (
             <View key={user.user_id} style={styles.userCard}>
-              {user.role !== 'cleaner' && user.portfolio_score != null ? (
-                <PortfolioScoreBubble score={user.portfolio_score} size={40} />
-              ) : (
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>
-                    {(user.username || '?')[0].toUpperCase()}
-                  </Text>
+              <TouchableOpacity activeOpacity={0.7} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: Spacing.sm }}
+                onPress={() => navigation.navigate('ViewUserProfile', { userId: user.user_id, username: user.username })}>
+                {user.role !== 'cleaner' && user.portfolio_score != null ? (
+                  <PortfolioScoreBubble score={user.portfolio_score} size={40} />
+                ) : (
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>
+                      {(user.username || '?')[0].toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.userInfo}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={styles.username}>{user.username}</Text>
+                    {user.is_private && <Ionicons name="lock-closed" size={10} color={Colors.textDim} />}
+                  </View>
+                  <View style={styles.roleBadge}>
+                    <Text style={styles.roleText}>
+                      {user.role === 'cleaner' ? 'Cleaner' : 'Owner'}
+                    </Text>
+                  </View>
                 </View>
-              )}
-              <View style={styles.userInfo}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={styles.username}>{user.username}</Text>
-                  {user.is_private && <Ionicons name="lock-closed" size={10} color={Colors.textDim} />}
-                </View>
-                <View style={styles.roleBadge}>
-                  <Text style={styles.roleText}>
-                    {user.role === 'cleaner' ? 'Cleaner' : 'Owner'}
-                  </Text>
-                </View>
-              </View>
+              </TouchableOpacity>
               <TouchableOpacity activeOpacity={0.7}
                 style={styles.msgBtn}
                 onPress={() => navigation.navigate('Chat', { userId: user.user_id, username: user.username })}

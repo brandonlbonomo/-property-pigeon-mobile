@@ -75,8 +75,9 @@ export function PillNavigator() {
       }
       order = migrated;
     }
-    // Remove deprecated pills from any saved order
-    order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'cleanings' && k !== 'home' && k !== 'calendar' && k !== 'inventory');
+    // Remove deprecated and cleaner-only pills from owner pill order
+    order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'cleanings' && k !== 'home' && k !== 'calendar' && k !== 'inventory'
+      && k !== 'schedule' && k !== 'owners' && k !== 'invoices' && k !== 'money');
     // Ensure base pills exist
     if (!order.includes('performance')) order.push('performance');
     if (!order.includes('projections')) {
@@ -130,6 +131,16 @@ export function PillNavigator() {
     const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
     setActiveIndex(page);
   }, []);
+
+  // Swipe right past HQ → open Settings
+  const dragStartX = useRef(0);
+  const onScrollEndDrag = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    // If on first page and user dragged right (offset went negative or stayed at 0 while starting from 0)
+    if (activeIndex === 0 && x <= 0) {
+      navigation.navigate('Settings');
+    }
+  }, [navigation, activeIndex]);
 
   const onPressTab = useCallback((index: number) => {
     scrollRef.current?.scrollTo({ x: index * SCREEN_WIDTH, animated: true });
@@ -194,10 +205,12 @@ export function PillNavigator() {
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
-        bounces={false}
+        bounces
+        alwaysBounceHorizontal
         scrollEventThrottle={16}
         onScroll={onScroll}
         onScrollBeginDrag={onScrollBeginDrag}
+        onScrollEndDrag={onScrollEndDrag}
         onMomentumScrollEnd={onMomentumScrollEnd}
         contentOffset={{ x: startIndex * SCREEN_WIDTH, y: 0 }}
         decelerationRate="fast"
@@ -374,8 +387,8 @@ const styles = StyleSheet.create({
     pointerEvents: 'none',
   },
   logo: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     resizeMode: 'contain',
   },
   page: {

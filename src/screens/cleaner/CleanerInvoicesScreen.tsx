@@ -9,7 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as SecureStore from 'expo-secure-store';
 import { useNavigation } from '@react-navigation/native';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
-import { useCleanerStore, CleanerInvoice, CleanerEvent, InvoiceLineItem } from '../../store/cleanerStore';
+import { useCleanerStore, CleanerInvoice, CleanerEvent, InvoiceLineItem, InvoiceStatus } from '../../store/cleanerStore';
 import { useSubscriptionGate } from '../../hooks/useSubscriptionGate';
 import { useProCheckout } from '../../hooks/useProCheckout';
 import { Card } from '../../components/Card';
@@ -30,14 +30,16 @@ const CLEANING_TYPES = [
   'Purchase of Supplies',
 ] as const;
 
-type InvoiceTab = 'Pending' | 'Sent' | 'All';
-const TABS: InvoiceTab[] = ['Pending', 'Sent', 'All'];
+type InvoiceTab = 'Draft' | 'Sent' | 'Paid' | 'All';
+const TABS: InvoiceTab[] = ['Draft', 'Sent', 'Paid', 'All'];
 type CreatePeriod = 'weekly' | 'monthly';
 
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   draft: { bg: Colors.yellowDim, text: Colors.yellow },
   sent: { bg: Colors.primaryDim, text: Colors.primary },
+  viewed: { bg: 'rgba(59,130,246,0.10)', text: '#3B82F6' },
   paid: { bg: Colors.greenDim, text: Colors.green },
+  overdue: { bg: Colors.redDim, text: Colors.red },
 };
 
 function getLastWeekRange() {
@@ -183,6 +185,8 @@ function InvoiceCard({
   onEditLine,
   onAddLine,
   onDeleteLine,
+  onResend,
+  onDispute,
 }: {
   invoice: CleanerInvoice;
   onSend: (id: string) => void;
@@ -190,9 +194,18 @@ function InvoiceCard({
   onEditLine: (invoiceId: string, index: number, item: InvoiceLineItem) => void;
   onAddLine: (invoiceId: string) => void;
   onDeleteLine: (invoiceId: string, index: number) => void;
+  onResend: (id: string) => void;
+  onDispute: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isDraft = invoice.status === 'draft';
+  const isSent = invoice.status === 'sent' || invoice.status === 'viewed' || invoice.status === 'overdue';
+  const isPaid = invoice.status === 'paid';
+  const statusColor = STATUS_COLORS[invoice.status]?.text || Colors.primary;
+
+  const dueDateStr = invoice.dueDate
+    ? new Date(invoice.dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : null;
 
   return (
     <Card>
@@ -200,10 +213,20 @@ function InvoiceCard({
         <View style={styles.invoiceHeader}>
           <View style={{ flex: 1 }}>
             <Text style={styles.invoiceHost}>{invoice.hostName}</Text>
-            <Text style={styles.invoicePeriod}>{invoice.period}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              {invoice.invoiceNumber && (
+                <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary }}>{invoice.invoiceNumber}</Text>
+              )}
+              <Text style={styles.invoicePeriod}>{invoice.period}</Text>
+            </View>
+            {dueDateStr && (
+              <Text style={{ fontSize: FontSize.xs, color: invoice.status === 'overdue' ? Colors.red : Colors.textDim, marginTop: 2 }}>
+                Due {dueDateStr}
+              </Text>
+            )}
           </View>
           <View style={{ alignItems: 'flex-end', gap: 4 }}>
-            <Text style={[styles.invoiceTotal, { color: Colors.green }]}>{fmt$(invoice.total)}</Text>
+            <Text style={[styles.invoiceTotal, { color: statusColor }]}>{fmt$(invoice.total)}</Text>
             <StatusBadge status={invoice.status} />
           </View>
         </View>
@@ -246,15 +269,41 @@ function InvoiceCard({
             </View>
           ))}
 
-          {/* Total */}
+          {/* Subtotal + Tax + Total */}
+          {(invoice.taxAmount ?? 0) > 0 && (
+            <>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, marginTop: Spacing.xs }}>
+                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>Subtotal</Text>
+                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>{fmt$(invoice.subtotal || invoice.total)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>Tax ({invoice.taxRate || 0}%)</Text>
+                <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>{fmt$(invoice.taxAmount || 0)}</Text>
+              </View>
+            </>
+          )}
           <View style={styles.lineTotalRow}>
             <Text style={styles.lineTotalLabel}>Total</Text>
-            <Text style={styles.lineTotalValue}>{fmt$(invoice.total)}</Text>
+            <Text style={[styles.lineTotalValue, { color: statusColor }]}>{fmt$(invoice.total)}</Text>
           </View>
+
+          {/* Notes */}
+          {invoice.notes ? (
+            <View style={{ marginTop: Spacing.xs, padding: Spacing.sm, backgroundColor: Colors.glassDark, borderRadius: Radius.sm }}>
+              <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary }}>{invoice.notes}</Text>
+            </View>
+          ) : null}
+
+          {/* Dispute badge */}
+          {invoice.disputeStatus === 'disputed' && (
+            <View style={{ marginTop: Spacing.sm, padding: Spacing.sm, backgroundColor: Colors.redDim, borderRadius: Radius.sm, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="alert-circle" size={16} color={Colors.red} />
+              <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.red }}>Disputed — awaiting resolution</Text>
+            </View>
+          )}
 
           {isDraft && (
             <>
-              {/* Add Line Item */}
               <TouchableOpacity
                 activeOpacity={0.7}
                 style={styles.addLineBtn}
@@ -284,6 +333,39 @@ function InvoiceCard({
               </View>
             </>
           )}
+
+          {isSent && (
+            <View style={styles.draftActions}>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                style={[styles.deleteBtn, { borderColor: Colors.primary }]}
+                onPress={() => onResend(invoice.id)}
+              >
+                <Ionicons name="refresh-outline" size={14} color={Colors.primary} />
+                <Text style={[styles.deleteBtnText, { color: Colors.primary }]}>Resend</Text>
+              </TouchableOpacity>
+              {invoice.disputeStatus !== 'disputed' && (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={[styles.deleteBtn, { borderColor: Colors.yellow }]}
+                  onPress={() => onDispute(invoice.id)}
+                >
+                  <Ionicons name="flag-outline" size={14} color={Colors.yellow} />
+                  <Text style={[styles.deleteBtnText, { color: Colors.yellow }]}>Dispute</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {isPaid && invoice.paidAt && (
+            <View style={{ marginTop: Spacing.sm, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="checkmark-circle" size={16} color={Colors.green} />
+              <Text style={{ fontSize: FontSize.xs, color: Colors.green, fontWeight: '600' }}>
+                Paid {new Date(invoice.paidAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                {invoice.paymentMethod ? ` via ${invoice.paymentMethod === 'ach' ? 'ACH' : invoice.paymentMethod === 'card' ? 'Card' : 'Offline'}` : ''}
+              </Text>
+            </View>
+          )}
         </View>
       )}
     </Card>
@@ -297,17 +379,18 @@ export function CleanerInvoicesScreen() {
   const navigation = useNavigation<any>();
   const {
     invoices, schedule, history, fetchInvoices, createInvoice,
-    updateInvoice, deleteInvoice, sendInvoice,
+    updateInvoice, deleteInvoice, sendInvoice, resendInvoice, disputeInvoice,
     fetchSchedule, fetchHistory, owners,
   } = useCleanerStore();
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<InvoiceTab>('Pending');
+  const [tab, setTab] = useState<InvoiceTab>('Draft');
   const [creating, setCreating] = useState(false);
   const [rates, setRates] = useState<Record<string, number>>({});
   const [createPeriod, setCreatePeriod] = useState<CreatePeriod>('weekly');
   const [editLine, setEditLine] = useState<EditLineState | null>(null);
+  const [filterHost, setFilterHost] = useState<string | null>(null);
 
   const scrollX = useRef(new Animated.Value(0)).current;
   const horizontalRef = useRef<ScrollView>(null);
@@ -323,9 +406,32 @@ export function CleanerInvoicesScreen() {
     if (idx >= 0 && idx < TABS.length) setTab(TABS[idx]);
   }, []);
 
-  const pendingInvoices = useMemo(() => invoices.filter(inv => inv.status === 'draft'), [invoices]);
-  const sentInvoices = useMemo(() => invoices.filter(inv => inv.status === 'sent' || inv.status === 'paid'), [invoices]);
-  const allInvoices = invoices;
+  // Filter invoices by host
+  const filtered = useMemo(() => {
+    if (!filterHost) return invoices;
+    return invoices.filter(inv => inv.hostId === filterHost);
+  }, [invoices, filterHost]);
+
+  const draftInvoices = useMemo(() => filtered.filter(inv => inv.status === 'draft'), [filtered]);
+  const sentInvoices = useMemo(() => filtered.filter(inv => inv.status === 'sent' || inv.status === 'viewed' || inv.status === 'overdue'), [filtered]);
+  const paidInvoices = useMemo(() => filtered.filter(inv => inv.status === 'paid'), [filtered]);
+  const allInvoices = filtered;
+
+  // Monthly total — sum of invoices created this month
+  const monthlyTotal = useMemo(() => {
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    return invoices
+      .filter(inv => inv.status === 'paid' && (inv.paidAt || inv.createdAt || '').slice(0, 7) === ym)
+      .reduce((s, inv) => s + inv.total, 0);
+  }, [invoices]);
+
+  // Unique hosts for filter
+  const uniqueHosts = useMemo(() => {
+    const map = new Map<string, string>();
+    invoices.forEach(inv => map.set(inv.hostId, inv.hostName));
+    return Array.from(map.entries());
+  }, [invoices]);
 
   useEffect(() => {
     const init = async () => {
@@ -396,9 +502,9 @@ export function CleanerInvoicesScreen() {
   }
 
   const handleSend = async (id: string) => {
-    glassAlert('Send Invoice', 'Mark this invoice as sent to the host?', [
+    glassAlert('Send Invoice', 'Review this invoice and send to the host? The host will receive a PDF via email and in their PP app.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Send', onPress: () => sendInvoice(id) },
+      { text: 'Send Invoice', onPress: () => sendInvoice(id) },
     ]);
   };
 
@@ -406,6 +512,26 @@ export function CleanerInvoicesScreen() {
     glassAlert('Delete Invoice', 'Are you sure you want to delete this draft?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => deleteInvoice(id) },
+    ]);
+  };
+
+  const handleResend = (id: string) => {
+    glassAlert('Resend Invoice', 'Resend this invoice to the host?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Resend', onPress: () => {
+        resendInvoice(id);
+        glassAlert('Sent', 'Invoice resent successfully.');
+      }},
+    ]);
+  };
+
+  const handleDispute = (id: string) => {
+    glassAlert('Dispute Invoice', 'Flag this invoice as disputed? Both you and the host can submit notes for resolution.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Dispute', style: 'destructive', onPress: () => {
+        disputeInvoice(id, '');
+        glassAlert('Disputed', 'Invoice flagged as disputed. You and the host can resolve this in-app.');
+      }},
     ]);
   };
 
@@ -418,7 +544,7 @@ export function CleanerInvoicesScreen() {
       return;
     }
     const newTotal = newItems.reduce((s, li) => s + li.amount, 0);
-    updateInvoice(invoiceId, newItems, newTotal);
+    updateInvoice(invoiceId, { lineItems: newItems, total: newTotal });
   };
 
   const handleEditLine = (invoiceId: string, index: number, item: InvoiceLineItem) => {
@@ -464,7 +590,7 @@ export function CleanerInvoicesScreen() {
     }
 
     const newTotal = newItems.reduce((s, li) => s + li.amount, 0);
-    updateInvoice(state.invoiceId, newItems, newTotal);
+    updateInvoice(state.invoiceId, { lineItems: newItems, total: newTotal });
     setEditLine(null);
   };
 
@@ -529,6 +655,7 @@ export function CleanerInvoicesScreen() {
         hostName: events[0].owner,
         period: periodLabel,
         lineItems,
+        subtotal: total,
         total,
         status: 'draft',
         event_uids: events.map(e => e.uid).filter(Boolean),
@@ -554,11 +681,7 @@ export function CleanerInvoicesScreen() {
       <View style={{ paddingHorizontal: Spacing.md, paddingTop: Spacing.md }}>
         <SwipePills
           compact
-          items={[
-            { key: 'Pending' as InvoiceTab, label: 'Pending' },
-            { key: 'Sent' as InvoiceTab, label: 'Sent' },
-            { key: 'All' as InvoiceTab, label: 'All' },
-          ]}
+          items={TABS.map(t => ({ key: t as InvoiceTab, label: t }))}
           selected={tab}
           onSelect={handlePillSelect}
           scrollOffset={scrollX}
@@ -583,7 +706,7 @@ export function CleanerInvoicesScreen() {
         style={{ flex: 1 }}
       >
         {TABS.map((tabKey) => {
-          const list = tabKey === 'Pending' ? pendingInvoices : tabKey === 'Sent' ? sentInvoices : allInvoices;
+          const list = tabKey === 'Draft' ? draftInvoices : tabKey === 'Sent' ? sentInvoices : tabKey === 'Paid' ? paidInvoices : allInvoices;
           return (
             <ScrollView automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled"
               key={tabKey}
@@ -596,6 +719,37 @@ export function CleanerInvoicesScreen() {
                   <Ionicons name="cloud-offline-outline" size={16} color={Colors.red} />
                   <Text style={styles.errorBannerText}>{error}</Text>
                 </View>
+              )}
+
+              {/* Monthly total banner */}
+              {monthlyTotal > 0 && (
+                <View style={styles.monthlyBanner}>
+                  <Text style={styles.monthlyLabel}>This Month</Text>
+                  <Text style={styles.monthlyAmount}>{fmt$(monthlyTotal)}</Text>
+                </View>
+              )}
+
+              {/* Host filter */}
+              {uniqueHosts.length > 1 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.sm }}>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    style={[styles.filterPill, !filterHost && styles.filterPillActive]}
+                    onPress={() => setFilterHost(null)}
+                  >
+                    <Text style={[styles.filterPillText, !filterHost && styles.filterPillTextActive]}>All Hosts</Text>
+                  </TouchableOpacity>
+                  {uniqueHosts.map(([hostId, hostName]) => (
+                    <TouchableOpacity
+                      key={hostId}
+                      activeOpacity={0.7}
+                      style={[styles.filterPill, filterHost === hostId && styles.filterPillActive]}
+                      onPress={() => setFilterHost(filterHost === hostId ? null : hostId)}
+                    >
+                      <Text style={[styles.filterPillText, filterHost === hostId && styles.filterPillTextActive]}>{hostName}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
               )}
 
               {/* Create Invoice button */}
@@ -612,7 +766,7 @@ export function CleanerInvoicesScreen() {
                 <View style={styles.emptyState}>
                   <Ionicons name="document-text-outline" size={48} color={Colors.textDim} />
                   <Text style={styles.emptyTitle}>
-                    {tabKey === 'Pending' ? 'No pending invoices' : tabKey === 'Sent' ? 'No sent invoices' : 'No invoices yet'}
+                    {tabKey === 'Draft' ? 'No drafts' : tabKey === 'Sent' ? 'No sent invoices' : tabKey === 'Paid' ? 'No paid invoices' : 'No invoices yet'}
                   </Text>
                   <Text style={styles.emptyDesc}>
                     Tap "Create Invoice" to auto-generate invoices from your recent cleaning schedule.
@@ -628,6 +782,8 @@ export function CleanerInvoicesScreen() {
                     onEditLine={handleEditLine}
                     onAddLine={handleAddLine}
                     onDeleteLine={handleDeleteLine}
+                    onResend={handleResend}
+                    onDispute={handleDispute}
                   />
                 ))
               )}
@@ -655,6 +811,28 @@ const styles = StyleSheet.create({
     padding: Spacing.sm, marginBottom: Spacing.md, borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.20)',
   },
   errorBannerText: { fontSize: FontSize.xs, color: Colors.red, flex: 1, lineHeight: 16 },
+
+  // Monthly banner
+  monthlyBanner: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: Colors.greenDim, borderRadius: Radius.md,
+    padding: Spacing.md, marginBottom: Spacing.md,
+    borderWidth: 0.5, borderColor: 'rgba(30,206,110,0.2)',
+  },
+  monthlyLabel: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
+  monthlyAmount: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.green },
+
+  // Host filter
+  filterPill: {
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: Radius.pill,
+    backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder,
+    marginRight: Spacing.xs,
+  },
+  filterPillActive: {
+    backgroundColor: Colors.primary, borderColor: Colors.primary,
+  },
+  filterPillText: { fontSize: FontSize.xs, color: Colors.textDim, fontWeight: '500' },
+  filterPillTextActive: { color: '#fff', fontWeight: '600' },
 
   // Period selector
   periodRow: {

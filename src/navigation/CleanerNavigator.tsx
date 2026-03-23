@@ -201,6 +201,14 @@ export function CleanerPillNavigator() {
     setActiveIndex(page);
   }, []);
 
+  // Swipe right past HQ → open Settings
+  const onScrollEndDrag = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    if (activeIndex === 0 && x <= 0) {
+      navigation.navigate('Settings');
+    }
+  }, [navigation, activeIndex]);
+
   const onPressTab = useCallback((index: number) => {
     scrollRef.current?.scrollTo({ x: index * SCREEN_WIDTH, animated: true });
     setActiveIndex(index);
@@ -214,10 +222,12 @@ export function CleanerPillNavigator() {
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
-        bounces={false}
+        bounces
+        alwaysBounceHorizontal
         scrollEventThrottle={16}
         onScroll={onScroll}
         onScrollBeginDrag={onScrollBeginDrag}
+        onScrollEndDrag={onScrollEndDrag}
         onMomentumScrollEnd={onMomentumScrollEnd}
         decelerationRate="fast"
       >

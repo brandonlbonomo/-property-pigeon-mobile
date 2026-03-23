@@ -264,8 +264,27 @@ export const useDataStore = create<DataState>((set, get) => ({
       try {
         const raw = await apiFetch('/api/props');
         const apiData = Array.isArray(raw) ? raw : (raw?.props ?? []);
-        // Only include properties that exist in the user's local Manage Properties list
-        // This prevents orphaned backend props (like "B STREET") from leaking through
+
+        // If local properties list is empty, trust the backend entirely
+        // (user may have just signed in on a new device)
+        if (localProps.length === 0) {
+          const result = apiData.map((p: any) => ({
+            id: p.id || p.prop_id,
+            prop_id: p.id || p.prop_id,
+            label: p.label || p.name,
+            name: p.name,
+            isAirbnb: p.isAirbnb ?? true,
+            units: p.units,
+          }));
+          // Sync backend properties into the local profile
+          if (result.length > 0) {
+            useUserStore.getState().setProfile({ properties: result });
+          }
+          set({ props: { data: result, fetchedAt: Date.now() } });
+          return result;
+        }
+
+        // Local props exist — merge with backend, filtering orphans
         const localIds = new Set(localProps.map(p => p.id));
         const validApiProps = apiData.filter((p: any) => localIds.has(p.id || p.prop_id));
         const validApiIds = new Set(validApiProps.map((p: any) => p.id || p.prop_id));
@@ -283,41 +302,55 @@ export const useDataStore = create<DataState>((set, get) => ({
   // Fetch calendar events from Airbnb iCal feeds
   // First sync is awaited so data appears immediately; subsequent syncs are background
   fetchCalendarEvents: async (force = false) => {
+    // No properties = no calendar data. Period. Check BEFORE cache.
+    const props = useUserStore.getState().profile?.properties || [];
+    if (props.length === 0) {
+      set({ icalEvents: { data: [], fetchedAt: Date.now() } });
+      return [];
+    }
+    // No iCal URLs on any property = no calendar data.
+    const hasIcalUrls = props.some(p => p.icalUrls?.some(u => u));
+    if (!hasIcalUrls) {
+      set({ icalEvents: { data: [], fetchedAt: Date.now() } });
+      return [];
+    }
+
     const cached = get().icalEvents;
     if (!force && isFresh(cached)) return cached!.data;
     if (!isDataActive()) {
       set({ icalEvents: { data: [], fetchedAt: Date.now() } });
       return [];
     }
+
     return dedup('icalEvents', async () => {
       try {
-        const props = useUserStore.getState().profile?.properties || [];
-        const hasIcalUrls = props.some(p => p.icalUrls?.some(u => u));
-        if (hasIcalUrls) {
-          // Await sync when we have no cached events (first load / after invalidation).
-          // Background sync on subsequent refreshes so UI stays fast.
-          const hasCachedEvents = (get().icalEvents?.data?.length ?? 0) > 0;
-          if (hasCachedEvents && !force) {
-            apiFetch('/api/ical/sync', { method: 'POST' }).catch(() => {});
-          } else {
-            try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch {}
-          }
+        // Await sync when we have no cached events (first load / after invalidation).
+        // Background sync on subsequent refreshes so UI stays fast.
+        const hasCachedEvents = (get().icalEvents?.data?.length ?? 0) > 0;
+        if (hasCachedEvents && !force) {
+          apiFetch('/api/ical/sync', { method: 'POST' }).catch(() => {});
+        } else {
+          try { await apiFetch('/api/ical/sync', { method: 'POST' }); } catch {}
         }
         const raw = await apiFetch('/api/calendar/events');
         const events = Array.isArray(raw) ? raw : (raw?.events ?? []);
 
-        const data = events.map((e: any) => ({
-          check_in: (e.check_in ?? '').slice(0, 10),
-          check_out: (e.check_out ?? '').slice(0, 10),
-          prop_id: e.prop_id ?? '',
-          feed_key: e.feed_key ?? e.prop_id ?? '',
-          summary: e.summary ?? '',
-          nights: e.nights ?? 0,
-          booking_source: e.booking_source ?? '',
-          guest_name: e.guest_name ?? null,
-          listing_name: e.listing_name ?? '',
-          event_type: e.event_type ?? '',
-        }));
+        // Only include events for properties the user actually has
+        const propIds = new Set(props.map(p => p.id || p.name));
+        const data = events
+          .filter((e: any) => propIds.has(e.prop_id))
+          .map((e: any) => ({
+            check_in: (e.check_in ?? '').slice(0, 10),
+            check_out: (e.check_out ?? '').slice(0, 10),
+            prop_id: e.prop_id ?? '',
+            feed_key: e.feed_key ?? e.prop_id ?? '',
+            summary: e.summary ?? '',
+            nights: e.nights ?? 0,
+            booking_source: e.booking_source ?? '',
+            guest_name: e.guest_name ?? null,
+            listing_name: e.listing_name ?? '',
+            event_type: e.event_type ?? '',
+          }));
 
         set({ icalEvents: { data, fetchedAt: Date.now() }, lastError: null });
         return data;

@@ -905,6 +905,145 @@ def auth_login():
     logger.info("Login success: email=%s user=%s ip=%s", email, user["id"], ip)
     return jsonify({"ok": True, "user_id": user["id"], "token": token, "email": email, "username": user.get("username", ""), "role": user.get("role", "owner")})
 
+@app.route("/api/auth/apple", methods=["POST"])
+@rate_limit(10, 300)
+def auth_apple():
+    """Sign in with Apple — verify identity token and create/login user."""
+    try:
+        import jwt  # PyJWT
+    except ImportError:
+        return jsonify({"ok": False, "error": "Server missing PyJWT dependency. Install with: pip install PyJWT cryptography"}), 500
+    body = request.get_json(force=True) or {}
+    identity_token = body.get("identity_token")
+    full_name = (body.get("full_name") or "").strip()
+    provided_email = (body.get("email") or "").strip().lower()
+
+    if not identity_token:
+        return jsonify({"ok": False, "error": "Missing identity token"}), 400
+
+    # 1. Fetch Apple's public keys
+    try:
+        apple_keys_resp = requests.get("https://appleid.apple.com/auth/keys", timeout=10)
+        apple_keys = apple_keys_resp.json()
+    except Exception:
+        return jsonify({"ok": False, "error": "Could not fetch Apple public keys"}), 502
+
+    # 2. Decode the identity token header to find the key ID
+    try:
+        unverified_header = jwt.get_unverified_header(identity_token)
+        kid = unverified_header.get("kid")
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid identity token"}), 400
+
+    # 3. Find the matching Apple public key
+    apple_key = None
+    for key in apple_keys.get("keys", []):
+        if key["kid"] == kid:
+            apple_key = key
+            break
+    if not apple_key:
+        return jsonify({"ok": False, "error": "Apple key not found"}), 400
+
+    # 4. Verify the token
+    try:
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(apple_key))
+        payload = jwt.decode(
+            identity_token,
+            public_key,
+            algorithms=["RS256"],
+            audience="com.portfoliopigeon.mobile",
+            issuer="https://appleid.apple.com",
+        )
+    except jwt.ExpiredSignatureError:
+        return jsonify({"ok": False, "error": "Token expired"}), 401
+    except Exception as e:
+        logger.warning("Apple token verification failed: %s", e)
+        return jsonify({"ok": False, "error": "Token verification failed"}), 401
+
+    # 5. Extract user info from verified token
+    apple_sub = payload.get("sub")  # Stable Apple user ID
+    email = payload.get("email") or provided_email
+    if not apple_sub:
+        return jsonify({"ok": False, "error": "No subject in token"}), 400
+    if not email:
+        return jsonify({"ok": False, "error": "No email provided"}), 400
+    email = email.strip().lower()
+
+    # 6. Find or create user
+    users = load_users()
+    is_new = False
+
+    # Check if user exists by email
+    user = users.get(email)
+    user_email = email
+
+    # If not found by email, check by apple_sub in all users
+    if not user:
+        for ue, u in users.items():
+            if u.get("apple_sub") == apple_sub:
+                user = u
+                user_email = ue
+                break
+
+    if user:
+        # Existing user — login
+        old_token = user.get("token")
+        if old_token:
+            _invalidate_token(old_token)
+        token = secrets.token_hex(32)
+        user["token"] = token
+        user["token_issued_at"] = _time.time()
+        user["apple_sub"] = apple_sub  # Link Apple ID
+        if full_name and not user.get("username"):
+            user["username"] = full_name.lower().replace(" ", "")
+        with _users_file_lock:
+            save_users(users)
+        _cache_token(token, user["id"], user["token_issued_at"])
+        logger.info("Apple login: email=%s user=%s", user_email, user["id"])
+    else:
+        # New user — register
+        is_new = True
+        user_id = "u_" + secrets.token_hex(8)
+        token = secrets.token_hex(32)
+        username = full_name.lower().replace(" ", "") if full_name else email.split("@")[0]
+        # Ensure username uniqueness
+        base_username = username
+        counter = 1
+        while any((u.get("username") or "").lower() == username for u in users.values()):
+            username = f"{base_username}{counter}"
+            counter += 1
+
+        users[email] = {
+            "id": user_id,
+            "password_hash": "",  # No password for Apple users
+            "token": token,
+            "token_issued_at": _time.time(),
+            "role": "owner",
+            "username": username,
+            "apple_sub": apple_sub,
+            "follow_code": "PPG-" + secrets.token_hex(3).upper(),
+            "referral_code": "REF-" + secrets.token_hex(3).upper(),
+            "referred_by": None,
+            "referral_rewarded": False,
+            "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        }
+        user = users[email]
+        user_email = email
+        with _users_file_lock:
+            save_users(users)
+        _cache_token(token, user["id"], _time.time())
+        logger.info("Apple register: email=%s user=%s", email, user["id"])
+
+    return jsonify({
+        "ok": True,
+        "user_id": user["id"],
+        "token": token,
+        "email": user_email,
+        "username": user.get("username", ""),
+        "role": user.get("role", "owner"),
+        "is_new": is_new,
+    })
+
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
     """Return current user's profile info including role."""
@@ -6498,6 +6637,30 @@ def users_profile(user_id):
             rating_count = len(reviews)
     except Exception:
         pass
+    # Follower/following counts
+    follower_count = 0
+    following_count = 0
+    try:
+        follows = _load_json_file(FOLLOWS_FILE)
+        for f in follows:
+            if f.get("following_id") == user_id:
+                follower_count += 1
+            if f.get("follower_id") == user_id:
+                following_count += 1
+    except Exception:
+        pass
+
+    # Cleaner stats
+    cleaning_count = 0
+    host_count = 0
+    if u.get("role") == "cleaner":
+        try:
+            for f in follows:
+                if f.get("follower_id") == user_id:
+                    host_count += 1
+        except Exception:
+            pass
+
     result = {
         "user_id": u["id"],
         "username": u.get("username", (email or "").split("@")[0]),
@@ -6508,6 +6671,11 @@ def users_profile(user_id):
         "portfolio_score": portfolio_score,
         "avg_rating": avg_rating,
         "rating_count": rating_count,
+        "follower_count": follower_count,
+        "following_count": following_count,
+        "market": u.get("market") or "",
+        "member_since": u.get("created_at") or "",
+        "host_count": host_count if u.get("role") == "cleaner" else None,
     }
     # Only show follow_code to the profile owner
     if getattr(g, 'user_id', None) == user_id:
@@ -8051,6 +8219,85 @@ CITY_APPRECIATION_RATES = {
     "joshua tree": 0.04, "palm springs": 0.038, "key west": 0.035,
 }
 
+# STR cap rates by metro (based on 2024-2025 market data)
+CITY_CAP_RATES_STR = {
+    "austin": 0.055, "boise": 0.065, "nashville": 0.058, "raleigh": 0.065,
+    "tampa": 0.062, "phoenix": 0.060, "dallas": 0.063, "charlotte": 0.065,
+    "denver": 0.055, "atlanta": 0.065, "houston": 0.068, "orlando": 0.060,
+    "jacksonville": 0.070, "san antonio": 0.072, "las vegas": 0.062,
+    "seattle": 0.050, "portland": 0.055, "miami": 0.048, "fort lauderdale": 0.050,
+    "san diego": 0.048, "los angeles": 0.042, "san francisco": 0.040,
+    "new york": 0.038, "chicago": 0.068, "detroit": 0.080, "cleveland": 0.082,
+    "st louis": 0.078, "baltimore": 0.072, "philadelphia": 0.065,
+    "minneapolis": 0.065, "kansas city": 0.072, "indianapolis": 0.075,
+    "columbus": 0.068, "salt lake city": 0.055, "savannah": 0.062,
+    "charleston": 0.058, "asheville": 0.060, "gatlinburg": 0.065,
+    "pigeon forge": 0.065, "destin": 0.062, "gulf shores": 0.065,
+    "myrtle beach": 0.068, "panama city": 0.068, "scottsdale": 0.055,
+    "sedona": 0.058, "park city": 0.050, "big bear": 0.060,
+    "joshua tree": 0.065, "palm springs": 0.058, "key west": 0.045,
+}
+
+# LTR cap rates (generally higher than STR)
+CITY_CAP_RATES_LTR = {
+    "austin": 0.060, "boise": 0.070, "nashville": 0.062, "raleigh": 0.068,
+    "tampa": 0.065, "phoenix": 0.065, "dallas": 0.068, "charlotte": 0.070,
+    "denver": 0.058, "atlanta": 0.070, "houston": 0.072, "orlando": 0.065,
+    "jacksonville": 0.075, "san antonio": 0.078, "las vegas": 0.068,
+    "seattle": 0.052, "portland": 0.058, "miami": 0.050, "fort lauderdale": 0.052,
+    "san diego": 0.050, "los angeles": 0.045, "san francisco": 0.042,
+    "new york": 0.042, "chicago": 0.072, "detroit": 0.090, "cleveland": 0.088,
+    "st louis": 0.082, "baltimore": 0.078, "philadelphia": 0.070,
+    "minneapolis": 0.068, "kansas city": 0.078, "indianapolis": 0.080,
+    "columbus": 0.072, "salt lake city": 0.058, "savannah": 0.065,
+    "charleston": 0.062, "asheville": 0.065, "gatlinburg": 0.070,
+    "pigeon forge": 0.070, "destin": 0.068, "gulf shores": 0.070,
+    "myrtle beach": 0.072, "panama city": 0.072, "scottsdale": 0.058,
+    "sedona": 0.062, "park city": 0.052, "big bear": 0.065,
+    "joshua tree": 0.070, "palm springs": 0.062, "key west": 0.048,
+}
+
+# Default expense ratios by city tier
+CITY_EXPENSE_RATIOS = {
+    # Tier 1 (high cost, lower expense ratio due to higher revenue)
+    "new york": 0.28, "san francisco": 0.28, "los angeles": 0.30,
+    "miami": 0.30, "seattle": 0.30, "san diego": 0.30, "key west": 0.30,
+    # Tier 2
+    "austin": 0.32, "nashville": 0.32, "denver": 0.32, "portland": 0.32,
+    "tampa": 0.33, "phoenix": 0.33, "dallas": 0.33, "atlanta": 0.33,
+    "charlotte": 0.33, "orlando": 0.33, "charleston": 0.32,
+    "fort lauderdale": 0.30, "scottsdale": 0.32, "park city": 0.30,
+    # Tier 3 (lower cost markets, higher expense ratio)
+    "houston": 0.35, "san antonio": 0.36, "jacksonville": 0.36,
+    "indianapolis": 0.38, "kansas city": 0.37, "detroit": 0.40,
+    "cleveland": 0.40, "st louis": 0.38, "baltimore": 0.37,
+}
+
+def _get_cap_rate(market: str, is_str: bool) -> float:
+    """Return city-specific cap rate."""
+    if not market:
+        return 0.065
+    m = market.lower().strip()
+    table = CITY_CAP_RATES_STR if is_str else CITY_CAP_RATES_LTR
+    if m in table:
+        return table[m]
+    for city, rate in table.items():
+        if city in m or m in city:
+            return rate
+    return 0.065
+
+def _get_expense_ratio(market: str) -> float:
+    """Return city-specific expense ratio default."""
+    if not market:
+        return 0.35
+    m = market.lower().strip()
+    if m in CITY_EXPENSE_RATIOS:
+        return CITY_EXPENSE_RATIOS[m]
+    for city, ratio in CITY_EXPENSE_RATIOS.items():
+        if city in m or m in city:
+            return ratio
+    return 0.35
+
 def _get_appreciation_rate(market: str) -> float:
     """Return city-specific appreciation rate, or 3.5% national average."""
     if not market:
@@ -8134,7 +8381,8 @@ def property_valuation(prop_id):
     market = prop.get("market", "")
     appreciation_rate = _get_appreciation_rate(market)
     is_str = prop.get("isAirbnb", False)
-    cap_rate = 0.065  # Default 6.5%
+    cap_rate = _get_cap_rate(market, is_str)
+    expense_ratio = _get_expense_ratio(market)
 
     # ── Gather transaction data ──
     tags = store.get("tags", {})
@@ -8147,8 +8395,9 @@ def property_valuation(prop_id):
     total_exp = 0.0
     earliest_date = None
     latest_date = None
-    # Per-year revenue for trend calculation
+    # Per-year and per-quarter revenue for trend calculation
     rev_by_year = {}
+    rev_by_quarter = {}  # "2026-Q1" -> amount
 
     for tx_id, tx in txs.items():
         prop_tag = tags.get(tx_id)
@@ -8170,9 +8419,13 @@ def property_valuation(prop_id):
 
         if is_income:
             total_rev += amount
-            if d and len(d) >= 4:
+            if d and len(d) >= 7:
                 yr = d[:4]
                 rev_by_year[yr] = rev_by_year.get(yr, 0) + amount
+                mo = int(d[5:7])
+                q = (mo - 1) // 3 + 1
+                qkey = f"{yr}-Q{q}"
+                rev_by_quarter[qkey] = rev_by_quarter.get(qkey, 0) + amount
         else:
             total_exp += amount
 
@@ -8202,13 +8455,18 @@ def property_valuation(prop_id):
     if annual_rev <= 0:
         appreciation_value = purchase_price * ((1 + appreciation_rate) ** years_owned)
         equity_gain = appreciation_value - purchase_price
+        users_check = load_users()
+        is_own_check = any(u.get("id") == uid for u in users_check.values())
         return jsonify({
             "valuation": {
                 "estimate": round(appreciation_value, 0),
-                "equity_gain": round(equity_gain, 0),
-                "purchase_price": purchase_price,
+                "equity_gain": round(equity_gain, 0) if is_own_check else None,
+                "purchase_price": purchase_price if is_own_check else None,
                 "years_owned": round(years_owned, 1),
                 "method": "appreciation_only",
+                "appreciation_rate": round(appreciation_rate * 100, 1),
+                "market": market or None,
+                "is_own": is_own_check,
             },
         })
 
@@ -8217,7 +8475,7 @@ def property_valuation(prop_id):
 
     # ══ METHOD 2: Income/Cap Rate (35%) ══
     # NOI = gross revenue - actual expenses (or gross × 0.35 if no expense data)
-    noi = annual_rev - annual_exp if annual_exp > 0 else annual_rev * 0.35
+    noi = annual_rev - annual_exp if annual_exp > 0 else annual_rev * (1 - expense_ratio)
     m2_value = noi / cap_rate if cap_rate > 0 else 0
 
     # Federal funds rate adjustment
@@ -8255,13 +8513,29 @@ def property_valuation(prop_id):
 
     equity_gain = blended - purchase_price
 
+    # Check if this is the requesting user's own property
+    users = load_users()
+    is_own = False
+    for ue, u in users.items():
+        if u.get("id") == uid:
+            is_own = True
+            break
+
     return jsonify({
         "valuation": {
             "estimate": round(blended, 0),
-            "equity_gain": round(equity_gain, 0),
-            "purchase_price": purchase_price,
+            "equity_gain": round(equity_gain, 0) if is_own else None,
+            "purchase_price": purchase_price if is_own else None,
             "years_owned": round(years_owned, 1),
             "method": "blended_4x",
+            "annual_revenue": round(annual_rev, 0),
+            "annual_expenses": round(annual_exp, 0) if is_own else None,
+            "noi": round(noi, 0) if is_own else None,
+            "cap_rate": round(cap_rate * 100, 1),
+            "appreciation_rate": round(appreciation_rate * 100, 1),
+            "market": market or None,
+            "is_own": is_own,
+            "quarterly_revenue": {k: round(v, 0) for k, v in sorted(rev_by_quarter.items())},
         },
     })
 
@@ -8436,6 +8710,20 @@ def map_properties():
     users = load_users()
     requesting_uid = getattr(g, 'user_id', None)
 
+    # Build set of user IDs the requesting user follows
+    following_ids = set()
+    if requesting_uid:
+        base_f = "/data" if _os.path.isdir("/data") else "."
+        follows_file = f"{base_f}/follows.json"
+        try:
+            with open(follows_file) as ff:
+                follows = json.load(ff)
+            for f in follows:
+                if f.get("follower_id") == requesting_uid:
+                    following_ids.add(f.get("following_id"))
+        except Exception:
+            pass
+
     for email, user_data in users.items():
         uid = user_data.get("id")
         username = user_data.get("username", "")
@@ -8509,6 +8797,7 @@ def map_properties():
                 "owner_id": uid,
                 "owner_username": username,
                 "is_own": is_own,
+                "is_following": uid in following_ids,
                 "photos": (p.get("photos") or [])[:1],  # Only first photo
             })
 

@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
+import { SocialSignInButtons } from '../../components/SocialSignIn';
 
 export function LandingScreen() {
   const navigation = useNavigation<any>();
@@ -28,6 +29,8 @@ export function LandingScreen() {
         </TouchableOpacity>
       </View>
 
+      <SocialSignInButtons />
+
       <Text style={styles.footer}>Track revenue, occupancy, inventory and more</Text>
 
       <TouchableOpacity activeOpacity={0.7}
@@ -50,8 +53,8 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.xl * 2,
   },
   logo: {
-    width: 100, height: 100,
-    marginBottom: Spacing.lg,
+    width: 72, height: 72,
+    marginBottom: Spacing.md,
   },
   title: {
     fontSize: 32,
@@ -68,7 +71,7 @@ const styles = StyleSheet.create({
   },
   actions: {
     gap: Spacing.sm,
-    marginBottom: Spacing.xl,
+    marginBottom: Spacing.xs,
   },
   primaryBtn: {
     backgroundColor: Colors.green,

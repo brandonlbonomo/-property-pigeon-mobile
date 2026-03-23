@@ -154,18 +154,29 @@ export function InvoiceWizardScreen({ navigation }: any) {
     total: number,
     period: string,
     eventUids: string[],
+    extras?: { notes: string; dueDate: string; taxRate: number; taxAmount: number; subtotal: number },
   ) => {
     if (!selectedOwner) return;
     setCreating(true);
+    const invoicePrefs = useCleanerStore.getState().invoicePrefs;
     try {
       const result = await createInvoice({
         hostId: selectedOwner.user_id,
         hostName: selectedOwner.username,
         period,
         lineItems,
+        subtotal: extras?.subtotal ?? total,
+        taxRate: extras?.taxRate ?? 0,
+        taxAmount: extras?.taxAmount ?? 0,
         total,
         status: 'draft',
         event_uids: eventUids,
+        invoiceDate: new Date().toISOString().slice(0, 10),
+        dueDate: extras?.dueDate,
+        notes: extras?.notes,
+        cleanerBusinessName: invoicePrefs.businessName || undefined,
+        cleanerEmail: invoicePrefs.businessEmail || undefined,
+        cleanerPhone: invoicePrefs.businessPhone || undefined,
       });
       if (result) {
         // Save rates
@@ -198,12 +209,12 @@ export function InvoiceWizardScreen({ navigation }: any) {
       {/* Header */}
       <View style={styles.header}>
         {step > 0 ? (
-          <TouchableOpacity activeOpacity={0.5} onPress={() => setStep(s => s - 1)}
+          <TouchableOpacity activeOpacity={0.7} onPress={() => setStep(s => s - 1)}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Ionicons name="chevron-back" size={22} color={Colors.primary} />
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity activeOpacity={0.5} onPress={() => navigation.goBack()}
+          <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.goBack()}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
@@ -211,7 +222,7 @@ export function InvoiceWizardScreen({ navigation }: any) {
         <Text style={styles.headerTitle}>{STEP_LABELS[step]}</Text>
         {step < 3 ? (
           <TouchableOpacity
-            activeOpacity={0.5}
+            activeOpacity={0.7}
             onPress={() => setStep(s => s + 1)}
             disabled={!canGoNext()}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}

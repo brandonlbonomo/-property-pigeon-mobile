@@ -29,7 +29,13 @@ export function glassAlert(
   buttons?: AlertButton[],
 ) {
   const btns = buttons || [{ text: 'OK' }];
-  _setAlert?.({ visible: true, title, message, buttons: btns });
+  if (_setAlert) {
+    _setAlert({ visible: true, title, message, buttons: btns });
+  } else {
+    // Fallback to native alert if provider not mounted
+    const { Alert } = require('react-native');
+    Alert.alert(title, message, btns);
+  }
 }
 
 // Drop-in replacement for Alert.alert
@@ -47,7 +53,7 @@ export function GlassAlertProvider() {
 
   useEffect(() => {
     _setAlert = setState;
-    return () => { _setAlert = null; };
+    // Never null out — provider is at root level and should persist
   }, []);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;

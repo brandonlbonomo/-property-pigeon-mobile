@@ -14,7 +14,14 @@ import * as SecureStore from 'expo-secure-store';
 import { useOnboardingStore } from './src/store/onboardingStore';
 import { useUserStore } from './src/store/userStore';
 import { GlassAlertProvider } from './src/components/GlassAlert';
-import { StripeProvider } from '@stripe/stripe-react-native';
+
+// Stripe native module may not be available in Expo Go / dev builds
+let StripeProvider: any = ({ children }: any) => children;
+try {
+  StripeProvider = require('@stripe/stripe-react-native').StripeProvider;
+} catch {
+  // Native module not available — payments disabled, use passthrough
+}
 import { useNotificationStore } from './src/store/notificationStore';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { CleanerAppNavigator } from './src/navigation/CleanerAppNavigator';
@@ -44,6 +51,15 @@ export default function App() {
   const [authGate, setAuthGate] = useState<AuthGate>('loading');
   const backgroundedAt = useRef<number | null>(null);
   const [stripeKey, setStripeKey] = useState<string | null>(null);
+
+  // Fetch Stripe publishable key for payment sheet (must be before any early returns)
+  const [stripeKey, setStripeKey] = useState<string | null>(null);
+  useEffect(() => {
+    fetch('https://portfoliopigeon.com/api/invoice/publishable-key')
+      .then(r => r.json())
+      .then(d => { if (d.publishable_key) setStripeKey(d.publishable_key); })
+      .catch(() => {});
+  }, []);
 
   // On 401, clear auth state and redirect to login
   useEffect(() => {
@@ -186,68 +202,43 @@ export default function App() {
     setAuthGate('login');
   }, []);
 
-  if (authGate === 'loading') {
-    return (
-      <GestureHandlerRootView style={styles.root}>
-        <SafeAreaProvider>
-          <StatusBar style="dark" backgroundColor={Colors.bg} />
-          <LoadingScreen />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
-
-  if (authGate === 'biometric') {
-    return (
-      <GestureHandlerRootView style={styles.rootWhite}>
-        <SafeAreaProvider>
-          <StatusBar style="dark" backgroundColor={Colors.bg} />
-          <BiometricSplash
-            onSuccess={handleBiometricSuccess}
-            onFallback={handleBiometricFallback}
-          />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
-
-  if (authGate === 'login') {
-    return (
-      <GestureHandlerRootView style={styles.root}>
-        <SafeAreaProvider>
-          <StatusBar style="dark" backgroundColor={Colors.bg} />
-          <OnboardingNavigator />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
-
-  // Wait for accountType to be resolved before routing
-  if (!accountTypeResolved) {
-    return (
-      <GestureHandlerRootView style={styles.root}>
-        <SafeAreaProvider>
-          <StatusBar style="dark" backgroundColor={Colors.bg} />
-          <LoadingScreen />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
-
   const Navigator = accountType === 'cleaner' ? CleanerAppNavigator : AppNavigator;
 
-  return (
-    <GestureHandlerRootView style={styles.root}>
+  let screenContent: React.ReactNode;
+
+  if (authGate === 'loading') {
+    screenContent = <LoadingScreen />;
+  } else if (authGate === 'biometric') {
+    screenContent = (
+      <BiometricSplash
+        onSuccess={handleBiometricSuccess}
+        onFallback={handleBiometricFallback}
+      />
+    );
+  } else if (authGate === 'login') {
+    screenContent = <OnboardingNavigator />;
+  } else if (!accountTypeResolved) {
+    screenContent = <LoadingScreen />;
+  } else if (stripeKey) {
+    screenContent = (
       <StripeProvider
-        publishableKey={stripeKey || 'pk_placeholder'}
+        publishableKey={stripeKey}
         merchantIdentifier="merchant.com.portfoliopigeon.mobile"
       >
-        <SafeAreaProvider>
-          <StatusBar style="dark" backgroundColor={Colors.bg} />
-          <Navigator />
-          <GlassAlertProvider />
-        </SafeAreaProvider>
+        <Navigator />
       </StripeProvider>
+    );
+  } else {
+    screenContent = <Navigator />;
+  }
+
+  return (
+    <GestureHandlerRootView style={authGate === 'biometric' ? styles.rootWhite : styles.root}>
+      <SafeAreaProvider>
+        <StatusBar style="dark" backgroundColor={Colors.bg} />
+        {screenContent}
+        <GlassAlertProvider />
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

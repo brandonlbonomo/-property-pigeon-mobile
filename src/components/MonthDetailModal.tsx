@@ -202,7 +202,7 @@ export function MonthDetailModal({ visible, yearMonth, onClose }: Props) {
             </View>
           ) : (
             <ScrollView style={styles.list} contentContainerStyle={styles.listContent}
-              keyboardShouldPersistTaps="handled">
+              keyboardShouldPersistTaps="handled" {...({delaysContentTouches: false} as any)}>
               {displayList.map((t, i) => {
                 const isEditing = editingId === t.id;
                 return (

@@ -40,73 +40,62 @@ export function GlossyBarSvg({ width, height, bars, projectionBars, overlayLine 
               BAR GRADIENTS — vibrant fills for light backgrounds
               ══════════════════════════════════════════════ */}
 
-          {/* Green glass — rich emerald, fully opaque */}
-          <LinearGradient id="gG" x1="0" y1="1" x2="0.15" y2="0">
+          {/* Green — solid emerald with subtle gradient */}
+          <LinearGradient id="gG" x1="0" y1="1" x2="0" y2="0">
             <Stop offset="0"    stopColor="#059669" stopOpacity="1" />
-            <Stop offset="0.3"  stopColor="#10B981" stopOpacity="0.95" />
-            <Stop offset="0.55" stopColor="#34D399" stopOpacity="0.85" />
-            <Stop offset="0.75" stopColor="#6EE7B7" stopOpacity="0.7" />
-            <Stop offset="0.9"  stopColor="#A7F3D0" stopOpacity="0.5" />
-            <Stop offset="1"    stopColor="#D1FAE5" stopOpacity="0.35" />
+            <Stop offset="0.4"  stopColor="#10B981" stopOpacity="1" />
+            <Stop offset="0.7"  stopColor="#1ECE6E" stopOpacity="0.95" />
+            <Stop offset="1"    stopColor="#34D399" stopOpacity="0.85" />
           </LinearGradient>
 
-          {/* Red glass — rich ruby */}
-          <LinearGradient id="gR" x1="0" y1="0" x2="0.15" y2="1">
+          {/* Red — solid ruby with subtle gradient */}
+          <LinearGradient id="gR" x1="0" y1="0" x2="0" y2="1">
             <Stop offset="0"    stopColor="#DC2626" stopOpacity="1" />
-            <Stop offset="0.3"  stopColor="#EF4444" stopOpacity="0.95" />
-            <Stop offset="0.55" stopColor="#F87171" stopOpacity="0.85" />
-            <Stop offset="0.75" stopColor="#FCA5A5" stopOpacity="0.7" />
-            <Stop offset="0.9"  stopColor="#FECACA" stopOpacity="0.5" />
-            <Stop offset="1"    stopColor="#FEE2E2" stopOpacity="0.35" />
+            <Stop offset="0.4"  stopColor="#EF4444" stopOpacity="1" />
+            <Stop offset="0.7"  stopColor="#F87171" stopOpacity="0.95" />
+            <Stop offset="1"    stopColor="#FCA5A5" stopOpacity="0.85" />
           </LinearGradient>
 
-          {/* Projected glass — frosted silver with more contrast */}
-          <LinearGradient id="gP" x1="0" y1="1" x2="0.05" y2="0">
-            <Stop offset="0"   stopColor="#6B7280" stopOpacity="0.65" />
-            <Stop offset="0.3" stopColor="#9CA3AF" stopOpacity="0.55" />
-            <Stop offset="0.6" stopColor="#D1D5DB" stopOpacity="0.45" />
-            <Stop offset="0.85" stopColor="#E5E7EB" stopOpacity="0.35" />
-            <Stop offset="1"   stopColor="#F3F4F6" stopOpacity="0.25" />
+          {/* Projected — solid grey */}
+          <LinearGradient id="gP" x1="0" y1="1" x2="0" y2="0">
+            <Stop offset="0"   stopColor="#9CA3AF" stopOpacity="0.7" />
+            <Stop offset="0.5" stopColor="#D1D5DB" stopOpacity="0.6" />
+            <Stop offset="1"   stopColor="#E5E7EB" stopOpacity="0.5" />
           </LinearGradient>
-          <LinearGradient id="gPN" x1="0" y1="0" x2="0.05" y2="1">
-            <Stop offset="0"   stopColor="#6B7280" stopOpacity="0.65" />
-            <Stop offset="0.3" stopColor="#9CA3AF" stopOpacity="0.55" />
-            <Stop offset="0.6" stopColor="#D1D5DB" stopOpacity="0.45" />
-            <Stop offset="0.85" stopColor="#E5E7EB" stopOpacity="0.35" />
-            <Stop offset="1"   stopColor="#F9FAFB" stopOpacity="0.15" />
+          <LinearGradient id="gPN" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0"   stopColor="#9CA3AF" stopOpacity="0.7" />
+            <Stop offset="0.5" stopColor="#D1D5DB" stopOpacity="0.6" />
+            <Stop offset="1"   stopColor="#E5E7EB" stopOpacity="0.5" />
           </LinearGradient>
 
           {/* ══════════════════════════════════════════════
               GLASS EFFECT LAYERS — iOS 26 liquid glass
               ══════════════════════════════════════════════ */}
 
-          {/* Top refraction — subtle highlight */}
+          {/* Top refraction — very subtle */}
           <LinearGradient id="hl" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0"    stopColor="white" stopOpacity="0.35" />
-            <Stop offset="0.08" stopColor="white" stopOpacity="0.15" />
-            <Stop offset="0.2"  stopColor="white" stopOpacity="0.05" />
-            <Stop offset="0.4"  stopColor="white" stopOpacity="0" />
+            <Stop offset="0"    stopColor="white" stopOpacity="0.15" />
+            <Stop offset="0.1"  stopColor="white" stopOpacity="0.05" />
+            <Stop offset="0.25" stopColor="white" stopOpacity="0" />
           </LinearGradient>
 
-          {/* Bottom inner glow */}
+          {/* Bottom inner glow — minimal */}
           <LinearGradient id="ig" x1="0" y1="1" x2="0" y2="0">
-            <Stop offset="0"    stopColor="white" stopOpacity="0.3" />
-            <Stop offset="0.1"  stopColor="white" stopOpacity="0.15" />
-            <Stop offset="0.25" stopColor="white" stopOpacity="0.05" />
-            <Stop offset="0.5"  stopColor="white" stopOpacity="0" />
+            <Stop offset="0"    stopColor="white" stopOpacity="0.1" />
+            <Stop offset="0.15" stopColor="white" stopOpacity="0" />
           </LinearGradient>
 
-          {/* Center bloom — radial glow */}
+          {/* Center bloom — barely visible */}
           <RadialGradient id="cb" cx="50%" cy="38%" rx="55%" ry="45%">
-            <Stop offset="0"   stopColor="white" stopOpacity="0.25" />
-            <Stop offset="0.35" stopColor="white" stopOpacity="0.08" />
+            <Stop offset="0"   stopColor="white" stopOpacity="0.08" />
+            <Stop offset="0.3" stopColor="white" stopOpacity="0" />
             <Stop offset="1"   stopColor="white" stopOpacity="0" />
           </RadialGradient>
 
-          {/* Frosted edges */}
+          {/* Frosted edges — minimal */}
           <LinearGradient id="fe" x1="0" y1="0" x2="1" y2="0">
-            <Stop offset="0"    stopColor="white" stopOpacity="0.4" />
-            <Stop offset="0.08" stopColor="white" stopOpacity="0.1" />
+            <Stop offset="0"    stopColor="white" stopOpacity="0.12" />
+            <Stop offset="0.06" stopColor="white" stopOpacity="0" />
             <Stop offset="0.5"  stopColor="white" stopOpacity="0" />
             <Stop offset="0.92" stopColor="white" stopOpacity="0.1" />
             <Stop offset="1"    stopColor="white" stopOpacity="0.3" />
@@ -161,6 +150,7 @@ export function GlossyBarSvg({ width, height, bars, projectionBars, overlayLine 
             ══════════════════════════════════════════════ */}
         {bars.map((bar, i) => {
           if (bar.height < 1) return null;
+          const bk = `b-${i}-${bar.height.toFixed(0)}`;
 
           let g: string;
           if (bar.colorType === 'red') g = bar.isActual ? 'gR' : 'gPN';
@@ -171,7 +161,7 @@ export function GlossyBarSvg({ width, height, bars, projectionBars, overlayLine 
           const { x, y, width: w, height: h } = bar;
 
           return (
-            <React.Fragment key={i}>
+            <React.Fragment key={bk}>
               {/* 1 — Main glass body */}
               <Rect x={x} y={y} width={w} height={h} rx={R} ry={R}
                 fill={`url(#${g})`} />

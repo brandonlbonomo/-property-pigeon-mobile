@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
-import { CleanerEvent, InvoiceLineItem } from '../../../store/cleanerStore';
+import { CleanerEvent, InvoiceLineItem, useCleanerStore } from '../../../store/cleanerStore';
 import { fmt$ , localDateStr } from '../../../utils/format';
 import { glassAlert } from '../../../components/GlassAlert';
 
@@ -28,7 +28,7 @@ interface Props {
   onRemoveCleaning: (uid: string) => void;
   onAddManualItem: (item: InvoiceLineItem) => void;
   onRemoveManualItem: (index: number) => void;
-  onCreateInvoice: (lineItems: InvoiceLineItem[], total: number, period: string, eventUids: string[]) => void;
+  onCreateInvoice: (lineItems: InvoiceLineItem[], total: number, period: string, eventUids: string[], extras: { notes: string; dueDate: string; taxRate: number; taxAmount: number; subtotal: number }) => void;
   creating: boolean;
 }
 
@@ -39,6 +39,9 @@ export function ReviewStep({
 }: Props) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [notes, setNotes] = useState('');
+  const invoicePrefs = useCleanerStore(s => s.invoicePrefs);
+  const [dueDays, setDueDays] = useState(invoicePrefs.dueDateDays || 7);
 
   // Group cleanings by property
   const grouped = useMemo(() => {
@@ -75,7 +78,17 @@ export function ReviewStep({
   }, [grouped, rates]);
 
   const allLineItems = [...autoLineItems, ...manualLineItems];
-  const total = allLineItems.reduce((s, li) => s + li.amount, 0);
+  const subtotal = allLineItems.reduce((s, li) => s + li.amount, 0);
+  const taxRate = invoicePrefs.taxRate || 0;
+  const taxAmount = taxRate > 0 ? Math.round(subtotal * taxRate) / 100 : 0;
+  const total = subtotal + taxAmount;
+
+  // Compute due date
+  const dueDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + dueDays);
+    return d.toISOString().slice(0, 10);
+  }, [dueDays]);
 
   // Generate period label from date range
   const period = useMemo(() => {
@@ -99,7 +112,13 @@ export function ReviewStep({
       glassAlert('No Items', 'Add at least one cleaning or manual line item.');
       return;
     }
-    onCreateInvoice(allLineItems, total, period, eventUids);
+    onCreateInvoice(allLineItems, total, period, eventUids, {
+      notes,
+      dueDate,
+      taxRate,
+      taxAmount,
+      subtotal,
+    });
   };
 
   return (
@@ -173,12 +192,12 @@ export function ReviewStep({
               </View>
               <Text style={styles.lineAmount}>{fmt$(item.amount)}</Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity activeOpacity={0.5}
+                <TouchableOpacity activeOpacity={0.7}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   onPress={() => { setEditingIndex(i); setShowAddModal(true); }}>
                   <Ionicons name="pencil" size={16} color={Colors.textSecondary} />
                 </TouchableOpacity>
-                <TouchableOpacity activeOpacity={0.5}
+                <TouchableOpacity activeOpacity={0.7}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   onPress={() => onRemoveManualItem(i)}>
                   <Ionicons name="close-circle" size={18} color={Colors.red} />
@@ -199,11 +218,67 @@ export function ReviewStep({
         <Text style={styles.addBtnText}>Add Line Item</Text>
       </TouchableOpacity>
 
-      {/* Grand total */}
+      {/* Tax + Total */}
+      {taxRate > 0 && (
+        <View style={styles.taxRow}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>Subtotal</Text>
+            <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>{fmt$(subtotal)}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+            <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>Tax ({taxRate}%)</Text>
+            <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary }}>{fmt$(taxAmount)}</Text>
+          </View>
+        </View>
+      )}
       <View style={styles.totalRow}>
-        <Text style={styles.totalLabel}>Grand Total</Text>
+        <Text style={styles.totalLabel}>Total Due</Text>
         <Text style={styles.totalValue}>{fmt$(total)}</Text>
       </View>
+
+      {/* Due Date */}
+      <View style={styles.dueDateRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>Due Date</Text>
+          <Text style={{ fontSize: FontSize.xs, color: Colors.textDim }}>
+            {new Date(dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+          </Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6 }}>
+          {[7, 14, 30].map(d => (
+            <TouchableOpacity key={d} activeOpacity={0.7}
+              style={[styles.duePill, dueDays === d && styles.duePillActive]}
+              onPress={() => setDueDays(d)}>
+              <Text style={[styles.duePillText, dueDays === d && styles.duePillTextActive]}>Net {d}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {/* Notes */}
+      <View style={styles.notesWrap}>
+        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text, marginBottom: 6 }}>Notes (optional)</Text>
+        <TextInput
+          style={styles.notesInput}
+          value={notes}
+          onChangeText={setNotes}
+          placeholder="Add a note for the host..."
+          placeholderTextColor={Colors.textDim}
+          multiline
+          numberOfLines={3}
+          textAlignVertical="top"
+        />
+      </View>
+
+      {/* Business info preview */}
+      {(invoicePrefs.businessName || invoicePrefs.businessEmail) && (
+        <View style={styles.bizPreview}>
+          <Ionicons name="business-outline" size={14} color={Colors.textDim} />
+          <Text style={{ fontSize: FontSize.xs, color: Colors.textDim, flex: 1 }}>
+            From: {invoicePrefs.businessName}{invoicePrefs.businessEmail ? ` · ${invoicePrefs.businessEmail}` : ''}{invoicePrefs.businessPhone ? ` · ${invoicePrefs.businessPhone}` : ''}
+          </Text>
+        </View>
+      )}
 
       {/* Create button */}
       <TouchableOpacity
@@ -450,6 +525,39 @@ const styles = StyleSheet.create({
     }),
   },
   createBtnText: { color: '#fff', fontSize: FontSize.md, fontWeight: '600' },
+  taxRow: {
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    backgroundColor: Colors.glassDark, borderRadius: Radius.md,
+    marginBottom: Spacing.xs,
+  },
+  dueDateRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: Colors.glassHeavy, borderRadius: Radius.xl,
+    padding: Spacing.md, marginBottom: Spacing.md,
+    borderWidth: 0.5, borderColor: Colors.glassBorder,
+  },
+  duePill: {
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: Radius.pill,
+    backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder,
+  },
+  duePillActive: { backgroundColor: Colors.greenDim, borderColor: Colors.primary },
+  duePillText: { fontSize: FontSize.xs, color: Colors.textDim, fontWeight: '500' },
+  duePillTextActive: { color: Colors.primary, fontWeight: '600' },
+  notesWrap: {
+    backgroundColor: Colors.glassHeavy, borderRadius: Radius.xl,
+    padding: Spacing.md, marginBottom: Spacing.md,
+    borderWidth: 0.5, borderColor: Colors.glassBorder,
+  },
+  notesInput: {
+    backgroundColor: Colors.glassDark, borderRadius: Radius.md,
+    padding: Spacing.sm, color: Colors.text, fontSize: FontSize.sm,
+    minHeight: 60, borderWidth: 0.5, borderColor: Colors.glassBorder,
+  },
+  bizPreview: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    padding: Spacing.sm, marginBottom: Spacing.md,
+    backgroundColor: Colors.glassDark, borderRadius: Radius.sm,
+  },
 });
 
 const modalStyles = StyleSheet.create({

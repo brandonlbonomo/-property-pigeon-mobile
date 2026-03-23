@@ -35,9 +35,11 @@ export interface InvoiceLineItem {
   cleaningType: string;
   rate: number;
   amount: number;
+  quantity?: number;
   uid?: string;
   unit_name?: string;
   feed_key?: string;
+  description?: string;
 }
 
 export interface PropertyUnit {
@@ -51,17 +53,66 @@ export interface OwnerProperty {
   units: PropertyUnit[];
 }
 
+export type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'paid' | 'overdue';
+export type DisputeStatus = 'none' | 'disputed' | 'resolved';
+export type PaymentMethod = 'card' | 'ach' | 'offline' | null;
+export type InvoiceFrequency = 'every' | 'every_2' | 'every_4' | 'monthly';
+
+export interface InvoicePreferences {
+  autoGenerate: boolean;
+  frequency: InvoiceFrequency;
+  dueDateDays: number; // net N days
+  businessName: string;
+  businessEmail: string;
+  businessPhone: string;
+  taxRate: number; // percentage, 0 = no tax
+  venmoHandle: string;
+  paypalHandle: string;
+  zelleHandle: string;
+}
+
+export const DEFAULT_INVOICE_PREFS: InvoicePreferences = {
+  autoGenerate: false,
+  frequency: 'every',
+  dueDateDays: 7,
+  businessName: '',
+  businessEmail: '',
+  businessPhone: '',
+  venmoHandle: '',
+  paypalHandle: '',
+  zelleHandle: '',
+  taxRate: 0,
+};
+
 export interface CleanerInvoice {
   id: string;
   hostId: string;
   hostName: string;
+  hostEmail?: string;
   period: string;
   lineItems: InvoiceLineItem[];
+  subtotal: number;
+  taxRate?: number;
+  taxAmount?: number;
   total: number;
-  status: 'draft' | 'sent' | 'paid';
+  status: InvoiceStatus;
   createdAt: string;
   event_uids: string[];
+  invoiceNumber?: string; // INV-0001
+  invoiceDate?: string;
+  dueDate?: string;
+  notes?: string;
+  paymentMethod?: PaymentMethod;
+  viewedAt?: string;
+  paidAt?: string;
+  disputeStatus?: DisputeStatus;
+  disputeNotes?: { from: 'host' | 'cleaner'; text: string; date: string }[];
+  cleanerBusinessName?: string;
+  cleanerEmail?: string;
+  cleanerPhone?: string;
 }
+
+const INVOICE_PREFS_KEY = 'pp_invoice_prefs';
 
 interface CleanerState {
   schedule: CleanerEvent[];
@@ -72,6 +123,7 @@ interface CleanerState {
   loading: boolean;
   newBookingUids: Set<string>;
   seenUidsLoaded: boolean;
+  invoicePrefs: InvoicePreferences;
 
   fetchSchedule: (force?: boolean) => Promise<void>;
   fetchHistory: (force?: boolean) => Promise<void>;
@@ -81,12 +133,17 @@ interface CleanerState {
   unfollowOwner: (followId: string) => Promise<void>;
   fetchInvoices: () => Promise<void>;
   createInvoice: (invoice: Omit<CleanerInvoice, 'id' | 'createdAt'>) => Promise<CleanerInvoice | null>;
-  updateInvoice: (id: string, lineItems: InvoiceLineItem[], total: number) => void;
+  updateInvoice: (id: string, updates: Partial<CleanerInvoice>) => void;
   deleteInvoice: (id: string) => Promise<void>;
   sendInvoice: (invoiceId: string) => Promise<void>;
   fetchInvoicedUids: () => Promise<void>;
   fetchOwnerUnits: (ownerId: string) => Promise<OwnerProperty[]>;
   dismissNewBookings: () => void;
+  loadInvoicePrefs: () => Promise<void>;
+  saveInvoicePrefs: (prefs: Partial<InvoicePreferences>) => Promise<void>;
+  disputeInvoice: (invoiceId: string, notes: string) => Promise<void>;
+  resolveDispute: (invoiceId: string) => Promise<void>;
+  resendInvoice: (invoiceId: string) => Promise<void>;
 }
 
 export const useCleanerStore = create<CleanerState>((set, get) => ({
@@ -98,6 +155,7 @@ export const useCleanerStore = create<CleanerState>((set, get) => ({
   loading: false,
   newBookingUids: new Set<string>(),
   seenUidsLoaded: false,
+  invoicePrefs: { ...DEFAULT_INVOICE_PREFS },
 
   fetchSchedule: async (force) => {
     set({ loading: true });
@@ -234,16 +292,22 @@ export const useCleanerStore = create<CleanerState>((set, get) => ({
     }
   },
 
-  updateInvoice: (id, lineItems, total) => {
+  updateInvoice: (id, updates) => {
     const prev = get().invoices;
     set(s => ({
       invoices: s.invoices.map(inv =>
-        inv.id === id ? { ...inv, lineItems, total } : inv
+        inv.id === id ? { ...inv, ...updates } : inv
       ),
     }));
+    const payload: any = { invoice_id: id, ...updates };
+    // Map lineItems to line_items for API compatibility
+    if (updates.lineItems) {
+      payload.line_items = updates.lineItems;
+      delete payload.lineItems;
+    }
     apiFetch('/api/cleaner/invoices/update', {
       method: 'PUT',
-      body: JSON.stringify({ invoice_id: id, line_items: lineItems, total }),
+      body: JSON.stringify(payload),
     }).catch(() => {
       set({ invoices: prev });
     });
@@ -298,5 +362,71 @@ export const useCleanerStore = create<CleanerState>((set, get) => ({
 
   dismissNewBookings: () => {
     set({ newBookingUids: new Set<string>() });
+  },
+
+  loadInvoicePrefs: async () => {
+    try {
+      const raw = await SecureStore.getItemAsync(INVOICE_PREFS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        set({ invoicePrefs: { ...DEFAULT_INVOICE_PREFS, ...parsed } });
+      }
+    } catch { /* ignore */ }
+  },
+
+  saveInvoicePrefs: async (prefs) => {
+    const current = get().invoicePrefs;
+    const merged = { ...current, ...prefs };
+    set({ invoicePrefs: merged });
+    try {
+      await SecureStore.setItemAsync(INVOICE_PREFS_KEY, JSON.stringify(merged));
+      await apiFetch('/api/cleaner/invoice-prefs', {
+        method: 'PUT',
+        body: JSON.stringify(merged),
+      });
+    } catch { /* ignore */ }
+  },
+
+  disputeInvoice: async (invoiceId, notes) => {
+    const prev = get().invoices;
+    set(s => ({
+      invoices: s.invoices.map(inv =>
+        inv.id === invoiceId ? { ...inv, disputeStatus: 'disputed' as const } : inv
+      ),
+    }));
+    try {
+      await apiFetch('/api/cleaner/invoices/dispute', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_id: invoiceId, notes }),
+      });
+    } catch {
+      set({ invoices: prev });
+    }
+  },
+
+  resolveDispute: async (invoiceId) => {
+    const prev = get().invoices;
+    set(s => ({
+      invoices: s.invoices.map(inv =>
+        inv.id === invoiceId ? { ...inv, disputeStatus: 'resolved' as const } : inv
+      ),
+    }));
+    try {
+      await apiFetch('/api/cleaner/invoices/resolve-dispute', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_id: invoiceId }),
+      });
+    } catch {
+      set({ invoices: prev });
+    }
+  },
+
+  resendInvoice: async (invoiceId) => {
+    try {
+      await apiFetch('/api/cleaner/invoices/resend', {
+        method: 'POST',
+        body: JSON.stringify({ invoice_id: invoiceId }),
+      });
+    } catch { /* ignore */ }
   },
 }));

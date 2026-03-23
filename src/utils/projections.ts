@@ -229,7 +229,7 @@ export function aggregateToAnnual(months: MonthPoint[]): AnnualPoint[] {
 export function getAvailableYears(): number[] {
   const currentYear = new Date().getFullYear();
   const years: number[] = [];
-  for (let y = 2020; y <= currentYear + 4; y++) {
+  for (let y = 2024; y <= currentYear + 4; y++) {
     years.push(y);
   }
   return years;

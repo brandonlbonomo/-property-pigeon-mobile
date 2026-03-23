@@ -124,27 +124,43 @@ export const useUserStore = create<UserState>((set, get) => ({
         rcActive = await checkProEntitlement();
       } catch {}
 
+      // If RC says inactive but we were previously active, try restoring purchases
+      if (!rcActive && current.isSubscriptionActive) {
+        try {
+          const { restorePurchases, isCustomerEntitled } = require('../services/revenueCat');
+          const restored = await restorePurchases();
+          if (restored && isCustomerEntitled(restored)) {
+            rcActive = true;
+          }
+        } catch {}
+      }
+
       // Also fetch server-side flags (founder, lifetimeFree, is_active)
       try {
         const res = await apiFetch('/api/billing/status');
+        const isActive = rcActive || res.is_active || res.is_founder || res.lifetime_free;
         const updated = {
           ...current,
           isFounder: res.is_founder,
           lifetimeFree: res.lifetime_free,
-          isSubscriptionActive: rcActive || res.is_active || res.is_founder || res.lifetime_free,
+          subscriptionStatus: res.subscription_status,
+          subscriptionPlan: res.subscription_plan,
+          currentPeriodEnd: res.subscription_current_period_end,
+          isSubscriptionActive: isActive,
         };
         await SecureStore.setItemAsync(PROFILE_KEY, JSON.stringify(updated));
         set({ profile: updated });
       } catch {
-        // If API fails, preserve current subscription state (don't reset to false)
-        if (rcActive !== current.isSubscriptionActive) {
+        // If API fails, never downgrade — preserve current subscription state
+        if (rcActive && !current.isSubscriptionActive) {
           const updated = {
             ...current,
-            isSubscriptionActive: rcActive || current.isSubscriptionActive || current.isFounder || current.lifetimeFree,
+            isSubscriptionActive: true,
           };
           await SecureStore.setItemAsync(PROFILE_KEY, JSON.stringify(updated));
           set({ profile: updated });
         }
+        // If both RC and API fail, keep whatever was persisted
       }
     } else {
       // Non-iOS: Stripe is the source of truth
@@ -157,11 +173,13 @@ export const useUserStore = create<UserState>((set, get) => ({
           currentPeriodEnd: res.subscription_current_period_end,
           isFounder: res.is_founder,
           lifetimeFree: res.lifetime_free,
-          isSubscriptionActive: res.is_active,
+          isSubscriptionActive: res.is_active || res.is_founder || res.lifetime_free,
         };
         await SecureStore.setItemAsync(PROFILE_KEY, JSON.stringify(updated));
         set({ profile: updated });
-      } catch {}
+      } catch {
+        // API failure — preserve current state, don't lock out
+      }
     }
   },
 

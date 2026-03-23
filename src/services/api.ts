@@ -116,6 +116,40 @@ export async function apiDeleteAccount(password?: string): Promise<{ ok: boolean
   });
 }
 
+// ── Social auth helpers ──
+
+export async function apiAppleSignIn(
+  identityToken: string,
+  fullName?: { givenName?: string | null; familyName?: string | null } | null,
+  email?: string | null,
+): Promise<{ ok: boolean; token: string; user_id: number; email: string; username?: string; role?: string; is_new?: boolean }> {
+  const res = await apiFetch('/api/auth/apple', {
+    method: 'POST',
+    body: JSON.stringify({
+      identity_token: identityToken,
+      full_name: fullName ? `${fullName.givenName || ''} ${fullName.familyName || ''}`.trim() : undefined,
+      email: email || undefined,
+    }),
+  });
+  if (res.token) {
+    setToken(res.token);
+  }
+  return res;
+}
+
+export async function apiGoogleSignIn(
+  idToken: string,
+): Promise<{ ok: boolean; token: string; user_id: number; email: string; username?: string; role?: string; is_new?: boolean }> {
+  const res = await apiFetch('/api/auth/google', {
+    method: 'POST',
+    body: JSON.stringify({ id_token: idToken }),
+  });
+  if (res.token) {
+    setToken(res.token);
+  }
+  return res;
+}
+
 // ── Cleaner search & follow helpers ──
 
 export async function apiSearchUsers(

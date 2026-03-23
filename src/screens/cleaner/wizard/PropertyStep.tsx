@@ -65,7 +65,7 @@ export function PropertyStep({
 
       {/* Select All */}
       <TouchableOpacity
-        activeOpacity={0.5}
+        activeOpacity={0.7}
         style={[
           styles.selectAllBtn,
           someSelected && styles.selectAllBtnPartial,

@@ -12,6 +12,7 @@ import { useOnboardingStore } from '../../store/onboardingStore';
 import { useUserStore } from '../../store/userStore';
 import { apiLogin, setToken } from '../../services/api';
 import { glassAlert } from '../../components/GlassAlert';
+import { SocialSignInButtons } from '../../components/SocialSignIn';
 
 export function SignInScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
@@ -118,15 +119,35 @@ export function SignInScreen({ navigation }: any) {
     const storedPortfolio = await SecureStore.getItemAsync('pp_portfolio_type') as 'str' | 'ltr' | 'both' | null;
     const storedUsername = await SecureStore.getItemAsync('pp_username');
 
+    // Preserve existing profile state during restore
+    const existing = useUserStore.getState().profile;
+
+    // Verify accountType from backend to prevent stale profile issues
+    let accountType = existing?.accountType;
+    try {
+      const { apiFetch } = require('../../services/api');
+      const me = await apiFetch('/api/auth/me');
+      if (me?.role) {
+        accountType = me.role === 'cleaner' ? 'cleaner' : 'owner';
+      }
+    } catch { /* keep existing accountType */ }
+
+    const isCleaner = accountType === 'cleaner';
     await setProfile({
       email: storedEmail || '',
       username: storedUsername || undefined,
-      portfolioType: storedPortfolio || 'str',
-      properties: [],
+      accountType,
+      portfolioType: isCleaner ? undefined : (storedPortfolio || 'str'),
       hasActivatedData: true,
+      isSubscriptionActive: existing?.isSubscriptionActive,
+      isFounder: existing?.isFounder,
+      lifetimeFree: existing?.lifetimeFree,
+      subscriptionStatus: existing?.subscriptionStatus,
+      subscriptionPlan: existing?.subscriptionPlan,
+      currentPeriodEnd: existing?.currentPeriodEnd,
     });
 
-    await complete(storedPortfolio);
+    await complete(isCleaner ? 'str' : storedPortfolio);
   };
 
   const promptBiometricEnrollment = async () => {
@@ -174,15 +195,21 @@ export function SignInScreen({ navigation }: any) {
         ? null  // GAP 4: portfolioType is meaningless for cleaners
         : (await SecureStore.getItemAsync('pp_portfolio_type') as 'str' | 'ltr' | 'both' | null);
 
-      // Preserve existing properties — don't wipe them on login
-      const existingProps = useUserStore.getState().profile?.properties;
+      // Preserve existing profile state during login — never wipe properties
+      const existing = useUserStore.getState().profile;
       await setProfile({
         email: res.email,
         username: res.username || undefined,
         accountType: isCleaner ? 'cleaner' : 'owner',
         portfolioType: isCleaner ? undefined : (storedPortfolio || 'str'),
-        ...(existingProps?.length ? {} : { properties: [] }), // Only set empty if no existing
         hasActivatedData: true,
+        // Preserve existing data — don't overwrite with empty arrays
+        isSubscriptionActive: existing?.isSubscriptionActive,
+        isFounder: existing?.isFounder,
+        lifetimeFree: existing?.lifetimeFree,
+        subscriptionStatus: existing?.subscriptionStatus,
+        subscriptionPlan: existing?.subscriptionPlan,
+        currentPeriodEnd: existing?.currentPeriodEnd,
       });
 
       // Prompt biometric enrollment before completing (so user sees it)
@@ -278,6 +305,8 @@ export function SignInScreen({ navigation }: any) {
             <Text style={styles.biometricText}>Use Face ID / Touch ID</Text>
           </TouchableOpacity>
         )}
+
+        <SocialSignInButtons />
       </ScrollView>
     </KeyboardAvoidingView>
   );

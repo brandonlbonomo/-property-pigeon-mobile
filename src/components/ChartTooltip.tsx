@@ -58,7 +58,7 @@ export function ChartTooltip({ data, chartLeft }: Props) {
   // Clamp position
   const rawLeft = data.barX - TOOLTIP_W / 2;
   const clampedLeft = Math.max(4, Math.min(rawLeft, SCREEN_W - chartLeft - TOOLTIP_W - 4));
-  const clampedBottom = Math.min(data.barY + 6, 90);
+  const clampedBottom = Math.min(data.barY + 6, 60);
 
   return (
     <Animated.View

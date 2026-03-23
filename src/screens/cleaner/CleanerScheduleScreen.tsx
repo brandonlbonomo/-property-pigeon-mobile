@@ -59,11 +59,10 @@ function getMonthGrid(year: number, month: number) {
   return weeks;
 }
 
-function EventCard({ event, type, isNew }: { event: CleanerEvent; type: 'cleaning' | 'checkin'; isNew?: boolean }) {
-  const isCleaning = type === 'cleaning';
-  const color = isCleaning ? Colors.yellow : Colors.green;
-  const dateStr = isCleaning ? event.check_out : event.check_in;
-  const time = dateStr ? new Date(dateStr).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+function EventCard({ event, type, isNew }: { event: CleanerEvent; type: 'cleaning' | 'checkin' | 'turnover'; isNew?: boolean }) {
+  const color = type === 'turnover' ? Colors.red : type === 'cleaning' ? Colors.yellow : Colors.green;
+  const label = type === 'turnover' ? 'TURNOVER' : type === 'cleaning' ? 'CLEANING NEEDED' : 'CHECK-IN';
+  const unitLabel = event.unit_name || event.prop_name;
 
   return (
     <View style={styles.eventCard}>
@@ -71,7 +70,7 @@ function EventCard({ event, type, isNew }: { event: CleanerEvent; type: 'cleanin
       <View style={styles.eventContent}>
         <View style={styles.eventTypeRow}>
           <Text style={[styles.eventType, { color }]}>
-            {isCleaning ? 'CLEANING NEEDED' : 'CHECK-IN'}
+            {label}
           </Text>
           {isNew && (
             <View style={styles.newBadge}>
@@ -79,10 +78,8 @@ function EventCard({ event, type, isNew }: { event: CleanerEvent; type: 'cleanin
             </View>
           )}
         </View>
-        <Text style={styles.eventProp}>{event.prop_name}</Text>
-        <Text style={styles.eventSub}>
-          {event.owner} {time ? `· ${time}` : ''}
-        </Text>
+        <Text style={styles.eventProp}>{unitLabel}</Text>
+        <Text style={styles.eventSub}>{event.owner}</Text>
       </View>
     </View>
   );
@@ -250,6 +247,37 @@ export function CleanerScheduleScreen() {
       if (propFilter !== 'all' && e.prop_id !== propFilter) return;
       const d = (e.check_in || '').slice(0, 10);
       if (d) days.add(d);
+    });
+    return days;
+  }, [schedule, propFilter]);
+
+  // Turnover = check-out AND check-in on the same day at the SAME unit (feed_key)
+  const calTurnoverDays = useMemo(() => {
+    // Build map: date+feed_key → { hasCheckout, hasCheckin }
+    const unitDayMap = new Map<string, { hasCheckout: boolean; hasCheckin: boolean }>();
+    schedule.forEach(e => {
+      if (propFilter !== 'all' && e.prop_id !== propFilter) return;
+      const co = (e.check_out || '').slice(0, 10);
+      const ci = (e.check_in || '').slice(0, 10);
+      const fk = e.feed_key || e.prop_id;
+      if (co) {
+        const key = `${co}|${fk}`;
+        const entry = unitDayMap.get(key) || { hasCheckout: false, hasCheckin: false };
+        entry.hasCheckout = true;
+        unitDayMap.set(key, entry);
+      }
+      if (ci) {
+        const key = `${ci}|${fk}`;
+        const entry = unitDayMap.get(key) || { hasCheckout: false, hasCheckin: false };
+        entry.hasCheckin = true;
+        unitDayMap.set(key, entry);
+      }
+    });
+    const days = new Set<string>();
+    unitDayMap.forEach((val, key) => {
+      if (val.hasCheckout && val.hasCheckin) {
+        days.add(key.split('|')[0]);
+      }
     });
     return days;
   }, [schedule, propFilter]);
@@ -440,8 +468,11 @@ export function CleanerScheduleScreen() {
                   const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                   const isCleaning = calCleaningDays.has(dateStr);
                   const isCheckin = calCheckinDays.has(dateStr);
+                  const isTurnover = calTurnoverDays.has(dateStr);
                   const isToday = dateStr === todayStr;
                   const isSelected = dateStr === calSelectedDay;
+                  // Priority: turnover > cleaning > check-in
+                  const dayType = isTurnover ? 'turnover' : isCleaning ? 'cleaning' : isCheckin ? 'checkin' : null;
                   return (
                     <TouchableOpacity
                       activeOpacity={0.7}
@@ -451,21 +482,24 @@ export function CleanerScheduleScreen() {
                     >
                       <View style={[
                         styles.calDayBubble,
-                        !isSelected && isCheckin && styles.calDayBubbleCheckin,
-                        !isSelected && isCleaning && !isCheckin && styles.calDayBubbleCleaning,
+                        !isSelected && dayType === 'checkin' && styles.calDayBubbleCheckin,
+                        !isSelected && dayType === 'cleaning' && styles.calDayBubbleCleaning,
+                        !isSelected && dayType === 'turnover' && styles.calDayBubbleTurnover,
                         isToday && styles.calDayBubbleToday,
                       ]}>
                         <Text style={[
                           styles.calDayText,
-                          isCheckin && styles.calDayTextCheckin,
-                          isCleaning && !isCheckin && styles.calDayTextCleaning,
+                          dayType === 'checkin' && styles.calDayTextCheckin,
+                          dayType === 'cleaning' && styles.calDayTextCleaning,
+                          dayType === 'turnover' && styles.calDayTextTurnover,
                           isToday && styles.calDayTextToday,
                           isSelected && styles.calDayTextSelected,
                         ]}>
                           {day}
                         </Text>
-                        {isCheckin && <View style={styles.calDotCheckin} />}
-                        {isCleaning && !isCheckin && <View style={styles.calDotCleaning} />}
+                        {dayType === 'checkin' && <View style={styles.calDotCheckin} />}
+                        {dayType === 'cleaning' && <View style={styles.calDotCleaning} />}
+                        {dayType === 'turnover' && <View style={styles.calDotTurnover} />}
                       </View>
                     </TouchableOpacity>
                   );
@@ -476,6 +510,10 @@ export function CleanerScheduleScreen() {
 
           {/* Legend */}
           <View style={styles.calLegend}>
+            <View style={styles.calLegendItem}>
+              <View style={[styles.calLegendSwatch, { backgroundColor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.30)' }]} />
+              <Text style={styles.calLegendText}>Turnover</Text>
+            </View>
             <View style={styles.calLegendItem}>
               <View style={[styles.calLegendSwatch, { backgroundColor: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.30)' }]} />
               <Text style={styles.calLegendText}>Cleaning</Text>
@@ -498,12 +536,51 @@ export function CleanerScheduleScreen() {
             {calDayEvents.length === 0 ? (
               <Text style={styles.calDetailEmpty}>No events on this day</Text>
             ) : (
-              calDayEvents.map((ev, i) => {
-                const isCleaning = (ev.check_out || '').slice(0, 10) === calSelectedDay;
-                return (
-                  <EventCard key={ev.uid + i} event={ev} type={isCleaning ? 'cleaning' : 'checkin'} isNew={newBookingUids.has(ev.uid)} />
-                );
-              })
+              (() => {
+                // Build set of unit keys that have turnovers (check-out + check-in same unit)
+                const turnoverUnits = new Set<string>();
+                const checkoutUnits = new Map<string, CleanerEvent>();
+                const checkinUnits = new Map<string, CleanerEvent>();
+                calDayEvents.forEach(ev => {
+                  const fk = ev.feed_key || ev.prop_id;
+                  const hasCo = (ev.check_out || '').slice(0, 10) === calSelectedDay;
+                  const hasCi = (ev.check_in || '').slice(0, 10) === calSelectedDay;
+                  if (hasCo) checkoutUnits.set(fk, ev);
+                  if (hasCi) checkinUnits.set(fk, ev);
+                });
+                checkoutUnits.forEach((_, fk) => {
+                  if (checkinUnits.has(fk)) turnoverUnits.add(fk);
+                });
+
+                const cards: React.ReactNode[] = [];
+                const renderedTurnovers = new Set<string>();
+
+                calDayEvents.forEach((ev, i) => {
+                  const fk = ev.feed_key || ev.prop_id;
+                  const hasCleaning = (ev.check_out || '').slice(0, 10) === calSelectedDay;
+                  const hasCheckin = (ev.check_in || '').slice(0, 10) === calSelectedDay;
+
+                  if (turnoverUnits.has(fk)) {
+                    // This unit is a turnover — only render ONE turnover card, skip the check-in card
+                    if (hasCleaning && !renderedTurnovers.has(fk)) {
+                      renderedTurnovers.add(fk);
+                      cards.push(
+                        <EventCard key={ev.uid + i} event={ev} type="turnover" isNew={newBookingUids.has(ev.uid)} />
+                      );
+                    }
+                    // Skip check-in card for this unit — turnover implies it
+                  } else if (hasCleaning) {
+                    cards.push(
+                      <EventCard key={ev.uid + i} event={ev} type="cleaning" isNew={newBookingUids.has(ev.uid)} />
+                    );
+                  } else if (hasCheckin) {
+                    cards.push(
+                      <EventCard key={ev.uid + i} event={ev} type="checkin" isNew={newBookingUids.has(ev.uid)} />
+                    );
+                  }
+                });
+                return cards;
+              })()
             )}
           </View>
         </>
@@ -749,6 +826,13 @@ const styles = StyleSheet.create({
       ios: { shadowColor: 'rgba(245,158,11,0.35)', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 8 },
     }),
   },
+  calDayBubbleTurnover: {
+    backgroundColor: 'rgba(239,68,68,0.15)',
+    borderWidth: 1.5, borderColor: 'rgba(239,68,68,0.25)',
+    ...Platform.select({
+      ios: { shadowColor: 'rgba(239,68,68,0.35)', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 8 },
+    }),
+  },
   calSlidingGlass: {
     position: 'absolute' as const,
     width: 40, height: 40, borderRadius: 16,
@@ -762,12 +846,16 @@ const styles = StyleSheet.create({
   calDayTextToday: { color: Colors.green, fontWeight: '900' },
   calDayTextCheckin: { color: Colors.green, fontWeight: '600' },
   calDayTextCleaning: { color: Colors.yellow, fontWeight: '600' },
+  calDayTextTurnover: { color: Colors.red, fontWeight: '600' },
   calDayTextSelected: { fontWeight: '800' as const },
   calDotCheckin: {
     width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.green, marginTop: 2,
   },
   calDotCleaning: {
     width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.yellow, marginTop: 2,
+  },
+  calDotTurnover: {
+    width: 5, height: 5, borderRadius: 2.5, backgroundColor: Colors.red, marginTop: 2,
   },
   calLegend: {
     flexDirection: 'row', justifyContent: 'center', gap: Spacing.lg,

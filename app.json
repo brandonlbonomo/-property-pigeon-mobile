@@ -14,6 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.portfoliopigeon.mobile",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSFaceIDUsageDescription": "Use Face ID for quick sign-in",
         "ITSAppUsesNonExemptEncryption": false
@@ -39,6 +40,8 @@
     "plugins": [
       "@react-native-community/datetimepicker",
       "expo-secure-store",
+      "expo-apple-authentication",
+      "@react-native-google-signin/google-signin",
       [
         "expo-local-authentication",
         {
@@ -65,7 +68,8 @@
           "merchantIdentifier": "merchant.com.portfoliopigeon.mobile",
           "enableGooglePay": true
         }
-      ]
+      ],
+      "@react-native-google-signin/google-signin"
     ],
     "extra": {
       "eas": {

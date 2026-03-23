@@ -1710,18 +1710,18 @@ export function ProfileScreen() {
                 <View style={modalStyles.row}>
                   <View style={modalStyles.reorderBtns}>
                     <TouchableOpacity
-                      activeOpacity={0.5}
+                      activeOpacity={0.7}
                       onPress={() => moveCard(opt.key, 'up')}
                       disabled={i === 0}
-                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                       <Ionicons name="chevron-up" size={16} color={i === 0 ? Colors.border : Colors.textDim} />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      activeOpacity={0.5}
+                      activeOpacity={0.7}
                       onPress={() => moveCard(opt.key, 'down')}
                       disabled={i === availableCards.length - 1}
-                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                       <Ionicons name="chevron-down" size={16} color={i === availableCards.length - 1 ? Colors.border : Colors.textDim} />
                     </TouchableOpacity>

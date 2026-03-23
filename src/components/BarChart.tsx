@@ -192,14 +192,11 @@ export function BarChart({
     const bar = bars[index];
     const svgBar = svgBars[index];
     if (svgBar) {
-      const overlayVal = hasOverlay ? overlayLine!.data[index]?.value : undefined;
-      const pairedVal = hasPaired ? pairedBars![index]?.value : undefined;
-      const secondaryVal = overlayVal ?? pairedVal;
       const tooltipData: TooltipData = {
         value: bar.value,
         label: bar.label,
-        priorValue: secondaryVal ?? bar.priorValue,
-        priorLabel: secondaryVal != null ? 'Exp' : bar.priorLabel,
+        priorValue: bar.priorValue,
+        priorLabel: bar.priorLabel,
         yoyValue: bar.yoyValue,
         isPercent,
         barIndex: index,
@@ -248,6 +245,7 @@ export function BarChart({
                 onLongPress={() => handleBarLongPress(i)}
                 delayLongPress={350}
                 style={styles.tapTarget}
+                hitSlop={{ top: 60, bottom: 16, left: 6, right: 6 }}
               />
             ))}
           </View>

@@ -25,8 +25,13 @@ import { PropertyStreetView } from '../../components/PropertyStreetView';
 import { MAPS_PROXY_URL } from '../../constants/api';
 import { glassAlert } from '../../components/GlassAlert';
 import { startConnectOnboarding, getConnectStatus } from '../../services/payments';
+import { useCleanerStore, DEFAULT_INVOICE_PREFS, type InvoicePreferences, type InvoiceFrequency } from '../../store/cleanerStore';
 
-type Section = 'main' | 'properties' | 'income' | 'plaid' | 'cleanerFeeds' | 'tagRules' | 'billing' | 'transactions' | 'invoices' | 'notifications' | 'customTags';
+// Resolve Stripe module at top level — use imperative API instead of hooks
+let _stripe: any = null;
+try { _stripe = require('@stripe/stripe-react-native'); } catch {}
+
+type Section = 'main' | 'properties' | 'income' | 'plaid' | 'cleanerFeeds' | 'tagRules' | 'billing' | 'transactions' | 'invoices' | 'notifications' | 'customTags' | 'invoicePrefs';
 
 // ── Shared Components ──
 
@@ -176,20 +181,13 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
   const [markingPaid, setMarkingPaid] = useState<string | null>(null);
   const [paying, setPaying] = useState<string | null>(null);
 
-  // Apple Pay / card payment
-  let usePaymentSheet: any;
-  try { usePaymentSheet = require('@stripe/stripe-react-native').usePaymentSheet; } catch {}
-
-  const paymentSheet = usePaymentSheet?.();
-
   const handleApplePay = async (inv: any) => {
-    if (!paymentSheet) {
-      glassAlert('Not Available', 'Payment processing is not available in this build. Use "Paid Offline" instead.');
+    if (!_stripe) {
+      glassAlert('Not Available', 'Stripe payments require a production build. Use "Mark as Paid Offline" for now, or create an EAS build to enable card and ACH payments.');
       return;
     }
     setPaying(inv.id);
     try {
-      // 1. Create payment intent
       const { createInvoicePaymentIntent, checkPaymentStatus: checkStatus } = require('../../services/payments');
       const amountCents = Math.round((inv.total || 0) * 100);
       const res = await createInvoicePaymentIntent(inv.id, amountCents, inv.cleanerUserId || inv.cleaner_user_id);
@@ -200,12 +198,9 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
         return;
       }
 
-      // 2. Initialize payment sheet
-      const { error: initError } = await paymentSheet.initPaymentSheet({
+      const { error: initError } = await _stripe.initPaymentSheet({
         paymentIntentClientSecret: res.client_secret,
         merchantDisplayName: 'Portfolio Pigeon',
-        applePay: { merchantCountryCode: 'US' },
-        googlePay: { merchantCountryCode: 'US', testEnv: false },
       });
 
       if (initError) {
@@ -214,8 +209,7 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
         return;
       }
 
-      // 3. Present payment sheet
-      const { error: presentError } = await paymentSheet.presentPaymentSheet();
+      const { error: presentError } = await _stripe.presentPaymentSheet();
       if (presentError) {
         if (presentError.code !== 'Canceled') {
           glassAlert('Payment Failed', presentError.message);
@@ -224,7 +218,6 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
         return;
       }
 
-      // 4. Confirm payment succeeded
       const status = await checkStatus(res.payment_intent_id);
       if (status.status === 'succeeded') {
         setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' } : i));
@@ -346,6 +339,20 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
                   <Text style={{ fontSize: FontSize.md, fontWeight: '700', color: Colors.green }}>{fmt$(inv.total || 0)}</Text>
                 </View>
 
+                {/* Notes */}
+                {inv.notes ? (
+                  <View style={{ marginTop: Spacing.xs, padding: Spacing.sm, backgroundColor: Colors.glassDark, borderRadius: Radius.sm }}>
+                    <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary }}>{inv.notes}</Text>
+                  </View>
+                ) : null}
+
+                {/* Due date */}
+                {inv.dueDate && (
+                  <Text style={{ fontSize: FontSize.xs, color: Colors.textDim, marginTop: Spacing.xs }}>
+                    Due: {new Date(inv.dueDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </Text>
+                )}
+
                 {/* Actions */}
                 <View style={{ flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm }}>
                   <TouchableOpacity
@@ -356,31 +363,119 @@ function InvoicesReceivedSection({ onBack }: { onBack: () => void }) {
                     <Ionicons name="share-outline" size={14} color={Colors.text} />
                     <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>Share</Text>
                   </TouchableOpacity>
-                  {!isPaid && (
-                    <>
-                      <TouchableOpacity
-                        activeOpacity={0.7}
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, backgroundColor: Colors.text, borderRadius: Radius.md }}
-                        onPress={() => handleApplePay(inv)}
-                      >
-                        <Ionicons name="logo-apple" size={16} color="#fff" />
-                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: '#fff' }}>Pay</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        activeOpacity={0.7}
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md }}
-                        onPress={() => handleMarkPaid(inv.id)}
-                        disabled={markingPaid === inv.id}
-                      >
-                        {markingPaid === inv.id ? (
-                          <ActivityIndicator size="small" color={Colors.text} />
-                        ) : (
-                          <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>Paid Offline</Text>
-                        )}
-                      </TouchableOpacity>
-                    </>
-                  )}
                 </View>
+                {!isPaid && (
+                  <View style={{ marginTop: Spacing.sm, gap: Spacing.sm }}>
+                    <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary }}>PAY NOW</Text>
+                    {/* Card Payment */}
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, backgroundColor: Colors.primary, borderRadius: Radius.md }}
+                      onPress={() => handleApplePay(inv)}
+                      disabled={paying === inv.id}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Ionicons name="card-outline" size={18} color="#fff" />
+                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: '#fff' }}>Credit / Debit Card</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ fontSize: FontSize.md, fontWeight: '700', color: '#fff' }}>{fmt$((inv.total || 0) * 1.025)}</Text>
+                        <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>2.5% fee ({fmt$((inv.total || 0) * 0.025)})</Text>
+                      </View>
+                    </TouchableOpacity>
+                    {/* ACH Payment */}
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, backgroundColor: Colors.greenDim, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.green }}
+                      onPress={() => handleApplePay(inv)}
+                      disabled={paying === inv.id}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Ionicons name="business-outline" size={18} color={Colors.green} />
+                        <View>
+                          <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.text }}>ACH Bank Transfer</Text>
+                          <Text style={{ fontSize: 10, color: Colors.textDim }}>1-2 business days</Text>
+                        </View>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ fontSize: FontSize.md, fontWeight: '700', color: Colors.green }}>{fmt$((inv.total || 0) * 1.01)}</Text>
+                        <Text style={{ fontSize: 10, color: Colors.textDim }}>1% fee ({fmt$((inv.total || 0) * 0.01)})</Text>
+                      </View>
+                    </TouchableOpacity>
+                    {/* Paid Offline */}
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md }}
+                      onPress={() => handleMarkPaid(inv.id)}
+                      disabled={markingPaid === inv.id}
+                    >
+                      {markingPaid === inv.id ? (
+                        <ActivityIndicator size="small" color={Colors.text} />
+                      ) : (
+                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.textSecondary }}>Mark as Paid Offline</Text>
+                      )}
+                    </TouchableOpacity>
+                    {/* External payment options */}
+                    {(inv.venmoHandle || inv.paypalHandle || inv.zelleHandle) && (
+                      <View style={{ backgroundColor: Colors.glassDark, borderRadius: Radius.md, padding: Spacing.sm, gap: 6 }}>
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5 }}>PAY EXTERNALLY (NO FEES)</Text>
+                        {inv.venmoHandle ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <View style={{ width: 24, height: 24, borderRadius: 6, backgroundColor: '#008CFF15', alignItems: 'center', justifyContent: 'center' }}>
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: '#008CFF' }}>V</Text>
+                            </View>
+                            <Text style={{ fontSize: FontSize.sm, color: Colors.text, fontWeight: '500' }}>Venmo: <Text style={{ fontWeight: '700' }}>{inv.venmoHandle}</Text></Text>
+                          </View>
+                        ) : null}
+                        {inv.paypalHandle ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <View style={{ width: 24, height: 24, borderRadius: 6, backgroundColor: '#00308715', alignItems: 'center', justifyContent: 'center' }}>
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: '#003087' }}>P</Text>
+                            </View>
+                            <Text style={{ fontSize: FontSize.sm, color: Colors.text, fontWeight: '500' }}>PayPal: <Text style={{ fontWeight: '700' }}>{inv.paypalHandle}</Text></Text>
+                          </View>
+                        ) : null}
+                        {inv.zelleHandle ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <View style={{ width: 24, height: 24, borderRadius: 6, backgroundColor: '#6D1ED415', alignItems: 'center', justifyContent: 'center' }}>
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: '#6D1ED4' }}>Z</Text>
+                            </View>
+                            <Text style={{ fontSize: FontSize.sm, color: Colors.text, fontWeight: '500' }}>Zelle: <Text style={{ fontWeight: '700' }}>{inv.zelleHandle}</Text></Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    )}
+                    {/* Dispute */}
+                    {inv.disputeStatus !== 'disputed' && (
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: Spacing.sm, borderWidth: 1, borderColor: Colors.yellow, borderRadius: Radius.md }}
+                        onPress={() => {
+                          glassAlert('Dispute Invoice', 'Flag this invoice as disputed? Payment will be held until resolved.', [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Dispute', style: 'destructive', onPress: async () => {
+                              try {
+                                await apiFetch('/api/host/invoices/dispute', { method: 'POST', body: JSON.stringify({ invoice_id: inv.id }) });
+                                setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, disputeStatus: 'disputed' } : i));
+                                glassAlert('Disputed', 'Invoice flagged. Resolve with your cleaner in-app.');
+                              } catch { glassAlert('Error', 'Could not dispute invoice.'); }
+                            }},
+                          ]);
+                        }}
+                      >
+                        <Ionicons name="flag-outline" size={14} color={Colors.yellow} />
+                        <Text style={{ fontSize: FontSize.sm, fontWeight: '600', color: Colors.yellow }}>Dispute</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+                {/* Dispute badge */}
+                {inv.disputeStatus === 'disputed' && (
+                  <View style={{ marginTop: Spacing.sm, padding: Spacing.sm, backgroundColor: Colors.redDim, borderRadius: Radius.sm, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="alert-circle" size={16} color={Colors.red} />
+                    <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.red }}>Disputed — awaiting resolution</Text>
+                  </View>
+                )}
               </View>
             </CardGroup>
           );
@@ -949,15 +1044,15 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
 // ── Tab Order Labels ──
 
 const PILL_LABELS: Record<string, string> = {
-  profile: 'HQ', home: 'Overview', performance: 'Performance', projections: 'Projections',
-  logistics: 'Logistics',
+  profile: 'HQ', performance: 'Money', projections: 'Projections',
+  logistics: 'Logistics', network: 'Map',
   schedule: 'Schedule', owners: 'Hosts', invoices: 'Invoices', money: 'Money',
 };
 
 // ══════════════════════════════════════
 // ── Main Settings Screen ──
 // ══════════════════════════════════════
-export function SettingsScreen() {
+export function SettingsScreen({ route }: any) {
   const invalidateAll = useDataStore(s => s.invalidateAll);
   const fetchProps = useDataStore(s => s.fetchProps);
   const fetchCustomCategoriesApi = useDataStore(s => s.fetchCustomCategories);
@@ -974,7 +1069,8 @@ export function SettingsScreen() {
   const fetchFollowCode = useUserStore(s => s.fetchFollowCode);
   const [followCodeValue, setFollowCodeValue] = useState<string | null>(null);
 
-  const [section, setSection] = useState<Section>('main');
+  const initialSection = route?.params?.section as Section | undefined;
+  const [section, setSection] = useState<Section>(initialSection || 'main');
   const [properties, setProperties] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -1465,30 +1561,20 @@ export function SettingsScreen() {
   };
 
   const handleSignOut = () => {
-    glassAlert('Sign Out', "You'll need to sign in again to access your account.", [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: async () => {
-        // Save email before wiping profile so it can be restored on sign in
-        const email = userProfile?.email;
-        if (email) {
-          await SecureStore.setItemAsync('pp_email', email);
-        }
-        // Clear data store cache
-        invalidateAll();
-        // Wipe user profile + reset API token
-        await clearUserStore();
-        setToken(null);
-        // Delete session/preference keys but keep portfolio type + email for re-sign-in
-        await Promise.all([
-          SecureStore.deleteItemAsync('pp_onboarding_complete'),
-          SecureStore.deleteItemAsync('pp_user_profile'),
-          SecureStore.deleteItemAsync('pp_token'),
-          SecureStore.deleteItemAsync('pp_biometric'),
-        ]);
-        // Trigger Landing screen
-        useOnboardingStore.setState({ hasCompleted: false });
-      }},
-    ]);
+    // Trigger Landing screen IMMEDIATELY — no awaits blocking the UI
+    invalidateAll();
+    setToken(null);
+    useOnboardingStore.setState({ hasCompleted: false });
+    // Clean up SecureStore in the background
+    const email = userProfile?.email;
+    Promise.all([
+      email ? SecureStore.setItemAsync('pp_email', email) : Promise.resolve(),
+      SecureStore.deleteItemAsync('pp_onboarding_complete'),
+      SecureStore.deleteItemAsync('pp_user_profile'),
+      SecureStore.deleteItemAsync('pp_token'),
+      SecureStore.deleteItemAsync('pp_biometric'),
+    ]).catch(() => {});
+    clearUserStore().catch(() => {});
   };
 
   // ═══════════════════════════════
@@ -2274,6 +2360,198 @@ export function SettingsScreen() {
   }
 
   // ═══════════════════════════════
+  // ── INVOICE PREFERENCES (Cleaner) ──
+  // ═══════════════════════════════
+  if (section === 'invoicePrefs') {
+    const FREQ_OPTIONS: { key: InvoiceFrequency; label: string; sub: string }[] = [
+      { key: 'every', label: 'Every Cleaning', sub: 'Invoice after each completed job' },
+      { key: 'every_2', label: 'Every 2 Cleanings', sub: 'Invoice after 2 completed jobs' },
+      { key: 'every_4', label: 'Every 4 Cleanings', sub: 'Invoice after 4 completed jobs' },
+      { key: 'monthly', label: 'Monthly', sub: 'Invoice at end of each month' },
+    ];
+    const DUE_OPTIONS = [7, 14, 30];
+    const invPrefs = useCleanerStore.getState().invoicePrefs;
+    const savePrefs = useCleanerStore.getState().saveInvoicePrefs;
+
+    return (
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
+        <BackButton onPress={() => setSection('main')} />
+        <Text style={styles.pageTitle}>Invoice Preferences</Text>
+        <Text style={styles.pageDesc}>Configure how invoices are generated and sent to hosts.</Text>
+
+        <SectionTitle title="Auto-Generate Invoices" />
+        <CardGroup>
+          <SettingRow
+            icon="flash-outline"
+            label="Auto-Generate"
+            sub="Automatically create invoice drafts when cleanings are completed"
+            chevron={false}
+            right={
+              <Switch
+                value={invPrefs.autoGenerate}
+                onValueChange={(val) => savePrefs({ autoGenerate: val })}
+                trackColor={{ false: Colors.glassDark, true: Colors.greenDim }}
+                thumbColor={invPrefs.autoGenerate ? Colors.green : Colors.textDim}
+              />
+            }
+          />
+        </CardGroup>
+
+        {invPrefs.autoGenerate && (
+          <>
+            <SectionTitle title="Frequency" />
+            <CardGroup>
+              {FREQ_OPTIONS.map((opt, i) => (
+                <React.Fragment key={opt.key}>
+                  {i > 0 && <Divider />}
+                  <SettingRow
+                    label={opt.label}
+                    sub={opt.sub}
+                    chevron={false}
+                    onPress={() => savePrefs({ frequency: opt.key })}
+                    right={invPrefs.frequency === opt.key ? <Ionicons name="checkmark-circle" size={20} color={Colors.green} /> : <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: Colors.glassBorder }} />}
+                  />
+                </React.Fragment>
+              ))}
+            </CardGroup>
+            <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary, paddingHorizontal: Spacing.md, marginTop: Spacing.xs }}>
+              You'll always review and confirm before any invoice is sent.
+            </Text>
+          </>
+        )}
+
+        <SectionTitle title="Default Due Date" />
+        <CardGroup>
+          {DUE_OPTIONS.map((days, i) => (
+            <React.Fragment key={days}>
+              {i > 0 && <Divider />}
+              <SettingRow
+                label={`Net ${days}`}
+                sub={`Payment due within ${days} days`}
+                chevron={false}
+                onPress={() => savePrefs({ dueDateDays: days })}
+                right={invPrefs.dueDateDays === days ? <Ionicons name="checkmark-circle" size={20} color={Colors.green} /> : <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: Colors.glassBorder }} />}
+              />
+            </React.Fragment>
+          ))}
+        </CardGroup>
+
+        <SectionTitle title="Tax" />
+        <CardGroup>
+          <View style={styles.row}>
+            <View style={styles.rowIconWrap}>
+              <Ionicons name="calculator-outline" size={18} color={Colors.primary} />
+            </View>
+            <View style={styles.rowText}>
+              <Text style={styles.rowLabel}>Tax Rate (%)</Text>
+              <Text style={styles.rowSub}>Applied to invoice subtotal. Set to 0 for no tax.</Text>
+            </View>
+            <TextInput
+              style={{ width: 60, fontSize: FontSize.md, fontWeight: '600', color: Colors.text, textAlign: 'right', borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 8, paddingVertical: 6 }}
+              value={invPrefs.taxRate > 0 ? String(invPrefs.taxRate) : ''}
+              onChangeText={(t) => {
+                const val = parseFloat(t) || 0;
+                savePrefs({ taxRate: Math.min(val, 99) });
+              }}
+              placeholder="0"
+              placeholderTextColor={Colors.textDim}
+              keyboardType="decimal-pad"
+            />
+          </View>
+        </CardGroup>
+
+        <SectionTitle title="Business Info" />
+        <CardGroup>
+          <View style={{ padding: Spacing.md, gap: Spacing.sm }}>
+            <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary }}>BUSINESS NAME</Text>
+            <TextInput
+              style={{ fontSize: FontSize.md, color: Colors.text, borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 10 }}
+              value={invPrefs.businessName}
+              onChangeText={(t) => savePrefs({ businessName: t })}
+              placeholder="Your business or full name"
+              placeholderTextColor={Colors.textDim}
+            />
+            <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary, marginTop: Spacing.xs }}>BUSINESS EMAIL</Text>
+            <TextInput
+              style={{ fontSize: FontSize.md, color: Colors.text, borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 10 }}
+              value={invPrefs.businessEmail}
+              onChangeText={(t) => savePrefs({ businessEmail: t })}
+              placeholder="billing@yourbusiness.com"
+              placeholderTextColor={Colors.textDim}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+            <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary, marginTop: Spacing.xs }}>PHONE</Text>
+            <TextInput
+              style={{ fontSize: FontSize.md, color: Colors.text, borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 10 }}
+              value={invPrefs.businessPhone}
+              onChangeText={(t) => savePrefs({ businessPhone: t })}
+              placeholder="(555) 555-5555"
+              placeholderTextColor={Colors.textDim}
+              keyboardType="phone-pad"
+            />
+          </View>
+        </CardGroup>
+        <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary, paddingHorizontal: Spacing.md, marginTop: Spacing.xs }}>
+          This info appears on your invoices sent to hosts.
+        </Text>
+
+        <SectionTitle title="Payment Methods" />
+        <CardGroup>
+          <View style={{ padding: Spacing.md, gap: Spacing.sm }}>
+            <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 16, marginBottom: Spacing.xs }}>
+              Add your payment handles so hosts can pay you directly. These will appear on your invoices.
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.sm }}>
+              <View style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#008CFF15', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#008CFF' }}>V</Text>
+              </View>
+              <TextInput
+                style={{ flex: 1, fontSize: FontSize.md, color: Colors.text, borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 8 }}
+                value={invPrefs.venmoHandle}
+                onChangeText={(t) => savePrefs({ venmoHandle: t })}
+                placeholder="@venmo-username"
+                placeholderTextColor={Colors.textDim}
+                autoCapitalize="none"
+              />
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.sm }}>
+              <View style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#00308715', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#003087' }}>P</Text>
+              </View>
+              <TextInput
+                style={{ flex: 1, fontSize: FontSize.md, color: Colors.text, borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 8 }}
+                value={invPrefs.paypalHandle}
+                onChangeText={(t) => savePrefs({ paypalHandle: t })}
+                placeholder="paypal@email.com"
+                placeholderTextColor={Colors.textDim}
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.sm }}>
+              <View style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#6D1ED415', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#6D1ED4' }}>Z</Text>
+              </View>
+              <TextInput
+                style={{ flex: 1, fontSize: FontSize.md, color: Colors.text, borderWidth: 1, borderColor: Colors.glassBorder, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 8 }}
+                value={invPrefs.zelleHandle}
+                onChangeText={(t) => savePrefs({ zelleHandle: t })}
+                placeholder="zelle@email.com or phone"
+                placeholderTextColor={Colors.textDim}
+                autoCapitalize="none"
+              />
+            </View>
+          </View>
+        </CardGroup>
+        <Text style={{ fontSize: FontSize.xs, color: Colors.textSecondary, paddingHorizontal: Spacing.md, marginTop: Spacing.xs, marginBottom: Spacing.xl }}>
+          Hosts will see these on invoices as external payment options. No fees.
+        </Text>
+      </ScrollView>
+    );
+  }
+
+  // ═══════════════════════════════
   // ── INVOICES RECEIVED ──
   // ═══════════════════════════════
   if (section === 'invoices') {
@@ -2295,9 +2573,19 @@ export function SettingsScreen() {
             <SettingRow
               icon="wallet-outline"
               label="Receive Payments"
-              sub={connectStatus === 'active' ? 'Stripe connected — ready to receive' : 'Set up to receive invoice payments'}
-              onPress={handleConnectSetup}
+              sub={isReadOnly ? 'Subscribe to Pro to receive payments' : connectStatus === 'active' ? 'Stripe connected — ready to receive' : 'Set up to receive invoice payments'}
+              onPress={isReadOnly ? handleProGate : handleConnectSetup}
               right={connectStatus === 'active' ? <Ionicons name="checkmark-circle" size={18} color={Colors.green} /> : undefined}
+            />
+          </CardGroup>
+
+          <SectionTitle title="Invoices" />
+          <CardGroup>
+            <SettingRow
+              icon="document-text-outline"
+              label="Invoice Preferences"
+              sub={isReadOnly ? 'Subscribe to Pro' : 'Auto-generation, due dates, tax, business info'}
+              onPress={isReadOnly ? handleProGate : () => { useCleanerStore.getState().loadInvoicePrefs(); setSection('invoicePrefs'); }}
             />
           </CardGroup>
 
@@ -2343,10 +2631,14 @@ export function SettingsScreen() {
               onPress={() => { setSection('transactions'); loadTransactions(); }} />
           </CardGroup>
 
-          <SectionTitle title="Invoices" />
-          <CardGroup>
-            <SettingRow icon="document-text-outline" label="Invoices Received" sub={isReadOnly ? "Subscribe to Pro" : "View invoices from your cleaners"} onPress={isReadOnly ? handleProGate : () => setSection('invoices')} />
-          </CardGroup>
+          {isSTR && (
+            <>
+              <SectionTitle title="Invoices" />
+              <CardGroup>
+                <SettingRow icon="document-text-outline" label="Invoices Received" sub={isReadOnly ? "Subscribe to Pro" : "View invoices from your cleaners"} onPress={isReadOnly ? handleProGate : () => setSection('invoices')} />
+              </CardGroup>
+            </>
+          )}
         </>
       )}
 
@@ -2355,6 +2647,61 @@ export function SettingsScreen() {
         <UsernameEditor currentUsername={userProfile?.username || ''} />
         <Divider />
         <SettingRow icon="mail-outline" label="Email" sub={userProfile?.email || ''} chevron={false} />
+        {userProfile?.accountType !== 'cleaner' && (
+          <>
+            <Divider />
+            <View style={{ padding: Spacing.md }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.sm }}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="business-outline" size={18} color={Colors.primary} />
+                </View>
+                <View>
+                  <Text style={styles.rowLabel}>Portfolio Type</Text>
+                  <Text style={styles.rowSub}>Select your portfolio type</Text>
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
+                {([
+                  { label: 'Airbnb Only', value: 'str' as const },
+                  { label: 'Both', value: 'both' as const },
+                  { label: 'LTR Only', value: 'ltr' as const },
+                ]).map(opt => {
+                  const active = userProfile?.portfolioType === opt.value;
+                  return (
+                    <TouchableOpacity
+                      key={opt.value}
+                      activeOpacity={0.7}
+                      style={{
+                        flex: 1, paddingVertical: Spacing.sm, borderRadius: Radius.md,
+                        alignItems: 'center',
+                        backgroundColor: active ? Colors.greenDim : Colors.glassDark,
+                        borderWidth: 1, borderColor: active ? Colors.green : Colors.glassBorder,
+                      }}
+                      onPress={async () => {
+                        // Update portfolio type and clean pill order to match
+                        const currentOrder = userProfile?.pillOrder || [];
+                        const isNowSTR = opt.value === 'str' || opt.value === 'both';
+                        let newOrder = currentOrder
+                          .filter(k => k !== 'schedule' && k !== 'owners' && k !== 'invoices' && k !== 'money' && k !== 'home');
+                        if (isNowSTR) {
+                          if (!newOrder.includes('logistics')) newOrder.push('logistics');
+                        } else {
+                          newOrder = newOrder.filter(k => k !== 'logistics');
+                        }
+                        await setUserProfile({ portfolioType: opt.value, pillOrder: newOrder });
+                        await SecureStore.setItemAsync('pp_portfolio_type', opt.value);
+                      }}
+                    >
+                      <Text style={{ fontSize: FontSize.xs, fontWeight: active ? '700' : '500', color: active ? Colors.green : Colors.textDim }}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          </>
+        )}
         {isSTR && userProfile?.accountType !== 'cleaner' && (
           <>
             <Divider />
@@ -2425,8 +2772,9 @@ export function SettingsScreen() {
           } else {
             order = [...raw];
           }
-          // Remove deprecated pills from saved order
-          order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'calendar' && k !== 'inventory');
+          // Remove deprecated and cleaner-only pills from owner pill order
+          order = order.filter(k => k !== 'feed' && k !== 'occupancy' && k !== 'calendar' && k !== 'inventory'
+            && k !== 'schedule' && k !== 'owners' && k !== 'invoices' && k !== 'money' && k !== 'home');
           // Ensure base pills
           if (!order.includes('performance')) order.push('performance');
           if (!order.includes('projections')) {
@@ -2510,10 +2858,17 @@ export function SettingsScreen() {
 
       <SectionTitle title="Referrals" />
       <CardGroup>
-        <SettingRow icon="share-outline" label="Share" sub="Invite friends & earn $20 per referral"
-          onPress={() => {
+        <SettingRow icon="share-outline" label="Share" sub="Invite friends — they get 50% off their first month"
+          onPress={async () => {
+            let code = '';
+            try {
+              const res = await apiFetch('/api/referral/code');
+              code = res.referral_code || '';
+            } catch {}
             Share.share({
-              message: `Join me on Portfolio Pigeon! Sign up here: https://portfoliopigeon.com`,
+              message: code
+                ? `Join me on Portfolio Pigeon! Use my referral code ${code} for 50% off: https://portfoliopigeon.com`
+                : `Join me on Portfolio Pigeon! Sign up here: https://portfoliopigeon.com`,
             });
           }}
         />

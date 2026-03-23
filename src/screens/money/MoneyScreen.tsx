@@ -56,37 +56,95 @@ const badgeStyles = StyleSheet.create({
 });
 
 function YearChevrons({ years, selected, onSelect }: { years: number[]; selected: number; onSelect: (y: number) => void }) {
-  const idx = years.indexOf(selected);
+  const [open, setOpen] = React.useState(false);
   return (
-    <View style={yearStyles.row}>
-      <TouchableOpacity
-        activeOpacity={0.7}
-        onPress={() => idx > 0 && onSelect(years[idx - 1])}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        disabled={idx <= 0}
-      >
-        <Ionicons name="chevron-back" size={16} color={idx > 0 ? Colors.textSecondary : Colors.textDim + '40'} />
-      </TouchableOpacity>
-      <Text style={yearStyles.label}>{selected}</Text>
-      <TouchableOpacity
-        activeOpacity={0.7}
-        onPress={() => idx < years.length - 1 && onSelect(years[idx + 1])}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        disabled={idx >= years.length - 1}
-      >
-        <Ionicons name="chevron-forward" size={16} color={idx < years.length - 1 ? Colors.textSecondary : Colors.textDim + '40'} />
-      </TouchableOpacity>
-    </View>
+    <>
+      {open && (
+        <TouchableOpacity
+          activeOpacity={1}
+          style={{ position: 'absolute', top: -500, bottom: -500, left: -500, right: -500, zIndex: 9 }}
+          onPress={() => setOpen(false)}
+        />
+      )}
+      <View style={yearStyles.container}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={yearStyles.pill}
+          onPress={() => setOpen(!open)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={yearStyles.pillText}>{selected}</Text>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={Colors.textSecondary} />
+        </TouchableOpacity>
+        {open && (
+          <View style={yearStyles.dropdown}>
+            {years.map(y => (
+              <TouchableOpacity
+                key={y}
+                activeOpacity={0.7}
+                style={[yearStyles.dropItem, y === selected && yearStyles.dropItemActive]}
+                onPress={() => { onSelect(y); setOpen(false); }}
+              >
+                <Text style={[yearStyles.dropText, y === selected && yearStyles.dropTextActive]}>{y}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
+    </>
   );
 }
 
 const yearStyles = StyleSheet.create({
-  row: {
+  container: {
+    zIndex: 10,
+  },
+  pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    marginBottom: Spacing.xs,
+    gap: 4,
+    backgroundColor: Colors.glassDark,
+    borderRadius: Radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 0.5,
+    borderColor: Colors.glassBorder,
+  },
+  pillText: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  dropdown: {
+    position: 'absolute',
+    top: 30,
+    right: 0,
+    backgroundColor: Colors.glassOverlay,
+    borderRadius: Radius.md,
+    borderWidth: 0.5,
+    borderColor: Colors.glassBorder,
+    paddingVertical: 4,
+    minWidth: 60,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 10 },
+    }),
+  },
+  dropItem: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  dropItemActive: {
+    backgroundColor: Colors.greenDim,
+  },
+  dropText: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  dropTextActive: {
+    color: Colors.green,
+    fontWeight: '700',
   },
   label: {
     fontSize: FontSize.xs,
@@ -107,6 +165,8 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const profile = useUserStore(s => s.profile);
   const portfolioType = profile?.portfolioType;
   const projectionStyle = profile?.projectionStyle || 'normal';
+  const startingUnits = (profile?.properties || []).reduce((sum, p) => sum + (p.units || 1), 0);
+  const unitsPerYear = profile?.unitsPerYear ?? 0;
   // Total investment = sum of (purchasePrice * downPaymentPct/100) across all properties
   // Falls back to profile.totalInvestment if no per-property data
   const totalInvestment = useMemo(() => {
@@ -239,6 +299,16 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
   const priorExp = prior.expenses ?? 0;
   const priorNet = prior.net ?? 0;
 
+  // FY projected revenue/expenses — same formula as Projections tab
+  const fyRevenue = useMemo(() => {
+    const timeline = generateYearTimeline(revenue, priorRev, projectionStyle, currentYear);
+    return timeline.reduce((s, m) => s + m.value, 0);
+  }, [revenue, priorRev, projectionStyle, currentYear]);
+  const fyExpenses = useMemo(() => {
+    const timeline = generateYearTimeline(expenses, priorExp, projectionStyle, currentYear);
+    return timeline.reduce((s, m) => s + m.value, 0);
+  }, [expenses, priorExp, projectionStyle, currentYear]);
+
   // STR vs non-STR revenue — computed from actual tagged transactions in load()
   const airbnbRev = strLtrSplit.str;
   const nonAirbnbRev = strLtrSplit.ltr;
@@ -320,25 +390,92 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
       }
     }
 
-    // Build projection: if seasonal data exists for the month, blend
-    // 60% seasonal + 40% YTD avg. Otherwise use YTD avg.
+    // ── Trend line from ALL actual revenue data (applies to every portfolio type) ──
+    const trendPoints: { x: number; y: number }[] = [];
+    for (let m = 0; m <= curMonth; m++) {
+      const key = `${curYear}-${String(m + 1).padStart(2, '0')}`;
+      const data = monthlyActuals[key];
+      if (data && data.revenue > 0) {
+        trendPoints.push({ x: m, y: data.revenue });
+      }
+    }
+    for (let yOff = 1; yOff <= 2; yOff++) {
+      for (let m = 0; m < 12; m++) {
+        const key = `${curYear - yOff}-${String(m + 1).padStart(2, '0')}`;
+        const data = monthlyActuals[key];
+        if (data && data.revenue > 0) {
+          trendPoints.push({ x: m - (yOff * 12), y: data.revenue });
+        }
+      }
+    }
+    // Linear regression
+    let trendSlope = 0;
+    let trendIntercept = ytdAvgRev;
+    if (trendPoints.length >= 2) {
+      const n = trendPoints.length;
+      const sumX = trendPoints.reduce((s, p) => s + p.x, 0);
+      const sumY = trendPoints.reduce((s, p) => s + p.y, 0);
+      const sumXY = trendPoints.reduce((s, p) => s + p.x * p.y, 0);
+      const sumX2 = trendPoints.reduce((s, p) => s + p.x * p.x, 0);
+      const denom = n * sumX2 - sumX * sumX;
+      if (denom !== 0) {
+        trendSlope = (n * sumXY - sumX * sumY) / denom;
+        trendIntercept = (sumY - trendSlope * sumX) / n;
+      }
+    }
+
+    // STR seasonal multipliers (summer peak, winter low)
+    const strSeasonality = [0.75, 0.80, 0.90, 0.95, 1.05, 1.15, 1.20, 1.15, 1.05, 0.95, 0.85, 0.80];
+    const isLTR = portfolioType === 'ltr';
+    const isBoth = portfolioType === 'both';
+
     const result: Record<number, { rev: number; exp: number }> = {};
     for (let m = 0; m < 12; m++) {
       const seasonal = byMonth[m];
+      // Trend-based projection for this month
+      const trendRev = Math.max(0, trendIntercept + trendSlope * m);
+
       if (seasonal) {
-        // Scale seasonal data by YTD growth factor so projections
-        // reflect this year's trajectory, not just raw prior year values
+        // Prior year seasonal data exists — blend with trend
         const seasonalAvg = (seasonal.rev + seasonal.exp) / 2 || 1;
         const ytdAvg = (ytdAvgRev + ytdAvgExp) / 2 || 1;
         const growthFactor = ytdAvg / seasonalAvg;
         const scaledRev = seasonal.rev * Math.min(growthFactor, 3);
         const scaledExp = seasonal.exp * Math.min(growthFactor, 3);
+        // Blend: 40% seasonal, 30% trend, 30% YTD avg
         result[m] = {
-          rev: scaledRev * 0.6 + ytdAvgRev * 0.4,
-          exp: scaledExp * 0.6 + ytdAvgExp * 0.4,
+          rev: scaledRev * 0.4 + trendRev * 0.3 + ytdAvgRev * 0.3,
+          exp: scaledExp * 0.4 + (ytdAvgExp > 0 ? ytdAvgExp : scaledExp * 0.35) * 0.6,
+        };
+      } else if (isLTR) {
+        // LTR: trend line is primary — rent is predictable
+        result[m] = {
+          rev: trendRev,
+          exp: ytdAvgExp > 0 ? ytdAvgExp + trendSlope * 0.3 * m : trendRev * 0.3,
+        };
+      } else if (isBoth) {
+        // BOTH: split — trend line for the stable LTR portion,
+        // seasonal adjustment for the STR portion
+        // Estimate LTR as the floor (minimum monthly revenue = likely rent)
+        const minRev = trendPoints.length > 0 ? Math.min(...trendPoints.map(p => p.y)) : ytdAvgRev * 0.5;
+        const ltrPortion = Math.max(minRev * 0.7, trendRev * 0.4); // stable base
+        const strPortion = Math.max(0, trendRev - ltrPortion);
+        const seasonFactor = strSeasonality[m];
+        result[m] = {
+          rev: ltrPortion + strPortion * seasonFactor,
+          exp: ytdAvgExp > 0 ? ytdAvgExp * (0.95 + seasonFactor * 0.05) : trendRev * 0.3,
         };
       } else {
-        result[m] = { rev: ytdAvgRev, exp: ytdAvgExp };
+        // STR: trend line + seasonal curve
+        const seasonFactor = strSeasonality[m];
+        // Blend trend with seasonal-adjusted average
+        const seasonalRev = ytdAvgRev * seasonFactor;
+        result[m] = {
+          rev: trendRev * 0.5 + seasonalRev * 0.5,
+          exp: ytdAvgExp > 0
+            ? ytdAvgExp * (0.9 + seasonFactor * 0.1)
+            : trendRev * 0.3,
+        };
       }
     }
     return result;
@@ -418,21 +555,61 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
 
   function annualBars(_current: number, _priorVal: number, useProjection = false): BarData[] {
     const metric = detectMetric(_current);
-    return years.map(y => {
+
+    // Same growth factors as Projections tab — identical formula
+    const sf: Record<string, { r: number; e: number }> = {
+      conservative: { r: 0.02, e: 0.03 },
+      normal: { r: 0.04, e: 0.03 },
+      bullish: { r: 0.06, e: 0.025 },
+    };
+    const f = sf[projectionStyle] || sf.normal;
+
+    // Base: FY projected revenue/expenses — same source as Projections tab
+    const baseAnnualRev = fyRevenue;
+    const baseAnnualExp = fyExpenses;
+    // Per-unit base (identical to generate30YearProjection)
+    const revPerUnit = startingUnits > 0 ? baseAnnualRev / startingUnits : baseAnnualRev;
+    const expPerUnit = startingUnits > 0 ? baseAnnualExp / startingUnits : baseAnnualExp;
+
+    return years.map((y, idx) => {
+      const yearsAhead = y - currentYear;
       let total = 0;
-      if (metric === 'margin') {
-        let totalRev = 0, totalExp = 0;
-        for (let m = 0; m < 12; m++) {
-          totalRev += getMonthMetric(y, m, 'revenue', useProjection);
-          totalExp += getMonthMetric(y, m, 'expenses', useProjection);
+
+      if (yearsAhead <= 0 || !useProjection) {
+        // Current or past year — use actual data
+        if (metric === 'margin') {
+          let totalRev = 0, totalExp = 0;
+          for (let m = 0; m < 12; m++) {
+            totalRev += getMonthMetric(y, m, 'revenue', useProjection);
+            totalExp += getMonthMetric(y, m, 'expenses', useProjection);
+          }
+          total = totalRev > 0 ? ((totalRev - totalExp) / totalRev) * 100 : 0;
+        } else {
+          for (let m = 0; m < 12; m++) total += getMonthMetric(y, m, metric, useProjection);
         }
-        total = totalRev > 0 ? ((totalRev - totalExp) / totalRev) * 100 : 0;
       } else {
-        for (let m = 0; m < 12; m++) total += getMonthMetric(y, m, metric, useProjection);
+        // Future year — EXACT same formula as generate30YearProjection
+        const units = startingUnits + unitsPerYear * yearsAhead;
+        const futRev = units * revPerUnit * Math.pow(1 + f.r, yearsAhead);
+        const futExp = units * expPerUnit * Math.pow(1 + f.e, yearsAhead);
+
+        if (metric === 'margin') {
+          total = futRev > 0 ? ((futRev - futExp) / futRev) * 100 : 0;
+        } else if (metric === 'net') {
+          total = futRev - futExp;
+        } else if (metric === 'expenses') {
+          total = futExp;
+        } else {
+          total = futRev;
+        }
       }
+
       const hasActual = Object.keys(monthlyActuals).some(k => k.startsWith(String(y)));
       const isCurrent = y === currentYear;
-      return { label: String(y), value: total, isActual: hasActual, isCurrent, year: y, month: String(y) };
+      return {
+        label: String(y), value: total, isActual: hasActual || yearsAhead <= 0, isCurrent,
+        year: y, month: String(y),
+      };
     });
   }
 
@@ -478,7 +655,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     return getMonthMetric(selectedYear, curMonth, metric);
   }
 
-  const revenueLabel = portfolioType === 'str' ? 'STR Revenue' : 'Revenue';
+  const revenueLabel = portfolioType === 'str' ? 'STR Revenue' : portfolioType === 'both' ? 'Total Revenue' : 'Revenue';
   const showBreakdown = portfolioType === 'both';
   const totalMonthlyRev = airbnbRev + nonAirbnbRev;
   const airbnbRatio = totalMonthlyRev > 0 ? airbnbRev / totalMonthlyRev : 0;
@@ -607,11 +784,11 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     }
 
     // Pre-compute bar data so we can reference values for dynamic display
-    const revBars = isAnnual ? annualBars(revenue, priorRev) : yearBars(revenue, priorRev, revYear, p);
+    const revBars = isAnnual ? annualBars(revenue, priorRev, true) : yearBars(revenue, priorRev, revYear, p, true);
     const expLineBars = isAnnual ? annualBars(expenses, priorExp, true) : yearBars(expenses, priorExp, revYear, p, true);
     // Actual expense bars (no projections) — for card header display only
     const expActualBars = isAnnual ? annualBars(expenses, priorExp) : yearBars(expenses, priorExp, revYear, p);
-    const netBars = isAnnual ? annualBars(net, priorNet) : yearBars(net, priorNet, netYear, p);
+    const netBars = isAnnual ? annualBars(net, priorNet, true) : yearBars(net, priorNet, netYear, p, true);
     const marginLineBars = isAnnual ? annualBars(margin, priorMargin, true) : yearBars(margin, priorMargin, netYear, p, true);
     const marginActualBars = isAnnual ? annualBars(margin, priorMargin) : yearBars(margin, priorMargin, netYear, p);
 
@@ -619,24 +796,32 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     const revDisplayVal = selectedRevBar != null && revBars[selectedRevBar]
       ? revBars[selectedRevBar].value
       : (isAnnual ? displayValue(revenue, priorRev, currentYear, p) : displayValue(revenue, priorRev, revYear, p));
-    const expDisplayVal = selectedRevBar != null && expActualBars[selectedRevBar]
-      ? expActualBars[selectedRevBar].value
+    const expDisplayVal = selectedRevBar != null && expLineBars[selectedRevBar]
+      ? expLineBars[selectedRevBar].value
       : (isAnnual ? displayValue(expenses, priorExp, currentYear, p) : displayValue(expenses, priorExp, revYear, p));
     const revDisplayLabel = selectedRevBar != null && revBars[selectedRevBar]
       ? revBars[selectedRevBar].label : null;
+    const revIsProjection = selectedRevBar != null && revBars[selectedRevBar] && !revBars[selectedRevBar].isActual;
 
     const netDisplayVal = selectedNetBar != null && netBars[selectedNetBar]
       ? netBars[selectedNetBar].value
       : (isAnnual ? annualNetValue : displayValue(net, priorNet, netYear, p));
-    const marginDisplayVal = selectedNetBar != null && marginActualBars[selectedNetBar]
-      ? marginActualBars[selectedNetBar].value
+    const marginDisplayVal = selectedNetBar != null && marginLineBars[selectedNetBar]
+      ? marginLineBars[selectedNetBar].value
       : (isAnnual ? margin : displayValue(margin, priorMargin, netYear, p));
     const netDisplayLabel = selectedNetBar != null && netBars[selectedNetBar]
       ? netBars[selectedNetBar].label : null;
+    const netIsProjection = selectedNetBar != null && netBars[selectedNetBar] && !netBars[selectedNetBar].isActual;
 
     // Monthly / Quarterly / Annual shared layout
     return (
       <>
+        {!isAnnual && (
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.xs }}>
+            <Text style={{ fontSize: 10, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5 }}>REVENUE / EXPENSES</Text>
+            <YearChevrons years={years} selected={revYear} onSelect={(y) => { setRevYear(y); setSelectedRevBar(null); }} />
+          </View>
+        )}
         <Card padding={Spacing.sm}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLabels}>
@@ -644,6 +829,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
               <Text style={styles.sectionLabelSep}>/</Text>
               <Text style={[styles.sectionLabel, { color: Colors.red }]}>EXPENSES</Text>
               {revDisplayLabel && <Text style={styles.selectedLabel}>{revDisplayLabel}</Text>}
+              {revIsProjection && <View style={styles.projBadge}><Text style={styles.projBadgeText}>Proj.</Text></View>}
             </View>
             <View style={styles.cardHeaderBadges}>
               <DeltaBadge value={pct.revenue} />
@@ -655,7 +841,11 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
             <Text style={styles.bigValueSep}>/</Text>
             <Text style={[styles.compactValue, { color: Colors.red }]}>{fmt$(expDisplayVal)}</Text>
           </View>
-          {!isAnnual && <YearChevrons years={years} selected={revYear} onSelect={(y) => { setRevYear(y); setSelectedRevBar(null); }} />}
+          {isAnnual && unitsPerYear > 0 && (
+            <Text style={{ fontSize: 9, color: Colors.textDim, marginBottom: Spacing.xs }}>
+              Assuming +{unitsPerYear} unit{unitsPerYear !== 1 ? 's' : ''}/yr · {projectionStyle} growth
+            </Text>
+          )}
           <BarChart
             bars={revBars}
             overlayLine={{ data: expLineBars, color: Colors.red }}
@@ -666,6 +856,12 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
           />
         </Card>
 
+        {!isAnnual && (
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.xs, marginTop: Spacing.sm }}>
+            <Text style={{ fontSize: 10, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5 }}>NET INCOME / MARGIN</Text>
+            <YearChevrons years={years} selected={netYear} onSelect={(y) => { setNetYear(y); setSelectedNetBar(null); }} />
+          </View>
+        )}
         <Card padding={Spacing.sm}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLabels}>
@@ -673,6 +869,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
               <Text style={styles.sectionLabelSep}>/</Text>
               <Text style={[styles.sectionLabel, { color: Colors.primary }]}>MARGIN</Text>
               {netDisplayLabel && <Text style={styles.selectedLabel}>{netDisplayLabel}</Text>}
+              {netIsProjection && <View style={styles.projBadge}><Text style={styles.projBadgeText}>Proj.</Text></View>}
             </View>
             <View style={styles.cardHeaderBadges}>
               <DeltaBadge value={pct.net} />
@@ -694,7 +891,6 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
               </Text>
             </View>
           </View>
-          {!isAnnual && <YearChevrons years={years} selected={netYear} onSelect={(y) => { setNetYear(y); setSelectedNetBar(null); }} />}
           <BarChart
             bars={netBars}
             overlayLine={{ data: marginLineBars, color: Colors.primary }}
@@ -842,6 +1038,13 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs - 1, fontWeight: '700', color: Colors.primary,
     marginLeft: 6, backgroundColor: Colors.greenDim, borderRadius: Radius.pill,
     paddingHorizontal: 6, paddingVertical: 1, overflow: 'hidden',
+  },
+  projBadge: {
+    marginLeft: 4, backgroundColor: Colors.yellowDim, borderRadius: Radius.pill,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  projBadgeText: {
+    fontSize: 9, fontWeight: '700', color: Colors.yellow,
   },
   dualBigRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 2 },
   bigValueSep: { fontSize: FontSize.lg, fontWeight: '400', color: Colors.textDim },
