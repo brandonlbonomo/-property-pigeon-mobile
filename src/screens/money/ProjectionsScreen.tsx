@@ -132,6 +132,30 @@ const wbStyles = StyleSheet.create({
   totalValue: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text },
 });
 
+const milestoneStyles = StyleSheet.create({
+  card: {
+    width: (SCREEN_W - Spacing.md * 2 - Spacing.sm * 3) / 3.5,
+    backgroundColor: Colors.glassHeavy,
+    borderRadius: Radius.xl,
+    borderWidth: 0.5,
+    borderColor: Colors.glassBorder,
+    borderTopColor: Colors.glassHighlight,
+    borderTopWidth: 1,
+    padding: Spacing.sm,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: Colors.glassShadow, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 20 },
+      android: { elevation: 2 },
+    }),
+  },
+  yearLabel: { fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
+  units: { fontSize: 11, color: Colors.textSecondary, marginBottom: 4 },
+  netCF: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.green },
+  netCFLabel: { fontSize: 9, color: Colors.textDim, marginBottom: 6 },
+  value: { fontSize: FontSize.md, fontWeight: '700', color: Colors.primary },
+  valueLabel: { fontSize: 9, color: Colors.textDim },
+});
+
 // ── Projection Bar Chart using shared BarChart ──
 
 function ProjectionBarChartCard({ data, inflationAdjusted }: { data: YearRow[]; inflationAdjusted: boolean }) {
