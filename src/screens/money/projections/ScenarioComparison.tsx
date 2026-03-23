@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, Pressable, StyleSheet, ScrollView } from 'react-native';
 import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { generate30YearProjection, YearRow } from '../../../utils/projections';
 import { fmtCompact } from '../../../utils/format';
@@ -14,6 +14,7 @@ interface Props {
 }
 
 type ViewMode = 'netCF' | 'portfolioValue' | 'equity';
+type ActiveCheckpoint = 10 | 20 | 30 | null;
 
 const CHECKPOINTS = [10, 20, 30] as const;
 
@@ -28,6 +29,7 @@ interface Scenario {
 
 export function ScenarioComparison({ startingUnits, currentUnitsPerYear, revenue, expenses, projStyle }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('netCF');
+  const [activeCheckpoint, setActiveCheckpoint] = useState<ActiveCheckpoint>(null);
 
   const scenarios: Scenario[] = useMemo(() => [
     {
@@ -115,24 +117,70 @@ export function ScenarioComparison({ startingUnits, currentUnitsPerYear, revenue
         ))}
       </View>
 
-      {/* Checkpoint rows */}
-      {CHECKPOINTS.map((yr, ci) => (
-        <View key={yr} style={[styles.checkpointRow, ci > 0 && styles.checkpointBorder]}>
-          <View style={styles.yearLabelCol}>
-            <Text style={styles.yrLabel}>YR {yr}</Text>
-          </View>
-          {checkpointRows[ci].map((row, si) => {
-            if (!row) return <View key={si} style={styles.scenarioValCol} />;
-            const val = getValue(row, viewMode);
-            return (
-              <View key={si} style={styles.scenarioValCol}>
-                <Text style={[styles.valText, { color: scenarios[si].color }]}>{fmtCompact(val)}</Text>
-                {viewMode === 'netCF' && <Text style={styles.valSub}>/yr</Text>}
+      {/* Checkpoint rows — tap to expand detail */}
+      {CHECKPOINTS.map((yr, ci) => {
+        const isActive = activeCheckpoint === yr;
+        return (
+          <React.Fragment key={yr}>
+            <Pressable
+              onPress={() => setActiveCheckpoint(isActive ? null : yr as ActiveCheckpoint)}
+              style={({ pressed }) => [
+                styles.checkpointRow,
+                ci > 0 && styles.checkpointBorder,
+                isActive && styles.checkpointRowActive,
+                pressed && styles.checkpointRowPressed,
+              ]}
+            >
+              <View style={styles.yearLabelCol}>
+                <Text style={[styles.yrLabel, isActive && { color: Colors.green }]}>YR {yr}</Text>
+                <Text style={styles.tapHint}>{isActive ? '▲' : '▼'}</Text>
               </View>
-            );
-          })}
-        </View>
-      ))}
+              {checkpointRows[ci].map((row, si) => {
+                if (!row) return <View key={si} style={styles.scenarioValCol} />;
+                const val = getValue(row, viewMode);
+                return (
+                  <View key={si} style={styles.scenarioValCol}>
+                    <Text style={[styles.valText, { color: scenarios[si].color }]}>{fmtCompact(val)}</Text>
+                    {viewMode === 'netCF' && <Text style={styles.valSub}>/yr</Text>}
+                  </View>
+                );
+              })}
+            </Pressable>
+
+            {/* Expanded detail panel */}
+            {isActive && (
+              <View style={styles.detailPanel}>
+                {(['netCF', 'portfolioValue', 'equity'] as ViewMode[]).filter(m => m !== viewMode).map(m => {
+                  const mLabel = m === 'netCF' ? 'Net CF/yr' : m === 'portfolioValue' ? 'Portfolio Value' : 'Equity';
+                  return (
+                    <View key={m} style={styles.detailRow}>
+                      <Text style={styles.detailMetric}>{mLabel}</Text>
+                      {checkpointRows[ci].map((row, si) => {
+                        if (!row) return <View key={si} style={styles.detailValCol} />;
+                        const v = getValue(row, m);
+                        return (
+                          <Text key={si} style={[styles.detailVal, { color: scenarios[si].color }]}>
+                            {fmtCompact(v)}
+                          </Text>
+                        );
+                      })}
+                    </View>
+                  );
+                })}
+                {/* Units row */}
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailMetric}>Units</Text>
+                  {checkpointRows[ci].map((row, si) => (
+                    <Text key={si} style={[styles.detailVal, { color: scenarios[si].color }]}>
+                      {row?.units ?? '—'}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            )}
+          </React.Fragment>
+        );
+      })}
 
       {/* Delta callout */}
       <View style={styles.deltaBox}>
@@ -164,9 +212,21 @@ const styles = StyleSheet.create({
   scenarioName: { fontSize: 10, fontWeight: '700', textAlign: 'center' },
   scenarioSub: { fontSize: 9, color: Colors.textDim, textAlign: 'center', marginTop: 1 },
 
-  checkpointRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.sm },
+  checkpointRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.sm, borderRadius: Radius.md },
   checkpointBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.border },
+  checkpointRowActive: { backgroundColor: Colors.greenDim },
+  checkpointRowPressed: { backgroundColor: Colors.glassDark },
   yrLabel: { fontSize: 10, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.3 },
+  tapHint: { fontSize: 8, color: Colors.textDim, marginTop: 2 },
+  detailPanel: {
+    backgroundColor: Colors.glassDark, borderRadius: Radius.md,
+    padding: Spacing.sm, marginBottom: Spacing.xs,
+    borderWidth: 0.5, borderColor: Colors.border,
+  },
+  detailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  detailMetric: { width: 100, fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
+  detailValCol: { flex: 1 },
+  detailVal: { flex: 1, fontSize: 12, fontWeight: '700', textAlign: 'center' },
   scenarioValCol: { flex: 1, alignItems: 'center' },
   valText: { fontSize: FontSize.sm, fontWeight: '800' },
   valSub: { fontSize: 9, color: Colors.textDim },
