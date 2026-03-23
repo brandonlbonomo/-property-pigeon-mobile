@@ -13,89 +13,35 @@ import { useProCheckout } from '../../hooks/useProCheckout';
 import { Card } from '../../components/Card';
 import { BarChart, BarData, dismissAllChartTooltips } from '../../components/BarChart';
 import { fmt$, fmtCompact } from '../../utils/format';
-import { generateYearTimeline } from '../../utils/projections';
+import { generateYearTimeline, generate30YearProjection, YearRow } from '../../utils/projections';
 
+import { ScenarioComparison } from './projections/ScenarioComparison';
+import { BreakEvenCalculator } from './projections/BreakEvenCalculator';
+import { RefiModeler } from './projections/RefiModeler';
+import { DebtPaydownCurve } from './projections/DebtPaydownCurve';
+import { MonteCarloBand } from './projections/MonteCarloBand';
+import { TaxDragEstimate } from './projections/TaxDragEstimate';
 
 const { width: SCREEN_W } = Dimensions.get('window');
+const INFLATION_RATE = 0.03;
 
-// ── 30-Year Projection Engine ──
-
-interface YearRow {
-  year: number;
-  yearOffset: number;
-  units: number;
-  revenue: number;
-  expenses: number;
-  netCF: number;
-  portfolioValue: number;
-  equity: number;
-}
-
-function generate30YearProjection(
-  startingUnits: number,
-  unitsPerYear: number,
-  currentRevenue: number,     // monthly
-  currentExpenses: number,    // monthly
-  projectionStyle: string,
-): YearRow[] {
-  const curYear = new Date().getFullYear();
-  const revenuePerUnit = startingUnits > 0 ? (currentRevenue * 12) / startingUnits : 0;
-  const expensePerUnit = startingUnits > 0 ? (currentExpenses * 12) / startingUnits : 0;
-
-  // Growth assumptions
-  const styleFactors: Record<string, { revGrowth: number; expGrowth: number; appreciation: number }> = {
-    conservative: { revGrowth: 0.02, expGrowth: 0.03, appreciation: 0.03 },
-    normal:       { revGrowth: 0.04, expGrowth: 0.03, appreciation: 0.04 },
-    bullish:      { revGrowth: 0.06, expGrowth: 0.025, appreciation: 0.06 },
-  };
-  const factors = styleFactors[projectionStyle] || styleFactors.normal;
-
-  const valuePerUnit = 150000; // avg property value assumption
-  const ltv = 0.75; // loan-to-value
-  const mortgageRate = 0.065; // 6.5% annual
-  const years: YearRow[] = [];
-
-  for (let i = 0; i <= 30; i += 5) {
-    const yearOffset = i;
-    const year = curYear + i;
-    const units = startingUnits + unitsPerYear * i;
-
-    // Revenue and expenses grow per unit and with more units
-    const revPerUnit = revenuePerUnit * Math.pow(1 + factors.revGrowth, i);
-    const expPerUnit = expensePerUnit * Math.pow(1 + factors.expGrowth, i);
-    const revenue = units * revPerUnit;
-    const expenses = units * expPerUnit;
-
-    // Mortgage cost for financed units (only units added after year 0)
-    const addedUnits = Math.max(0, units - startingUnits);
-    const mortgageCost = addedUnits * valuePerUnit * ltv * mortgageRate;
-
-    const netCF = revenue - expenses - mortgageCost;
-
-    // Portfolio value with appreciation
-    const portfolioValue = units * valuePerUnit * Math.pow(1 + factors.appreciation, i);
-
-    // Equity = value minus outstanding mortgage on added units
-    // Simplified: assume each property gains equity via appreciation + principal paydown
-    const outstandingMortgage = addedUnits * valuePerUnit * ltv * Math.max(0, 1 - i * 0.033); // ~3.3% principal paydown/yr
-    const equity = portfolioValue - outstandingMortgage;
-
-    years.push({ year, yearOffset, units, revenue, expenses, netCF, portfolioValue, equity });
-  }
-
-  return years;
+function realVal(nominal: number, yearOffset: number, adjusted: boolean): number {
+  if (!adjusted || yearOffset === 0) return nominal;
+  return nominal / Math.pow(1 + INFLATION_RATE, yearOffset);
 }
 
 // ── Milestone Cards ──
 
-function MilestoneCard({ row }: { row: YearRow }) {
+function MilestoneCard({ row, inflationAdjusted }: { row: YearRow; inflationAdjusted: boolean }) {
+  const netCF = realVal(row.netCF, row.yearOffset, inflationAdjusted);
+  const value = realVal(row.portfolioValue, row.yearOffset, inflationAdjusted);
   return (
     <View style={milestoneStyles.card}>
       <Text style={milestoneStyles.yearLabel}>YEAR {row.yearOffset}</Text>
       <Text style={milestoneStyles.units}>{row.units} units</Text>
-      <Text style={milestoneStyles.netCF}>{fmtCompact(row.netCF)}</Text>
-      <Text style={milestoneStyles.netCFLabel}>net CF/yr</Text>
-      <Text style={milestoneStyles.value}>{fmtCompact(row.portfolioValue)}</Text>
+      <Text style={milestoneStyles.netCF}>{fmtCompact(netCF)}</Text>
+      <Text style={milestoneStyles.netCFLabel}>net CF/yr{inflationAdjusted ? ' (real)' : ''}</Text>
+      <Text style={milestoneStyles.value}>{fmtCompact(value)}</Text>
       <Text style={milestoneStyles.valueLabel}>portfolio value</Text>
     </View>
   );
@@ -127,19 +73,29 @@ const milestoneStyles = StyleSheet.create({
 
 // ── Projection Bar Chart using shared BarChart ──
 
-function ProjectionBarChartCard({ data }: { data: YearRow[] }) {
-  const projBars: BarData[] = data.map((row, i) => ({
-    label: `Yr${row.yearOffset}`,
-    value: row.netCF,
-    isActual: true,
-    isCurrent: row.yearOffset === 0,
-    priorValue: i > 0 ? data[i - 1].netCF : undefined,
-    priorLabel: i > 0 ? `Yr${data[i - 1].yearOffset}` : undefined,
-  }));
+function ProjectionBarChartCard({ data, inflationAdjusted }: { data: YearRow[]; inflationAdjusted: boolean }) {
+  const projBars: BarData[] = data.map((row, i) => {
+    const val = realVal(row.netCF, row.yearOffset, inflationAdjusted);
+    const priorVal = i > 0 ? realVal(data[i - 1].netCF, data[i - 1].yearOffset, inflationAdjusted) : undefined;
+    return {
+      label: `Yr${row.yearOffset}`,
+      value: val,
+      isActual: true,
+      isCurrent: row.yearOffset === 0,
+      priorValue: priorVal,
+      priorLabel: i > 0 ? `Yr${data[i - 1].yearOffset}` : undefined,
+    };
+  });
+
+  const lastRow = data[data.length - 1];
+  const displayValue = realVal(lastRow?.portfolioValue || 0, lastRow?.yearOffset || 30, inflationAdjusted);
+  const displayEquity = realVal(lastRow?.equity || 0, lastRow?.yearOffset || 30, inflationAdjusted);
 
   return (
     <Card>
-      <Text style={projBarStyles.title}>Annual Net Cash Flow</Text>
+      <Text style={projBarStyles.title}>
+        Annual Net Cash Flow{inflationAdjusted ? ' (Real $)' : ''}
+      </Text>
       <BarChart
         bars={projBars}
         color={Colors.green}
@@ -148,10 +104,10 @@ function ProjectionBarChartCard({ data }: { data: YearRow[] }) {
       />
       <View style={projBarStyles.footer}>
         <Text style={projBarStyles.footerText}>
-          Yr 30 value <Text style={{ color: Colors.green, fontWeight: '700' }}>{fmtCompact(data[data.length - 1]?.portfolioValue || 0)}</Text>
+          Yr 30 value <Text style={{ color: Colors.green, fontWeight: '700' }}>{fmtCompact(displayValue)}</Text>
         </Text>
         <Text style={projBarStyles.footerText}>
-          Equity <Text style={{ color: Colors.green, fontWeight: '700' }}>{fmtCompact(data[data.length - 1]?.equity || 0)}</Text>
+          Equity <Text style={{ color: Colors.green, fontWeight: '700' }}>{fmtCompact(displayEquity)}</Text>
         </Text>
       </View>
     </Card>
@@ -180,13 +136,13 @@ export function ProjectionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [inflationAdjusted, setInflationAdjusted] = useState(false);
 
   const projStyle = profile?.projectionStyle || 'normal';
   const startingUnits = (profile?.properties || []).reduce((sum, p) => sum + (p.units || 1), 0);
   const savedUnitsPerYear = profile?.unitsPerYear ?? 0;
   const [unitsPerYear, setUnitsPerYear] = useState(savedUnitsPerYear);
 
-  // Reset to saved value when screen regains focus or profile changes
   useEffect(() => {
     setUnitsPerYear(savedUnitsPerYear);
   }, [savedUnitsPerYear]);
@@ -215,14 +171,14 @@ export function ProjectionsScreen() {
   const prior = cockpit?.prior || {};
   const priorRev = prior.revenue ?? 0;
 
-  // YTD (current month * month index gives rough YTD)
-  const curMonth = new Date().getMonth() + 1; // 1-indexed
+  // YTD
+  const curMonth = new Date().getMonth() + 1;
   const ytdRevenue = revenue * curMonth;
   const ytdExpenses = expenses * curMonth;
   const ytdNet = ytdRevenue - ytdExpenses;
   const ytdMargin = ytdRevenue > 0 ? (ytdNet / ytdRevenue) * 100 : 0;
 
-  // FY Projected (annualized from current month)
+  // FY Projected
   const fyRevenue = useMemo(() => {
     const timeline = generateYearTimeline(revenue, priorRev, projStyle, new Date().getFullYear());
     return timeline.reduce((s, m) => s + m.value, 0);
@@ -234,7 +190,7 @@ export function ProjectionsScreen() {
   const fyNet = fyRevenue - fyExpenses;
   const fyMargin = fyRevenue > 0 ? (fyNet / fyRevenue) * 100 : 0;
 
-  // Prior FY annualized
+  // Prior FY
   const priorFYRev = (prior.revenue ?? 0) * 12;
   const yoyDiff = fyRevenue - priorFYRev;
   const yoyPct = priorFYRev > 0 ? (yoyDiff / priorFYRev) * 100 : 0;
@@ -360,22 +316,38 @@ export function ProjectionsScreen() {
       <Card>
         <View style={styles.projHeader}>
           <Text style={styles.projTitle}>30-Year Projection</Text>
-          <View style={styles.unitsControl}>
-            <TouchableOpacity activeOpacity={0.7}
-          style={styles.unitBtn}
-              onPress={() => handleUnitsChange(-1)}
+          <View style={styles.projHeaderRight}>
+            {/* Inflation toggle */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={[styles.inflationToggle, inflationAdjusted && styles.inflationToggleActive]}
+              onPress={() => setInflationAdjusted(v => !v)}
             >
-              <Ionicons name="remove" size={16} color={Colors.textSecondary} />
+              <Text style={[styles.inflationToggleText, inflationAdjusted && styles.inflationToggleTextActive]}>
+                {inflationAdjusted ? 'Real $' : 'Nominal'}
+              </Text>
             </TouchableOpacity>
-            <Text style={styles.unitsText}>{unitsPerYear} units/yr</Text>
-            <TouchableOpacity activeOpacity={0.7}
-          style={styles.unitBtn}
-              onPress={() => handleUnitsChange(1)}
-            >
-              <Ionicons name="add" size={16} color={Colors.textSecondary} />
-            </TouchableOpacity>
+            {/* Units control */}
+            <View style={styles.unitsControl}>
+              <TouchableOpacity activeOpacity={0.7} style={styles.unitBtn} onPress={() => handleUnitsChange(-1)}>
+                <Ionicons name="remove" size={16} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <Text style={styles.unitsText}>{unitsPerYear} units/yr</Text>
+              <TouchableOpacity activeOpacity={0.7} style={styles.unitBtn} onPress={() => handleUnitsChange(1)}>
+                <Ionicons name="add" size={16} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
+
+        {inflationAdjusted && (
+          <View style={styles.inflationBanner}>
+            <Ionicons name="information-circle-outline" size={13} color={Colors.textDim} />
+            <Text style={styles.inflationBannerText}>
+              Showing real (inflation-adjusted) values at 3%/yr · {new Date().getFullYear()} dollars
+            </Text>
+          </View>
+        )}
 
         <View style={styles.projSummary}>
           <Text style={styles.projSummaryText}>
@@ -401,9 +373,15 @@ export function ProjectionsScreen() {
           <View key={row.year} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
             <Text style={[styles.tableCell, styles.tableCellBold, { flex: 0.8 }]}>{row.year}</Text>
             <Text style={[styles.tableCell, { flex: 0.7 }]}>{row.units}</Text>
-            <Text style={[styles.tableCell, { color: Colors.green }]}>{fmtCompact(row.revenue)}</Text>
-            <Text style={[styles.tableCell, { color: Colors.green }]}>{fmtCompact(row.netCF)}</Text>
-            <Text style={[styles.tableCell, { color: Colors.green }]}>{fmtCompact(row.portfolioValue)}</Text>
+            <Text style={[styles.tableCell, { color: Colors.green }]}>
+              {fmtCompact(realVal(row.revenue, row.yearOffset, inflationAdjusted))}
+            </Text>
+            <Text style={[styles.tableCell, { color: Colors.green }]}>
+              {fmtCompact(realVal(row.netCF, row.yearOffset, inflationAdjusted))}
+            </Text>
+            <Text style={[styles.tableCell, { color: Colors.green }]}>
+              {fmtCompact(realVal(row.portfolioValue, row.yearOffset, inflationAdjusted))}
+            </Text>
           </View>
         ))}
       </Card>
@@ -413,21 +391,58 @@ export function ProjectionsScreen() {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.milestoneScroll}>
         {projection.filter(r => r.yearOffset > 0).map(row => (
           <View key={row.yearOffset} style={{ marginRight: Spacing.sm }}>
-            <MilestoneCard row={row} />
+            <MilestoneCard row={row} inflationAdjusted={inflationAdjusted} />
           </View>
         ))}
       </ScrollView>
 
       {/* ── Bar Chart ── */}
-      <ProjectionBarChartCard data={projection} />
+      <ProjectionBarChartCard data={projection} inflationAdjusted={inflationAdjusted} />
 
       {/* ── Projection Note ── */}
       <View style={styles.noteRow}>
         <Ionicons name="analytics-outline" size={14} color={Colors.textDim} />
         <Text style={styles.noteText}>
           Based on {projStyle} projections · {unitsPerYear} units acquired per year
+          {inflationAdjusted ? ' · 3% inflation deflator' : ''}
         </Text>
       </View>
+
+      {/* ── Advanced Features ── */}
+      <View style={styles.advancedHeader}>
+        <Text style={styles.advancedTitle}>Advanced Analysis</Text>
+        <Text style={styles.advancedSubtitle}>Tap any section to expand</Text>
+      </View>
+
+      <ScenarioComparison
+        startingUnits={startingUnits}
+        currentUnitsPerYear={unitsPerYear}
+        revenue={revenue}
+        expenses={expenses}
+        projStyle={projStyle}
+      />
+
+      <MonteCarloBand projection={projection} />
+
+      <DebtPaydownCurve projection={projection} />
+
+      <BreakEvenCalculator
+        properties={profile?.properties || []}
+        monthlyRevenue={revenue}
+        monthlyExpenses={expenses}
+        startingUnits={startingUnits}
+      />
+
+      <RefiModeler
+        projection={projection}
+        startingUnits={startingUnits}
+        unitsPerYear={unitsPerYear}
+        revenue={revenue}
+        expenses={expenses}
+        projStyle={projStyle}
+      />
+
+      <TaxDragEstimate projection={projection} startingUnits={startingUnits} />
     </ScrollView>
   );
 }
@@ -452,6 +467,25 @@ const styles = StyleSheet.create({
   // Projection header
   projHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm },
   projTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
+  projHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+
+  // Inflation toggle
+  inflationToggle: {
+    paddingHorizontal: Spacing.sm, paddingVertical: 5,
+    backgroundColor: Colors.glassDark,
+    borderRadius: Radius.pill, borderWidth: 0.5, borderColor: Colors.border,
+  },
+  inflationToggleActive: { backgroundColor: Colors.greenDim, borderColor: Colors.green },
+  inflationToggleText: { fontSize: 11, fontWeight: '700', color: Colors.textSecondary, letterSpacing: 0.2 },
+  inflationToggleTextActive: { color: Colors.green },
+  inflationBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.md,
+    padding: Spacing.xs, paddingHorizontal: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  inflationBannerText: { fontSize: 11, color: Colors.textSecondary, flex: 1 },
+
   unitsControl: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   unitBtn: {
     width: 28, height: 28, borderRadius: 14,
@@ -518,7 +552,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: Spacing.sm,
   },
-  noteText: { fontSize: 11, color: Colors.textDim, fontStyle: 'italic' },
+  noteText: { fontSize: 11, color: Colors.textDim, fontStyle: 'italic', flex: 1 },
+
+  // Advanced section header
+  advancedHeader: {
+    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
+    marginTop: Spacing.md, marginBottom: Spacing.sm,
+  },
+  advancedTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
+  advancedSubtitle: { fontSize: FontSize.xs, color: Colors.textDim },
 
   // Locked state
   lockedContainer: {
