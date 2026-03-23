@@ -234,3 +234,68 @@ export function getAvailableYears(): number[] {
   }
   return years;
 }
+
+// ── 30-Year Projection Engine (shared) ──
+
+export interface YearRow {
+  year: number;
+  yearOffset: number;
+  units: number;
+  revenue: number;
+  expenses: number;
+  netCF: number;
+  portfolioValue: number;
+  equity: number;
+  mortgageBalance: number;
+}
+
+export const PROJECTION_VALUE_PER_UNIT = 150000;
+export const PROJECTION_LTV = 0.75;
+export const PROJECTION_MORTGAGE_RATE = 0.065;
+
+export const STYLE_FACTORS: Record<string, { revGrowth: number; expGrowth: number; appreciation: number }> = {
+  conservative: { revGrowth: 0.02, expGrowth: 0.03, appreciation: 0.03 },
+  normal:       { revGrowth: 0.04, expGrowth: 0.03, appreciation: 0.04 },
+  bullish:      { revGrowth: 0.06, expGrowth: 0.025, appreciation: 0.06 },
+};
+
+export function generate30YearProjection(
+  startingUnits: number,
+  unitsPerYear: number,
+  currentRevenue: number,     // monthly
+  currentExpenses: number,    // monthly
+  projectionStyle: string,
+): YearRow[] {
+  const curYear = new Date().getFullYear();
+  const revenuePerUnit = startingUnits > 0 ? (currentRevenue * 12) / startingUnits : 0;
+  const expensePerUnit = startingUnits > 0 ? (currentExpenses * 12) / startingUnits : 0;
+
+  const factors = STYLE_FACTORS[projectionStyle] || STYLE_FACTORS.normal;
+  const valuePerUnit = PROJECTION_VALUE_PER_UNIT;
+  const ltv = PROJECTION_LTV;
+  const mortgageRate = PROJECTION_MORTGAGE_RATE;
+  const years: YearRow[] = [];
+
+  for (let i = 0; i <= 30; i += 5) {
+    const yearOffset = i;
+    const year = curYear + i;
+    const units = startingUnits + unitsPerYear * i;
+
+    const revPerUnit = revenuePerUnit * Math.pow(1 + factors.revGrowth, i);
+    const expPerUnit = expensePerUnit * Math.pow(1 + factors.expGrowth, i);
+    const revenue = units * revPerUnit;
+    const expenses = units * expPerUnit;
+
+    const addedUnits = Math.max(0, units - startingUnits);
+    const mortgageCost = addedUnits * valuePerUnit * ltv * mortgageRate;
+    const netCF = revenue - expenses - mortgageCost;
+
+    const portfolioValue = units * valuePerUnit * Math.pow(1 + factors.appreciation, i);
+    const mortgageBalance = addedUnits * valuePerUnit * ltv * Math.max(0, 1 - i * 0.033);
+    const equity = portfolioValue - mortgageBalance;
+
+    years.push({ year, yearOffset, units, revenue, expenses, netCF, portfolioValue, equity, mortgageBalance });
+  }
+
+  return years;
+}

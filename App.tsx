@@ -52,15 +52,6 @@ export default function App() {
   const backgroundedAt = useRef<number | null>(null);
   const [stripeKey, setStripeKey] = useState<string | null>(null);
 
-  // Fetch Stripe publishable key for payment sheet (must be before any early returns)
-  const [stripeKey, setStripeKey] = useState<string | null>(null);
-  useEffect(() => {
-    fetch('https://portfoliopigeon.com/api/invoice/publishable-key')
-      .then(r => r.json())
-      .then(d => { if (d.publishable_key) setStripeKey(d.publishable_key); })
-      .catch(() => {});
-  }, []);
-
   // On 401, clear auth state and redirect to login
   useEffect(() => {
     onAuthExpired(() => {
