@@ -20,6 +20,14 @@ import { CleaningsScreen, useCleaningsBadgeCount } from '../screens/cleanings/Cl
 import { NetworkMapScreen } from '../screens/network/NetworkMapScreen';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Global scroll lock — charts set this to prevent page swiping while scrubbing
+let _scrollLockSetter: ((locked: boolean) => void) | null = null;
+let _verticalScrollLockSetter: ((locked: boolean) => void) | null = null;
+export function lockParentScroll() { _scrollLockSetter?.(true); _verticalScrollLockSetter?.(true); }
+export function unlockParentScroll() { _scrollLockSetter?.(false); _verticalScrollLockSetter?.(false); }
+export function registerVerticalScrollLock(setter: (locked: boolean) => void) { _verticalScrollLockSetter = setter; }
+export function unregisterVerticalScrollLock() { _verticalScrollLockSetter = null; }
 const BASE_ORDER = ['profile', 'performance', 'projections'];
 const STR_PILLS = ['logistics'];
 
@@ -54,6 +62,13 @@ export function PillNavigator() {
   const insets = useSafeAreaInsets();
   const rawPillOrder = useUserStore(s => s.profile?.pillOrder);
   const portfolioType = useUserStore(s => s.profile?.portfolioType);
+  const [parentScrollEnabled, setParentScrollEnabled] = useState(true);
+
+  // Register direct setter so charts can disable scroll instantly
+  useEffect(() => {
+    _scrollLockSetter = (locked: boolean) => setParentScrollEnabled(!locked);
+    return () => { _scrollLockSetter = null; };
+  }, []);
   const unreadCount = useNotificationStore(s => s.unreadCount);
   const cleaningsBadge = useCleaningsBadgeCount();
 
@@ -208,6 +223,7 @@ export function PillNavigator() {
         bounces
         alwaysBounceHorizontal
         scrollEventThrottle={16}
+        scrollEnabled={parentScrollEnabled}
         onScroll={onScroll}
         onScrollBeginDrag={onScrollBeginDrag}
         onScrollEndDrag={onScrollEndDrag}

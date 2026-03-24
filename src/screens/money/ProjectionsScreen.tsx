@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, FontSize, Spacing, Radius } from '../../constants/theme';
+import { registerVerticalScrollLock, unregisterVerticalScrollLock } from '../../navigation/LTRNavigator';
 
 import { useUserStore } from '../../store/userStore';
 import { useDataStore } from '../../store/dataStore';
@@ -13,11 +14,10 @@ import { useProCheckout } from '../../hooks/useProCheckout';
 import { Card } from '../../components/Card';
 import { BarChart, BarData, dismissAllChartTooltips } from '../../components/BarChart';
 import { fmt$, fmtCompact } from '../../utils/format';
-import { generateYearTimeline, generate30YearProjection, YearRow } from '../../utils/projections';
+import { generateYearTimeline, generate30YearProjection, generate30YearProjectionYearly, YearRow } from '../../utils/projections';
 
 import { ScenarioComparison } from './projections/ScenarioComparison';
 import { BreakEvenCalculator } from './projections/BreakEvenCalculator';
-import { RefiModeler } from './projections/RefiModeler';
 import { DebtPaydownCurve } from './projections/DebtPaydownCurve';
 import { MonteCarloBand } from './projections/MonteCarloBand';
 import { TaxDragEstimate } from './projections/TaxDragEstimate';
@@ -222,6 +222,12 @@ export function ProjectionsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [inflationAdjusted, setInflationAdjusted] = useState(false);
+  const [verticalScrollEnabled, setVerticalScrollEnabled] = useState(true);
+
+  useEffect(() => {
+    registerVerticalScrollLock((locked) => setVerticalScrollEnabled(!locked));
+    return () => unregisterVerticalScrollLock();
+  }, []);
 
   const projStyle = profile?.projectionStyle || 'normal';
   const startingUnits = (profile?.properties || []).reduce((sum, p) => sum + (p.units || 1), 0);
@@ -292,6 +298,11 @@ export function ProjectionsScreen() {
     () => generate30YearProjection(startingUnits, unitsPerYear, fyRevenue / 12, fyExpenses / 12, projStyle),
     [startingUnits, unitsPerYear, fyRevenue, fyExpenses, projStyle],
   );
+  // Year-by-year for smooth advanced charts (31 data points)
+  const projectionYearly = useMemo(
+    () => generate30YearProjectionYearly(startingUnits, unitsPerYear, fyRevenue / 12, fyExpenses / 12, projStyle),
+    [startingUnits, unitsPerYear, fyRevenue, fyExpenses, projStyle],
+  );
 
   const handleUnitsChange = (delta: number) => {
     const next = Math.max(0, unitsPerYear + delta);
@@ -340,7 +351,7 @@ export function ProjectionsScreen() {
     );
   }
 
-  if (loading) {
+  if (loading && !profile?.properties?.length) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.green} />
@@ -354,6 +365,9 @@ export function ProjectionsScreen() {
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={"#1A1A1A"} colors={["#1A1A1A"]} />}
       onTouchStart={dismissAllChartTooltips}
+      automaticallyAdjustKeyboardInsets
+      keyboardShouldPersistTaps="handled"
+      scrollEnabled={verticalScrollEnabled}
       {...({delaysContentTouches: false} as any)}
     >
       {error && (
@@ -481,16 +495,6 @@ export function ProjectionsScreen() {
       {/* ── Wealth Accumulation Chart ── */}
       <WealthBuilderCard data={projection} />
 
-      {/* ── Milestone Cards ── */}
-      <Text style={styles.milestoneTitle}>30-Year Portfolio Projection</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.milestoneScroll}>
-        {projection.filter(r => r.yearOffset > 0).map(row => (
-          <View key={row.yearOffset} style={{ marginRight: Spacing.sm }}>
-            <MilestoneCard row={row} inflationAdjusted={inflationAdjusted} />
-          </View>
-        ))}
-      </ScrollView>
-
       {/* ── Net Cash Flow Bar Chart ── */}
       <ProjectionBarChartCard data={projection} inflationAdjusted={inflationAdjusted} />
 
@@ -517,9 +521,9 @@ export function ProjectionsScreen() {
         projStyle={projStyle}
       />
 
-      <MonteCarloBand projection={projection} />
+      <MonteCarloBand projection={projectionYearly} />
 
-      <DebtPaydownCurve projection={projection} />
+      <DebtPaydownCurve projection={projectionYearly} />
 
       <BreakEvenCalculator
         properties={profile?.properties || []}
@@ -528,23 +532,14 @@ export function ProjectionsScreen() {
         startingUnits={startingUnits}
       />
 
-      <RefiModeler
-        projection={projection}
-        startingUnits={startingUnits}
-        unitsPerYear={unitsPerYear}
-        revenue={revenue}
-        expenses={expenses}
-        projStyle={projStyle}
-      />
-
-      <TaxDragEstimate projection={projection} startingUnits={startingUnits} />
+      <TaxDragEstimate projection={projectionYearly} startingUnits={startingUnits} />
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  content: { padding: Spacing.md, paddingTop: 160, paddingBottom: Spacing.xl * 2 },
+  content: { padding: Spacing.md, paddingTop: 160, paddingBottom: Spacing.xl * 3 },
 
   // YTD table
   sectionLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, letterSpacing: 0.8, fontWeight: '600' },
@@ -652,7 +647,7 @@ const styles = StyleSheet.create({
   // Advanced section header
   advancedHeader: {
     flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
-    marginTop: Spacing.md, marginBottom: Spacing.sm,
+    marginTop: Spacing.xl, marginBottom: Spacing.lg,
   },
   advancedTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
   advancedSubtitle: { fontSize: FontSize.xs, color: Colors.textDim },

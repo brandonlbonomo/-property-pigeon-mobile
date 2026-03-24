@@ -32,9 +32,9 @@ export function glassAlert(
   if (_setAlert) {
     _setAlert({ visible: true, title, message, buttons: btns });
   } else {
-    // Fallback to native alert if provider not mounted
+    // Fallback if provider not mounted yet
     const { Alert } = require('react-native');
-    Alert.alert(title, message, btns);
+    Alert.alert(title, message || undefined, btns);
   }
 }
 

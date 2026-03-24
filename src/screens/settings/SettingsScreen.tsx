@@ -504,6 +504,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
   const [icalUrls, setIcalUrls] = useState<string[]>([]);
   const [purchasePrice, setPurchasePrice] = useState('');
   const [purchaseDate, setPurchaseDate] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [downPaymentPct, setDownPaymentPct] = useState('');
   const [valuationOptOut, setValuationOptOut] = useState(false);
 
@@ -687,9 +688,70 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
                 onChangeText={setPurchasePrice} placeholder="e.g. 350000"
                 placeholderTextColor={Colors.textDim} keyboardType="decimal-pad" />
               <Text style={styles.modalFieldLabel}>Purchase Date</Text>
-              <TextInput style={styles.modalInput} value={purchaseDate}
-                onChangeText={setPurchaseDate} placeholder="YYYY-MM-DD"
-                placeholderTextColor={Colors.textDim} />
+              <TouchableOpacity
+                activeOpacity={0.7}
+                style={[styles.modalInput, { justifyContent: 'center' }]}
+                onPress={() => setShowDatePicker(!showDatePicker)}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: FontSize.md, color: purchaseDate ? Colors.text : Colors.textDim }}>
+                    {purchaseDate ? new Date(purchaseDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 'Select date'}
+                  </Text>
+                  <Ionicons name="calendar-outline" size={18} color={Colors.textDim} />
+                </View>
+              </TouchableOpacity>
+              {showDatePicker && (() => {
+                const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+                const curYear = new Date().getFullYear();
+                const years = Array.from({ length: 40 }, (_, i) => curYear - i);
+                const selYear = purchaseDate ? parseInt(purchaseDate.slice(0, 4)) : curYear;
+                const selMonth = purchaseDate ? parseInt(purchaseDate.slice(5, 7)) - 1 : new Date().getMonth();
+                return (
+                  <View style={{ backgroundColor: Colors.glassDark, borderRadius: Radius.md, padding: Spacing.sm, marginTop: Spacing.xs, borderWidth: 0.5, borderColor: Colors.glassBorder }}>
+                    <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
+                      {/* Month selector */}
+                      <ScrollView style={{ flex: 1, maxHeight: 150 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                        {MONTHS.map((m, i) => (
+                          <TouchableOpacity
+                            key={m}
+                            activeOpacity={0.7}
+                            style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: Radius.sm, backgroundColor: i === selMonth ? Colors.greenDim : 'transparent' }}
+                            onPress={() => {
+                              const y = purchaseDate ? purchaseDate.slice(0, 4) : String(curYear);
+                              setPurchaseDate(`${y}-${String(i + 1).padStart(2, '0')}-01`);
+                            }}
+                          >
+                            <Text style={{ fontSize: FontSize.sm, fontWeight: i === selMonth ? '700' : '400', color: i === selMonth ? Colors.green : Colors.text }}>{m}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                      {/* Year selector */}
+                      <ScrollView style={{ width: 80, maxHeight: 150 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                        {years.map(y => (
+                          <TouchableOpacity
+                            key={y}
+                            activeOpacity={0.7}
+                            style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: Radius.sm, alignItems: 'center', backgroundColor: y === selYear ? Colors.greenDim : 'transparent' }}
+                            onPress={() => {
+                              const m = purchaseDate ? purchaseDate.slice(5, 7) : String(new Date().getMonth() + 1).padStart(2, '0');
+                              setPurchaseDate(`${y}-${m}-01`);
+                            }}
+                          >
+                            <Text style={{ fontSize: FontSize.sm, fontWeight: y === selYear ? '700' : '400', color: y === selYear ? Colors.green : Colors.text }}>{y}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={{ marginTop: Spacing.sm, backgroundColor: Colors.green, borderRadius: Radius.md, paddingVertical: Spacing.sm, alignItems: 'center' }}
+                      onPress={() => setShowDatePicker(false)}
+                    >
+                      <Text style={{ color: '#fff', fontSize: FontSize.sm, fontWeight: '600' }}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })()}
               <Text style={styles.modalFieldLabel}>Down Payment %</Text>
               <TextInput style={styles.modalInput} value={downPaymentPct}
                 onChangeText={setDownPaymentPct} placeholder="e.g. 20"
@@ -912,12 +974,16 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
   visible: boolean; onClose: () => void;
   properties: any[];
   portfolioType: 'str' | 'ltr' | 'both' | null;
-  onSave: (entry: { propId: string; amount: string; description: string; date: string; incomeType: string }) => void;
+  onSave: (entry: { propId: string; amount: string; description: string; date: string; incomeType: string; override: boolean; monthKey: string }) => void;
 }) {
   const [incomeType, setIncomeType] = useState<'airbnb' | 'property'>('airbnb');
   const [propId, setPropId] = useState('');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [override, setOverride] = useState(false);
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   const isSTR = portfolioType === 'str';
   const isLTR = portfolioType === 'ltr';
@@ -940,14 +1006,22 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
       glassAlert('Required', 'Select a property'); return;
     }
 
+    // Use the 15th of the selected month so it lands mid-month
+    const monthKey = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
+    const dateStr = `${monthKey}-15`;
     onSave({
       propId: (isSTR || incomeType === 'airbnb') ? 'airbnb' : propId,
       amount: amount.trim(),
       description: description.trim() || ((isSTR || incomeType === 'airbnb') ? 'Airbnb income' : ''),
-      date: localDateStr(),
+      date: dateStr,
       incomeType: (isSTR || incomeType === 'airbnb') ? 'airbnb' : 'property',
+      override,
+      monthKey,
     });
-    setPropId(''); setAmount(''); setDescription(''); setIncomeType('airbnb'); onClose();
+    setPropId(''); setAmount(''); setDescription(''); setIncomeType('airbnb');
+    setSelectedMonth(new Date().getMonth()); setSelectedYear(new Date().getFullYear());
+    setOverride(false);
+    onClose();
   };
 
   return (
@@ -1024,6 +1098,44 @@ function ManualIncomeModal({ visible, onClose, properties, portfolioType, onSave
             }
             placeholderTextColor={Colors.textDim} />
 
+          <Text style={styles.inputLabel}>Month</Text>
+          <View style={styles.monthPickerRow}>
+            <TouchableOpacity activeOpacity={0.7}
+              style={styles.monthArrowBtn}
+              onPress={() => {
+                if (selectedMonth === 0) { setSelectedMonth(11); setSelectedYear(y => y - 1); }
+                else setSelectedMonth(m => m - 1);
+              }}>
+              <Ionicons name="chevron-back" size={16} color={Colors.textSecondary} />
+            </TouchableOpacity>
+            <Text style={styles.monthPickerLabel}>{MONTH_NAMES[selectedMonth]} {selectedYear}</Text>
+            <TouchableOpacity activeOpacity={0.7}
+              style={styles.monthArrowBtn}
+              onPress={() => {
+                if (selectedMonth === 11) { setSelectedMonth(0); setSelectedYear(y => y + 1); }
+                else setSelectedMonth(m => m + 1);
+              }}>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.overrideRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.overrideLabel}>Override month</Text>
+              <Text style={styles.overrideHint}>
+                {override
+                  ? 'Replaces all Plaid income for this month'
+                  : 'Adds to existing Plaid income'}
+              </Text>
+            </View>
+            <Switch
+              value={override}
+              onValueChange={setOverride}
+              trackColor={{ false: Colors.border, true: Colors.green }}
+              thumbColor="#fff"
+            />
+          </View>
+
           <View style={styles.modalBtns}>
             <TouchableOpacity activeOpacity={0.7}
           style={styles.modalCancelBtn} onPress={onClose}>
@@ -1067,6 +1179,8 @@ export function SettingsScreen({ route }: any) {
   const isLTR = userProfile?.portfolioType === 'ltr';
   const isSTR = userProfile?.portfolioType === 'str' || userProfile?.portfolioType === 'both';
   const fetchFollowCode = useUserStore(s => s.fetchFollowCode);
+  const cleanerInvPrefs = useCleanerStore(s => s.invoicePrefs);
+  const cleanerSavePrefs = useCleanerStore(s => s.saveInvoicePrefs);
   const [followCodeValue, setFollowCodeValue] = useState<string | null>(null);
 
   const initialSection = route?.params?.section as Section | undefined;
@@ -1079,6 +1193,16 @@ export function SettingsScreen({ route }: any) {
   const [editingUnitsPerYear, setEditingUnitsPerYear] = useState(false);
   const [unitsPerYearDraft, setUnitsPerYearDraft] = useState('');
   const [showAddIncome, setShowAddIncome] = useState(false);
+  const [manualOverrides, setManualOverrides] = useState<Record<string, number>>({});
+
+  // Fetch manual overrides when income section is active
+  useEffect(() => {
+    if (section === 'income') {
+      apiFetch('/api/manual-income').then(res => {
+        setManualOverrides(res.manual || {});
+      }).catch(() => {});
+    }
+  }, [section]);
   const [showAddCleaner, setShowAddCleaner] = useState(false);
   const [showAddTagRule, setShowAddTagRule] = useState(false);
   const [cleanerFeeds, setCleanerFeeds] = useState<any[]>([]);
@@ -1409,12 +1533,23 @@ export function SettingsScreen({ route }: any) {
     );
   };
 
-  const handleAddManualIncome = async (entry: { propId: string; amount: string; description: string; date: string; incomeType: string }) => {
+  const handleAddManualIncome = async (entry: { propId: string; amount: string; description: string; date: string; incomeType: string; override: boolean; monthKey: string }) => {
     try {
-      await apiFetch('/api/income/manual', { method: 'POST', body: JSON.stringify(entry) });
+      if (entry.override) {
+        // Override mode: set manual_income for the month (replaces Plaid)
+        const current = await apiFetch('/api/manual-income').catch(() => ({ manual: {} }));
+        const manual = current.manual || {};
+        manual[entry.monthKey] = parseFloat(entry.amount);
+        await apiFetch('/api/manual-income', { method: 'POST', body: JSON.stringify({ manual }) });
+        setManualOverrides(manual);
+      } else {
+        // Additive mode: add as a separate income entry
+        await apiFetch('/api/income/manual', { method: 'POST', body: JSON.stringify(entry) });
+      }
       await activateData();
       invalidateAll();
-      glassAlert('Added', `$${entry.amount} income added.`);
+      const mode = entry.override ? 'override set' : 'income added';
+      glassAlert('Done', `$${entry.amount} ${mode} for ${entry.monthKey}.`);
     } catch { glassAlert('Error', 'Could not save income entry. Please try again.'); }
   };
 
@@ -1718,7 +1853,10 @@ export function SettingsScreen({ route }: any) {
               ...(p.market ? { market: p.market } : {}),
               ...(p.lat ? { lat: p.lat, lng: p.lng } : {}),
               ...(p.unitLabels?.length ? { unitLabels: p.unitLabels } : { unitLabels: undefined }),
-              ...(p.downPaymentPct ? { downPaymentPct: p.downPaymentPct } : { downPaymentPct: undefined }),
+              purchasePrice: p.purchasePrice || undefined,
+              purchaseDate: p.purchaseDate || undefined,
+              valuationOptOut: p.valuationOptOut || false,
+              downPaymentPct: p.downPaymentPct || undefined,
               ...(p.icalUrls?.some(u => u?.trim()) ? { icalUrls: p.icalUrls } : { icalUrls: undefined }),
             };
             await setUserProfile({ properties: currentProps });
@@ -1824,6 +1962,26 @@ export function SettingsScreen({ route }: any) {
   }
 
   if (section === 'income') {
+    const handleRemoveOverride = async (monthKey: string) => {
+      glassAlert('Remove Override', `Revert ${monthKey} to Plaid data?`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: async () => {
+          try {
+            const updated = { ...manualOverrides };
+            delete updated[monthKey];
+            await apiFetch('/api/manual-income', { method: 'POST', body: JSON.stringify({ manual: updated }) });
+            setManualOverrides(updated);
+            invalidateAll();
+            glassAlert('Removed', `${monthKey} reverted to Plaid data.`);
+          } catch { glassAlert('Error', 'Could not remove override.'); }
+        }},
+      ]);
+    };
+
+    const overrideEntries = Object.entries(manualOverrides)
+      .filter(([_, v]) => v && typeof v === 'number')
+      .sort(([a], [b]) => b.localeCompare(a));
+
     const incomeDesc = portfolioType === 'str'
       ? 'Record Airbnb direct deposits. Since Airbnb pays out as a lump sum, income is tracked as a total — not per-property.'
       : portfolioType === 'ltr'
@@ -1840,6 +1998,29 @@ export function SettingsScreen({ route }: any) {
           <Text style={styles.addBtnText}>Add Manual Income</Text>
         </TouchableOpacity>
         <ManualIncomeModal visible={showAddIncome} onClose={() => setShowAddIncome(false)} properties={properties} portfolioType={portfolioType} onSave={handleAddManualIncome} />
+
+        {overrideEntries.length > 0 && (
+          <>
+            <Text style={[styles.sectionTitle, { marginTop: Spacing.lg }]}>ACTIVE OVERRIDES</Text>
+            <Text style={styles.pageDesc}>These months use your manual amount instead of Plaid. Remove to revert to Plaid data.</Text>
+            <View style={styles.cardGroup}>
+              {overrideEntries.map(([monthKey, amount], i) => (
+                <React.Fragment key={monthKey}>
+                  <View style={styles.propRow}>
+                    <View style={styles.propInfo}>
+                      <Text style={styles.propName}>{monthKey}</Text>
+                      <Text style={styles.propType}>${Number(amount).toLocaleString()}</Text>
+                    </View>
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => handleRemoveOverride(monthKey)}>
+                      <Text style={styles.deleteText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {i < overrideEntries.length - 1 && <View style={styles.divider} />}
+                </React.Fragment>
+              ))}
+            </View>
+          </>
+        )}
       </ScrollView>
     );
   }
@@ -2370,8 +2551,8 @@ export function SettingsScreen({ route }: any) {
       { key: 'monthly', label: 'Monthly', sub: 'Invoice at end of each month' },
     ];
     const DUE_OPTIONS = [7, 14, 30];
-    const invPrefs = useCleanerStore.getState().invoicePrefs;
-    const savePrefs = useCleanerStore.getState().saveInvoicePrefs;
+    const invPrefs = cleanerInvPrefs;
+    const savePrefs = cleanerSavePrefs;
 
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.content} {...({delaysContentTouches: false} as any)} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
@@ -2993,6 +3174,12 @@ const styles = StyleSheet.create({
   modalCancelText: { color: Colors.textSecondary, fontSize: FontSize.md },
   modalSaveBtn: { flex: 1, padding: Spacing.md, borderRadius: Radius.md, backgroundColor: Colors.green, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
   modalSaveText: { color: '#fff', fontSize: FontSize.md, fontWeight: '600' },
+  overrideRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.md, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.xs, backgroundColor: Colors.glassDark, borderRadius: Radius.md, borderWidth: 0.5, borderColor: Colors.glassBorder },
+  overrideLabel: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
+  overrideHint: { fontSize: FontSize.xs, color: Colors.textDim, marginTop: 2 },
+  monthPickerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.md, marginBottom: Spacing.md, paddingVertical: Spacing.xs },
+  monthArrowBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder, alignItems: 'center', justifyContent: 'center' },
+  monthPickerLabel: { fontSize: FontSize.md, fontWeight: '600', color: Colors.text, minWidth: 80, textAlign: 'center' },
   typeToggleRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
   typeBtn: { flex: 1, padding: Spacing.sm, borderRadius: Radius.md, borderWidth: 0.5, borderColor: Colors.glassBorder, alignItems: 'center', backgroundColor: Colors.glassDark },
   typeBtnActive: { borderColor: Colors.primary, backgroundColor: Colors.greenDim },

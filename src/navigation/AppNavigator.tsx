@@ -253,7 +253,7 @@ export function AppNavigator() {
           name="NetworkMap"
           component={NetworkMapScreen}
           options={{
-            presentation: 'fullScreenModal',
+            presentation: 'modal',
             headerShown: false,
             contentStyle: { backgroundColor: Colors.bg },
             animation: 'slide_from_bottom',
@@ -263,7 +263,7 @@ export function AppNavigator() {
           name="ProPaywall"
           component={ProPaywallScreen}
           options={{
-            presentation: 'fullScreenModal',
+            presentation: 'modal',
             headerShown: false,
             animation: 'slide_from_bottom',
           }}

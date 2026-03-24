@@ -644,6 +644,7 @@ PUBLIC_PREFIXES = (
     "/privacy", "/terms",
     "/api/messages/files/",
     "/api/pricelabs/diagnose",
+    "/api/invoice/publishable-key",
 )
 
 @app.before_request
@@ -6382,8 +6383,13 @@ def users_search():
             try:
                 s = _load_store_for_user(uid)
                 props = s.get("custom_props", [])
+                # Extract city name from market query (e.g. "houston, tx, usa" → "houston")
+                market_city = market.split(",")[0].strip()
                 has_market = any(
-                    p.get("isAirbnb") and (p.get("market") or "").lower() == market
+                    p.get("isAirbnb") and (
+                        market_city in (p.get("market") or "").lower()
+                        or market_city in (p.get("address") or "").lower()
+                    )
                     for p in props
                 )
                 if not has_market:
@@ -8202,59 +8208,188 @@ def messages_delete_conversation(conv_id):
 
 # City-based annual appreciation rates (national average 3.5%)
 CITY_APPRECIATION_RATES = {
+    # ── Sun Belt / High Growth ──
     "austin": 0.055, "boise": 0.05, "nashville": 0.05, "raleigh": 0.048,
     "tampa": 0.047, "phoenix": 0.046, "dallas": 0.045, "charlotte": 0.045,
     "denver": 0.044, "atlanta": 0.043, "houston": 0.04, "orlando": 0.04,
     "jacksonville": 0.04, "san antonio": 0.038, "las vegas": 0.038,
+    "fort worth": 0.045, "san marcos": 0.05, "new braunfels": 0.048,
+    "cape coral": 0.042, "sarasota": 0.04, "naples": 0.04, "lakeland": 0.04,
+    "port st lucie": 0.04, "ocala": 0.038, "gainesville": 0.035,
+    "huntsville": 0.045, "fayetteville": 0.048, "bentonville": 0.05,
+    "provo": 0.048, "st george": 0.05, "meridian": 0.048,
+    # ── West Coast ──
     "seattle": 0.042, "portland": 0.035, "miami": 0.04, "fort lauderdale": 0.04,
     "san diego": 0.038, "los angeles": 0.035, "san francisco": 0.03,
-    "new york": 0.028, "chicago": 0.025, "detroit": 0.03, "cleveland": 0.022,
-    "st louis": 0.02, "baltimore": 0.025, "philadelphia": 0.03,
-    "minneapolis": 0.032, "kansas city": 0.033, "indianapolis": 0.035,
-    "columbus": 0.038, "salt lake city": 0.045, "savannah": 0.04,
-    "charleston": 0.042, "asheville": 0.04, "gatlinburg": 0.045,
-    "pigeon forge": 0.045, "destin": 0.04, "gulf shores": 0.038,
-    "myrtle beach": 0.035, "panama city": 0.035, "scottsdale": 0.046,
-    "sedona": 0.04, "park city": 0.042, "big bear": 0.035,
+    "san jose": 0.032, "oakland": 0.03, "sacramento": 0.035, "fresno": 0.03,
+    "bakersfield": 0.028, "riverside": 0.033, "long beach": 0.035,
+    "irvine": 0.035, "anaheim": 0.035, "santa barbara": 0.03,
+    "tacoma": 0.04, "spokane": 0.03, "olympia": 0.035, "bellingham": 0.035,
+    "bend": 0.04, "eugene": 0.032, "salem": 0.03,
+    # ── Northeast ──
+    "new york": 0.028, "brooklyn": 0.03, "queens": 0.028, "bronx": 0.025,
+    "jersey city": 0.032, "hoboken": 0.03, "newark": 0.025,
+    "boston": 0.032, "cambridge": 0.03, "providence": 0.028,
+    "philadelphia": 0.03, "pittsburgh": 0.025, "baltimore": 0.025,
+    "washington": 0.032, "arlington": 0.035, "alexandria": 0.035,
+    "richmond": 0.032, "virginia beach": 0.035, "norfolk": 0.03,
+    "hartford": 0.022, "new haven": 0.025, "stamford": 0.03,
+    "portland me": 0.035, "burlington": 0.032,
+    # ── Upstate NY / Rust Belt ──
+    "niagara falls": 0.015, "buffalo": 0.02, "rochester": 0.02, "syracuse": 0.018,
+    "albany": 0.022, "ithaca": 0.025, "binghamton": 0.012, "utica": 0.01,
+    "detroit": 0.03, "grand rapids": 0.035, "ann arbor": 0.035, "lansing": 0.025,
+    "cleveland": 0.022, "akron": 0.018, "toledo": 0.015, "youngstown": 0.01,
+    "dayton": 0.02, "canton": 0.015,
+    "chicago": 0.025, "milwaukee": 0.022, "madison": 0.035,
+    "minneapolis": 0.032, "st paul": 0.032, "duluth": 0.02,
+    "st louis": 0.02, "springfield mo": 0.025, "columbia mo": 0.028,
+    # ── Midwest ──
+    "indianapolis": 0.035, "columbus": 0.038, "cincinnati": 0.025,
+    "kansas city": 0.033, "omaha": 0.03, "lincoln": 0.028,
+    "des moines": 0.032, "cedar rapids": 0.025, "iowa city": 0.03,
+    "wichita": 0.022, "topeka": 0.02, "sioux falls": 0.035, "fargo": 0.03,
+    # ── South ──
+    "louisville": 0.025, "lexington": 0.03, "knoxville": 0.035,
+    "chattanooga": 0.032, "memphis": 0.02, "nashville": 0.05,
+    "birmingham": 0.022, "montgomery": 0.018, "mobile": 0.02, "huntsville": 0.045,
+    "little rock": 0.02, "hot springs": 0.025,
+    "jackson ms": 0.015, "biloxi": 0.025,
+    "new orleans": 0.025, "baton rouge": 0.022, "shreveport": 0.015,
+    "tulsa": 0.025, "oklahoma city": 0.028, "norman": 0.028,
+    "greenville": 0.035, "columbia sc": 0.033, "charleston": 0.042,
+    "hilton head": 0.04, "myrtle beach": 0.035, "wilmington": 0.035,
+    "savannah": 0.04, "augusta": 0.025, "athens": 0.03,
+    # ── Texas ──
+    "el paso": 0.02, "lubbock": 0.025, "amarillo": 0.022, "midland": 0.025,
+    "corpus christi": 0.025, "mcallen": 0.022, "brownsville": 0.02,
+    "college station": 0.035, "waco": 0.032,
+    # ── Mountain / West ──
+    "salt lake city": 0.045, "park city": 0.042, "st george": 0.05,
+    "bozeman": 0.055, "missoula": 0.04, "whitefish": 0.05,
+    "jackson hole": 0.05, "coeur d'alene": 0.045,
+    "albuquerque": 0.025, "santa fe": 0.032, "tucson": 0.032,
+    "scottsdale": 0.046, "sedona": 0.04, "flagstaff": 0.035,
+    "colorado springs": 0.04, "fort collins": 0.042, "boulder": 0.038,
+    "reno": 0.038, "carson city": 0.032,
+    "anchorage": 0.02, "honolulu": 0.03, "maui": 0.032,
+    # ── Vacation / STR Markets ──
+    "gatlinburg": 0.045, "pigeon forge": 0.045, "destin": 0.04,
+    "gulf shores": 0.038, "panama city": 0.035, "30a": 0.042,
+    "big bear": 0.035, "lake tahoe": 0.038, "mammoth lakes": 0.035,
     "joshua tree": 0.04, "palm springs": 0.038, "key west": 0.035,
+    "outer banks": 0.035, "hilton head": 0.04, "kiawah": 0.038,
+    "cape cod": 0.03, "nantucket": 0.028, "martha's vineyard": 0.028,
+    "poconos": 0.03, "catskills": 0.035, "lake george": 0.025,
+    "branson": 0.025, "ozarks": 0.028, "table rock lake": 0.028,
+    "daytona beach": 0.035, "fort myers": 0.038, "clearwater": 0.038,
+    "st pete": 0.04, "anna maria": 0.04, "sanibel": 0.035,
+    "tulum": 0.05, "cancun": 0.045, "playa del carmen": 0.048,
 }
 
 # STR cap rates by metro (based on 2024-2025 market data)
 CITY_CAP_RATES_STR = {
+    # ── Sun Belt / High Growth ──
     "austin": 0.055, "boise": 0.065, "nashville": 0.058, "raleigh": 0.065,
     "tampa": 0.062, "phoenix": 0.060, "dallas": 0.063, "charlotte": 0.065,
     "denver": 0.055, "atlanta": 0.065, "houston": 0.068, "orlando": 0.060,
     "jacksonville": 0.070, "san antonio": 0.072, "las vegas": 0.062,
+    "fort worth": 0.065, "san marcos": 0.068, "new braunfels": 0.065,
+    "cape coral": 0.065, "sarasota": 0.058, "naples": 0.050, "lakeland": 0.068,
+    "port st lucie": 0.065, "ocala": 0.072, "gainesville": 0.068,
+    "huntsville": 0.065, "fayetteville": 0.068, "bentonville": 0.062,
+    "provo": 0.058, "st george": 0.062, "meridian": 0.065,
+    # ── West Coast ──
     "seattle": 0.050, "portland": 0.055, "miami": 0.048, "fort lauderdale": 0.050,
     "san diego": 0.048, "los angeles": 0.042, "san francisco": 0.040,
-    "new york": 0.038, "chicago": 0.068, "detroit": 0.080, "cleveland": 0.082,
-    "st louis": 0.078, "baltimore": 0.072, "philadelphia": 0.065,
-    "minneapolis": 0.065, "kansas city": 0.072, "indianapolis": 0.075,
-    "columbus": 0.068, "salt lake city": 0.055, "savannah": 0.062,
-    "charleston": 0.058, "asheville": 0.060, "gatlinburg": 0.065,
-    "pigeon forge": 0.065, "destin": 0.062, "gulf shores": 0.065,
-    "myrtle beach": 0.068, "panama city": 0.068, "scottsdale": 0.055,
-    "sedona": 0.058, "park city": 0.050, "big bear": 0.060,
+    "san jose": 0.038, "oakland": 0.045, "sacramento": 0.058, "fresno": 0.068,
+    "bakersfield": 0.075, "riverside": 0.062, "long beach": 0.048,
+    "irvine": 0.042, "anaheim": 0.045, "santa barbara": 0.042,
+    "tacoma": 0.055, "spokane": 0.072, "olympia": 0.062, "bellingham": 0.058,
+    "bend": 0.058, "eugene": 0.062, "salem": 0.065,
+    # ── Northeast ──
+    "new york": 0.038, "brooklyn": 0.040, "queens": 0.042, "bronx": 0.055,
+    "jersey city": 0.042, "hoboken": 0.040, "newark": 0.065,
+    "boston": 0.042, "cambridge": 0.040, "providence": 0.062,
+    "philadelphia": 0.065, "pittsburgh": 0.075, "baltimore": 0.072,
+    "washington": 0.045, "arlington": 0.048, "alexandria": 0.048,
+    "richmond": 0.068, "virginia beach": 0.065, "norfolk": 0.072,
+    "hartford": 0.075, "new haven": 0.072, "stamford": 0.045,
+    "portland me": 0.058, "burlington": 0.060,
+    # ── Upstate NY / Rust Belt ──
+    "niagara falls": 0.10, "buffalo": 0.09, "rochester": 0.09, "syracuse": 0.092,
+    "albany": 0.078, "ithaca": 0.068, "binghamton": 0.10, "utica": 0.10,
+    "detroit": 0.080, "grand rapids": 0.072, "ann arbor": 0.058, "lansing": 0.082,
+    "cleveland": 0.082, "akron": 0.088, "toledo": 0.092, "youngstown": 0.10,
+    "dayton": 0.085, "canton": 0.092,
+    "chicago": 0.068, "milwaukee": 0.075, "madison": 0.062,
+    "minneapolis": 0.065, "st paul": 0.068, "duluth": 0.078,
+    "st louis": 0.078, "springfield mo": 0.075, "columbia mo": 0.072,
+    # ── Midwest ──
+    "indianapolis": 0.075, "columbus": 0.068, "cincinnati": 0.078,
+    "kansas city": 0.072, "omaha": 0.072, "lincoln": 0.075,
+    "des moines": 0.072, "cedar rapids": 0.078, "iowa city": 0.068,
+    "wichita": 0.082, "topeka": 0.085, "sioux falls": 0.072, "fargo": 0.075,
+    # ── South ──
+    "louisville": 0.078, "lexington": 0.072, "knoxville": 0.068,
+    "chattanooga": 0.072, "memphis": 0.085, "birmingham": 0.082,
+    "montgomery": 0.090, "mobile": 0.082, "little rock": 0.088,
+    "hot springs": 0.078, "jackson ms": 0.095, "biloxi": 0.075,
+    "new orleans": 0.068, "baton rouge": 0.078, "shreveport": 0.088,
+    "tulsa": 0.078, "oklahoma city": 0.075, "norman": 0.075,
+    "greenville": 0.068, "columbia sc": 0.072, "charleston": 0.058,
+    "hilton head": 0.058, "myrtle beach": 0.068, "wilmington": 0.065,
+    "savannah": 0.062, "augusta": 0.082, "athens": 0.072,
+    # ── Texas ──
+    "el paso": 0.078, "lubbock": 0.078, "amarillo": 0.080, "midland": 0.075,
+    "corpus christi": 0.075, "mcallen": 0.082, "brownsville": 0.085,
+    "college station": 0.072, "waco": 0.075,
+    # ── Mountain / West ──
+    "salt lake city": 0.055, "park city": 0.050, "st george": 0.062,
+    "bozeman": 0.052, "missoula": 0.058, "whitefish": 0.055,
+    "jackson hole": 0.045, "coeur d'alene": 0.058,
+    "albuquerque": 0.072, "santa fe": 0.058, "tucson": 0.068,
+    "scottsdale": 0.055, "sedona": 0.058, "flagstaff": 0.062,
+    "colorado springs": 0.062, "fort collins": 0.058, "boulder": 0.050,
+    "reno": 0.062, "carson city": 0.068,
+    "anchorage": 0.072, "honolulu": 0.045, "maui": 0.048,
+    # ── Vacation / STR Markets ──
+    "gatlinburg": 0.065, "pigeon forge": 0.065, "destin": 0.062,
+    "gulf shores": 0.065, "panama city": 0.068, "30a": 0.058,
+    "big bear": 0.060, "lake tahoe": 0.055, "mammoth lakes": 0.058,
     "joshua tree": 0.065, "palm springs": 0.058, "key west": 0.045,
+    "outer banks": 0.062, "kiawah": 0.052,
+    "cape cod": 0.055, "nantucket": 0.042, "martha's vineyard": 0.042,
+    "poconos": 0.068, "catskills": 0.065, "lake george": 0.072,
+    "branson": 0.072, "ozarks": 0.075, "table rock lake": 0.072,
+    "daytona beach": 0.065, "fort myers": 0.062, "clearwater": 0.060,
+    "st pete": 0.058, "anna maria": 0.055, "sanibel": 0.052,
 }
 
 # LTR cap rates (generally higher than STR)
-CITY_CAP_RATES_LTR = {
-    "austin": 0.060, "boise": 0.070, "nashville": 0.062, "raleigh": 0.068,
-    "tampa": 0.065, "phoenix": 0.065, "dallas": 0.068, "charlotte": 0.070,
-    "denver": 0.058, "atlanta": 0.070, "houston": 0.072, "orlando": 0.065,
-    "jacksonville": 0.075, "san antonio": 0.078, "las vegas": 0.068,
-    "seattle": 0.052, "portland": 0.058, "miami": 0.050, "fort lauderdale": 0.052,
-    "san diego": 0.050, "los angeles": 0.045, "san francisco": 0.042,
-    "new york": 0.042, "chicago": 0.072, "detroit": 0.090, "cleveland": 0.088,
-    "st louis": 0.082, "baltimore": 0.078, "philadelphia": 0.070,
-    "minneapolis": 0.068, "kansas city": 0.078, "indianapolis": 0.080,
-    "columbus": 0.072, "salt lake city": 0.058, "savannah": 0.065,
-    "charleston": 0.062, "asheville": 0.065, "gatlinburg": 0.070,
-    "pigeon forge": 0.070, "destin": 0.068, "gulf shores": 0.070,
-    "myrtle beach": 0.072, "panama city": 0.072, "scottsdale": 0.058,
-    "sedona": 0.062, "park city": 0.052, "big bear": 0.065,
-    "joshua tree": 0.070, "palm springs": 0.062, "key west": 0.048,
+# LTR cap rates = STR + 0.5-1.5% (LTR generally yields higher cap rates)
+CITY_CAP_RATES_LTR = {k: min(v + 0.008, 0.12) for k, v in CITY_CAP_RATES_STR.items()}
+
+# State-level fallbacks for cities not in any table
+STATE_DEFAULTS = {
+    # (appreciation_rate, str_cap_rate, expense_ratio)
+    "ny": (0.022, 0.082, 0.36), "ca": (0.033, 0.048, 0.30), "tx": (0.038, 0.068, 0.34),
+    "fl": (0.040, 0.062, 0.33), "ga": (0.040, 0.068, 0.34), "nc": (0.038, 0.065, 0.34),
+    "sc": (0.038, 0.065, 0.34), "tn": (0.042, 0.065, 0.33), "oh": (0.022, 0.080, 0.37),
+    "mi": (0.028, 0.078, 0.36), "pa": (0.028, 0.070, 0.35), "il": (0.025, 0.070, 0.35),
+    "co": (0.042, 0.058, 0.32), "az": (0.042, 0.062, 0.33), "nv": (0.036, 0.064, 0.33),
+    "wa": (0.040, 0.055, 0.32), "or": (0.033, 0.058, 0.33), "va": (0.033, 0.068, 0.34),
+    "md": (0.025, 0.072, 0.35), "ma": (0.030, 0.048, 0.30), "nj": (0.028, 0.055, 0.32),
+    "ct": (0.024, 0.065, 0.34), "mn": (0.032, 0.068, 0.35), "wi": (0.022, 0.075, 0.36),
+    "mo": (0.022, 0.076, 0.36), "in": (0.033, 0.076, 0.36), "ia": (0.028, 0.074, 0.36),
+    "ks": (0.022, 0.080, 0.37), "ne": (0.028, 0.074, 0.36), "ok": (0.026, 0.076, 0.36),
+    "ar": (0.020, 0.086, 0.38), "la": (0.022, 0.075, 0.36), "ms": (0.015, 0.092, 0.39),
+    "al": (0.022, 0.082, 0.37), "ky": (0.026, 0.076, 0.36), "wv": (0.015, 0.090, 0.39),
+    "ut": (0.045, 0.058, 0.32), "id": (0.048, 0.064, 0.33), "mt": (0.042, 0.058, 0.33),
+    "wy": (0.035, 0.060, 0.34), "nm": (0.025, 0.072, 0.36), "sd": (0.032, 0.074, 0.36),
+    "nd": (0.028, 0.076, 0.37), "hi": (0.030, 0.045, 0.30), "ak": (0.020, 0.072, 0.36),
+    "me": (0.032, 0.060, 0.34), "vt": (0.028, 0.062, 0.34), "nh": (0.030, 0.058, 0.33),
+    "ri": (0.028, 0.062, 0.34), "de": (0.030, 0.068, 0.34), "dc": (0.032, 0.045, 0.30),
 }
 
 # Default expense ratios by city tier
@@ -8273,21 +8408,56 @@ CITY_EXPENSE_RATIOS = {
     "cleveland": 0.40, "st louis": 0.38, "baltimore": 0.37,
 }
 
+def _extract_state(market: str) -> str:
+    """Extract 2-letter state code from market string like 'Houston, TX'."""
+    parts = market.split(",")
+    if len(parts) >= 2:
+        state = parts[-1].strip().lower()
+        if len(state) == 2:
+            return state
+        # Handle full state names
+        state_map = {
+            "new york": "ny", "california": "ca", "texas": "tx", "florida": "fl",
+            "georgia": "ga", "north carolina": "nc", "south carolina": "sc",
+            "tennessee": "tn", "ohio": "oh", "michigan": "mi", "pennsylvania": "pa",
+            "illinois": "il", "colorado": "co", "arizona": "az", "nevada": "nv",
+            "washington": "wa", "oregon": "or", "virginia": "va", "maryland": "md",
+            "massachusetts": "ma", "new jersey": "nj", "connecticut": "ct",
+            "minnesota": "mn", "wisconsin": "wi", "missouri": "mo", "indiana": "in",
+            "iowa": "ia", "kansas": "ks", "nebraska": "ne", "oklahoma": "ok",
+            "arkansas": "ar", "louisiana": "la", "mississippi": "ms", "alabama": "al",
+            "kentucky": "ky", "west virginia": "wv", "utah": "ut", "idaho": "id",
+            "montana": "mt", "wyoming": "wy", "new mexico": "nm", "south dakota": "sd",
+            "north dakota": "nd", "hawaii": "hi", "alaska": "ak", "maine": "me",
+            "vermont": "vt", "new hampshire": "nh", "rhode island": "ri",
+            "delaware": "de", "district of columbia": "dc",
+        }
+        if state in state_map:
+            return state_map[state]
+    return ""
+
 def _get_cap_rate(market: str, is_str: bool) -> float:
-    """Return city-specific cap rate."""
+    """Return city-specific cap rate, with state-level fallback."""
     if not market:
         return 0.065
     m = market.lower().strip()
     table = CITY_CAP_RATES_STR if is_str else CITY_CAP_RATES_LTR
+    # Exact city match
     if m in table:
         return table[m]
+    # Substring match (city name within market string)
     for city, rate in table.items():
         if city in m or m in city:
             return rate
+    # State-level fallback
+    state = _extract_state(market)
+    if state in STATE_DEFAULTS:
+        base = STATE_DEFAULTS[state][1]  # STR cap rate
+        return base if is_str else min(base + 0.008, 0.12)
     return 0.065
 
 def _get_expense_ratio(market: str) -> float:
-    """Return city-specific expense ratio default."""
+    """Return city-specific expense ratio default, with state-level fallback."""
     if not market:
         return 0.35
     m = market.lower().strip()
@@ -8296,20 +8466,27 @@ def _get_expense_ratio(market: str) -> float:
     for city, ratio in CITY_EXPENSE_RATIOS.items():
         if city in m or m in city:
             return ratio
+    # State-level fallback
+    state = _extract_state(market)
+    if state in STATE_DEFAULTS:
+        return STATE_DEFAULTS[state][2]
     return 0.35
 
 def _get_appreciation_rate(market: str) -> float:
-    """Return city-specific appreciation rate, or 3.5% national average."""
+    """Return city-specific appreciation rate, with state-level fallback."""
     if not market:
         return 0.035
     m = market.lower().strip()
-    # Try exact match, then substring
     if m in CITY_APPRECIATION_RATES:
         return CITY_APPRECIATION_RATES[m]
     for city, rate in CITY_APPRECIATION_RATES.items():
         if city in m or m in city:
             return rate
-    return 0.035  # National average
+    # State-level fallback
+    state = _extract_state(market)
+    if state in STATE_DEFAULTS:
+        return STATE_DEFAULTS[state][0]
+    return 0.035
 
 
 # ── Federal Funds Rate Cache ──
@@ -8353,9 +8530,11 @@ def property_valuation(prop_id):
         return jsonify({"error": "Not authenticated"}), 401
 
     store = load_store()
-    props = store.get("properties", []) + store.get("custom_props", [])
+    # Check custom_props first (mobile saves here with latest data including purchasePrice)
+    # then fall back to properties
+    all_props = store.get("custom_props", []) + store.get("properties", [])
     prop = None
-    for p in props:
+    for p in all_props:
         if (p.get("id") or p.get("name")) == prop_id:
             prop = p
             break
@@ -8368,7 +8547,7 @@ def property_valuation(prop_id):
     purchase_price = prop.get("purchasePrice")
     purchase_date = prop.get("purchaseDate")
     if not purchase_price or not purchase_date:
-        return jsonify({"valuation": None, "missing_data": True})
+        return jsonify({"valuation": None, "missing_data": True, "debug_keys": list(prop.keys()), "debug_id": prop.get("id") or prop.get("name")})
 
     from datetime import date as _d
     try:
@@ -8474,8 +8653,13 @@ def property_valuation(prop_id):
     m1_value = purchase_price * ((1 + appreciation_rate) ** years_owned)
 
     # ══ METHOD 2: Income/Cap Rate (35%) ══
-    # NOI = gross revenue - actual expenses (or gross × 0.35 if no expense data)
-    noi = annual_rev - annual_exp if annual_exp > 0 else annual_rev * (1 - expense_ratio)
+    # NOI = gross revenue - actual expenses
+    # If expenses are suspiciously low (< 10% of revenue), use market default expense ratio
+    # to prevent inflated valuations from missing expense data
+    if annual_exp > 0 and annual_exp >= annual_rev * 0.10:
+        noi = annual_rev - annual_exp
+    else:
+        noi = annual_rev * (1 - expense_ratio)
     m2_value = noi / cap_rate if cap_rate > 0 else 0
 
     # Federal funds rate adjustment
@@ -8510,6 +8694,13 @@ def property_valuation(prop_id):
     # Stability premium: 5+ years owned → 1.5% boost
     if years_owned >= 5:
         blended *= 1.015
+
+    # Sanity cap: for properties owned < 5 years, cap the estimate at
+    # reasonable appreciation (max ~15%/yr compounded from purchase price)
+    # This prevents wildly inflated estimates from income method on cheap properties
+    max_reasonable = purchase_price * ((1.15) ** max(years_owned, 0.5)) if years_owned < 5 else float('inf')
+    if blended > max_reasonable:
+        blended = max_reasonable
 
     equity_gain = blended - purchase_price
 

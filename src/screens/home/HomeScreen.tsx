@@ -126,8 +126,7 @@ export function HomeScreen() {
     ? fmtDate(upcomingCheckins[0].check_in || upcomingCheckins[0].start)
     : null;
 
-  // Early return for loading — AFTER all hooks
-  if (loading) {
+  if (loading && !profile?.properties?.length) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={Colors.green} />

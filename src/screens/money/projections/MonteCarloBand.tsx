@@ -5,6 +5,7 @@ import { Colors, FontSize, Spacing, Radius } from '../../../constants/theme';
 import { YearRow } from '../../../utils/projections';
 import { fmtCompact } from '../../../utils/format';
 import { ExpandableSection } from './ExpandableSection';
+import { lockParentScroll, unlockParentScroll } from '../../../navigation/LTRNavigator';
 
 interface Props {
   projection: YearRow[];
@@ -42,6 +43,7 @@ export function MonteCarloBand({ projection }: Props) {
   const scaleAnim = useRef(new Animated.Value(0.92)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasActiveRef = useRef(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (activeIndex !== null && !wasActiveRef.current) {
@@ -68,6 +70,9 @@ export function MonteCarloBand({ projection }: Props) {
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
+    onMoveShouldSetPanResponderCapture: () => true,
+    onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: (evt) => {
       if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
       setActiveIndex(xToIndex(evt.nativeEvent.locationX));
@@ -223,8 +228,28 @@ export function MonteCarloBand({ projection }: Props) {
           )}
         </Svg>
 
-        {/* Touch capture layer */}
-        <View style={styles.touchOverlay} {...panResponder.panHandlers} />
+        {/* Touch capture — lock all scroll on touch, unlock on release */}
+        <View
+          style={styles.touchOverlay}
+          onTouchStart={(evt) => {
+            lockParentScroll();
+            if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
+            setActiveIndex(xToIndex(evt.nativeEvent.locationX));
+          }}
+          onTouchMove={(evt) => {
+            setActiveIndex(xToIndex(evt.nativeEvent.locationX));
+          }}
+          onTouchEnd={() => {
+            unlockParentScroll();
+            hideTimer.current = setTimeout(() => {
+              Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true })
+                .start(() => { setActiveIndex(null); });
+            }, 2200);
+          }}
+          onTouchCancel={() => {
+            unlockParentScroll();
+          }}
+        />
 
         {/* Tooltip */}
         {activeIndex !== null && activeData && (

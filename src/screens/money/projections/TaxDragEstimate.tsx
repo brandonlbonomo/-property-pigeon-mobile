@@ -39,6 +39,16 @@ export function TaxDragEstimate({ projection, startingUnits }: Props) {
   const [taxRate, setTaxRate] = useState(TAX_RATE_INCOME);
   const TAX_RATES = [0.12, 0.22, 0.32, 0.37];
 
+  // Guard: if key inputs are missing, show placeholder instead of bogus -99% IRR
+  const hasData = useMemo(() => {
+    if (!projection || projection.length < 2) return false;
+    const first = projection[0];
+    if (!first.portfolioValue || first.portfolioValue <= 0) return false;
+    if (!first.equity || first.equity <= 0) return false;
+    // Need meaningful revenue somewhere in the projection
+    return projection.some(r => r.revenue > 0);
+  }, [projection]);
+
   const rows = useMemo(() => projection.map(r => {
     const depreciableBase = r.portfolioValue * STRUCT_PCT;
     const annualDepr = depreciableBase / DEPR_YEARS;
@@ -71,7 +81,8 @@ export function TaxDragEstimate({ projection, startingUnits }: Props) {
     return calculateIRR(annualCFs);
   }, [annualCFs]);
 
-  const nominalIRRStr = nominalIRR !== null ? `${(nominalIRR * 100).toFixed(1)}%` : 'N/A';
+  const irrValid = (v: number | null): boolean => v !== null && v > -0.95 && v < 5;
+  const nominalIRRStr = irrValid(nominalIRR) ? `${(nominalIRR! * 100).toFixed(1)}%` : 'N/A';
 
   // After-tax IRR (same structure but using afterTaxNetCF)
   const afterTaxIRR = useMemo(() => {
@@ -85,11 +96,26 @@ export function TaxDragEstimate({ projection, startingUnits }: Props) {
     return calculateIRR(cfs);
   }, [rows, projection]);
 
-  const afterTaxIRRStr = afterTaxIRR !== null ? `${(afterTaxIRR * 100).toFixed(1)}%` : 'N/A';
+  const afterTaxIRRStr = irrValid(afterTaxIRR) ? `${(afterTaxIRR! * 100).toFixed(1)}%` : 'N/A';
 
   // Summary for Yr 10 and Yr 30
   const yr10 = rows.find(r => r.yearOffset === 10);
   const yr30 = rows[rows.length - 1];
+
+  if (!hasData) {
+    return (
+      <ExpandableSection
+        title="Tax Drag Estimate"
+        subtitle="After-tax net CF, depreciation shield, and IRR"
+        iconName="receipt-outline"
+        badge="BALLPARK"
+      >
+        <View style={styles.placeholder}>
+          <Text style={styles.placeholderText}>Add property details to see your IRR</Text>
+        </View>
+      </ExpandableSection>
+    );
+  }
 
   return (
     <ExpandableSection
@@ -117,21 +143,24 @@ export function TaxDragEstimate({ projection, startingUnits }: Props) {
       <View style={styles.irrRow}>
         <View style={styles.irrItem}>
           <Text style={styles.irrLabel}>NOMINAL IRR</Text>
+          <Text style={styles.irrLabelPlain}>your return before taxes</Text>
           <Text style={styles.irrVal}>{nominalIRRStr}</Text>
           <Text style={styles.irrSub}>pre-tax, 30-yr</Text>
         </View>
         <View style={styles.irrDivider} />
         <View style={styles.irrItem}>
           <Text style={styles.irrLabel}>AFTER-TAX IRR</Text>
+          <Text style={styles.irrLabelPlain}>what you actually keep</Text>
           <Text style={[styles.irrVal, { color: Colors.green }]}>{afterTaxIRRStr}</Text>
           <Text style={styles.irrSub}>with depr. shield</Text>
         </View>
         <View style={styles.irrDivider} />
         <View style={styles.irrItem}>
           <Text style={styles.irrLabel}>TAX DRAG</Text>
+          <Text style={styles.irrLabelPlain}>what taxes cost you</Text>
           <Text style={[styles.irrVal, { color: Colors.red }]}>
-            {nominalIRR !== null && afterTaxIRR !== null
-              ? `${((nominalIRR - afterTaxIRR) * 100).toFixed(1)}%`
+            {irrValid(nominalIRR) && irrValid(afterTaxIRR)
+              ? `${((nominalIRR! - afterTaxIRR!) * 100).toFixed(1)}%`
               : 'N/A'}
           </Text>
           <Text style={styles.irrSub}>IRR haircut</Text>
@@ -140,13 +169,17 @@ export function TaxDragEstimate({ projection, startingUnits }: Props) {
 
       {/* Year-by-year table */}
       <View style={styles.tableHeader}>
-        <Text style={[styles.thCell, { flex: 0.7 }]}>YR</Text>
-        <Text style={styles.thCell}>GROSS CF</Text>
-        <Text style={styles.thCell}>DEPR +</Text>
-        <Text style={styles.thCell}>TAX −</Text>
-        <Text style={[styles.thCell, { color: Colors.green }]}>AFTER-TAX</Text>
+        <Text style={[styles.tdCell, styles.thCellText, { flex: 0.7 }]}>YR</Text>
+        <Text style={[styles.tdCell, styles.thCellText]}>GROSS{'\n'}CF</Text>
+        <Text style={[styles.tdCell, styles.thCellText]}>DEPR +{'\n'}
+          <Text style={styles.thCellSub}>write-off</Text>
+        </Text>
+        <Text style={[styles.tdCell, styles.thCellText]}>TAX −{'\n'}
+          <Text style={styles.thCellSub}>owed</Text>
+        </Text>
+        <Text style={[styles.tdCell, styles.thCellText, { color: Colors.green }]}>AFTER-{'\n'}TAX</Text>
       </View>
-      {rows.map((r, i) => (
+      {rows.filter(r => r.yearOffset % 3 === 0).map((r, i) => (
         <View key={r.yearOffset} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
           <Text style={[styles.tdCell, styles.tdBold, { flex: 0.7 }]}>{r.yearOffset}</Text>
           <Text style={styles.tdCell}>{fmtCompact(r.netCF)}</Text>
@@ -186,18 +219,22 @@ const styles = StyleSheet.create({
   taxTextActive: { color: Colors.green },
 
   irrRow: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row', alignItems: 'stretch',
     backgroundColor: Colors.glassDark, borderRadius: Radius.lg,
     padding: Spacing.sm, marginBottom: Spacing.md,
   },
-  irrItem: { flex: 1, alignItems: 'center' },
-  irrLabel: { fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.4, marginBottom: 4 },
-  irrVal: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.text },
+  irrItem: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingHorizontal: 4 },
+  irrLabel: { fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.4, marginBottom: 1, textAlign: 'center' },
+  irrLabelPlain: { fontSize: 9, color: '#999', marginBottom: 3, textAlign: 'center', minHeight: 22 },
+  irrVal: { fontSize: FontSize.lg, fontWeight: '800', color: Colors.text, textAlign: 'center' },
   irrSub: { fontSize: 10, color: Colors.textDim, marginTop: 2 },
   irrDivider: { width: StyleSheet.hairlineWidth, height: 40, backgroundColor: Colors.border },
 
-  tableHeader: { flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  tableHeader: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  thCellWrap: { flex: 1, alignItems: 'center' },
   thCell: { flex: 1, fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5, textAlign: 'center' },
+  thCellText: { fontSize: 9, fontWeight: '700', color: Colors.textDim, letterSpacing: 0.5, textAlign: 'center' },
+  thCellSub: { fontSize: 8, color: '#999', textAlign: 'center' },
   tableRow: { flexDirection: 'row', paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border },
   tableRowAlt: { backgroundColor: 'rgba(0,0,0,0.015)' },
   tdCell: { flex: 1, fontSize: 11, fontWeight: '600', color: Colors.text, textAlign: 'center' },
@@ -209,4 +246,7 @@ const styles = StyleSheet.create({
   },
   deprNoteTitle: { fontSize: FontSize.xs, fontWeight: '700', color: Colors.textSecondary, marginBottom: 4 },
   deprNoteText: { fontSize: 11, color: Colors.textDim, lineHeight: 16 },
+
+  placeholder: { paddingVertical: Spacing.xl, alignItems: 'center' },
+  placeholderText: { fontSize: FontSize.sm, color: Colors.textDim, fontWeight: '500', textAlign: 'center' },
 });

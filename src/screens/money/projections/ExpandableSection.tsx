@@ -45,7 +45,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.glassBorder,
     borderTopColor: Colors.glassHighlight,
     borderTopWidth: 1,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.lg,
     overflow: 'hidden',
     ...Platform.select({
       ios: { shadowColor: Colors.glassShadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 16 },

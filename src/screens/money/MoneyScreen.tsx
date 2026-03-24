@@ -691,7 +691,7 @@ export function MoneyScreen({ period: fixedPeriod }: MoneyScreenProps = {}) {
     }
   }, []);
 
-  if (loading) {
+  if (loading && !profile?.properties?.length) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={Colors.green} />

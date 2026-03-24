@@ -140,8 +140,9 @@ export function ScenarioComparison({ startingUnits, currentUnitsPerYear, revenue
                 const val = getValue(row, viewMode);
                 return (
                   <View key={si} style={styles.scenarioValCol}>
-                    <Text style={[styles.valText, { color: scenarios[si].color }]}>{fmtCompact(val)}</Text>
-                    {viewMode === 'netCF' && <Text style={styles.valSub}>/yr</Text>}
+                    <Text style={[styles.valText, { color: scenarios[si].color }]}>
+                      {fmtCompact(val)}{viewMode === 'netCF' && <Text style={styles.valSub}>/yr</Text>}
+                    </Text>
                   </View>
                 );
               })}

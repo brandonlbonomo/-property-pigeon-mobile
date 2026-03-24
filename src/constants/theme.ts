@@ -35,11 +35,11 @@ export const Colors = {
 
 
 export const Spacing = {
-  xs: 4,
-  sm: 8,
+  xs: 6,
+  sm: 10,
   md: 16,
   lg: 24,
-  xl: 32,
+  xl: 36,
 };
 
 export const Radius = {
@@ -72,10 +72,10 @@ export const BarColors = {
 };
 
 export const FontSize = {
-  xs: 13,
-  sm: 15,
-  md: 17,
-  lg: 20,
-  xl: 24,
-  xxl: 32,
+  xs: 11,
+  sm: 13,
+  md: 15,
+  lg: 17,
+  xl: 20,
+  xxl: 28,
 };

@@ -500,7 +500,7 @@ export function ProfileScreen() {
     setProfile({ profileCardOrder: updated });
   };
 
-  if (loading) {
+  if (loading && !profile?.properties?.length) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.green} />

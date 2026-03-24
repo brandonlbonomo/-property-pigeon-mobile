@@ -100,7 +100,7 @@ export function CleanerAppNavigator() {
           name="ProPaywall"
           component={ProPaywallScreen}
           options={{
-            presentation: 'fullScreenModal',
+            presentation: 'modal',
             headerShown: false,
             animation: 'slide_from_bottom',
           }}
