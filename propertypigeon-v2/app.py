@@ -6382,13 +6382,14 @@ def users_search():
                 continue
             try:
                 s = _load_store_for_user(uid)
-                props = s.get("custom_props", [])
+                props = s.get("custom_props", []) or s.get("properties", [])
                 # Extract city name from market query (e.g. "houston, tx, usa" → "houston")
                 market_city = market.split(",")[0].strip()
                 has_market = any(
-                    p.get("isAirbnb") and (
+                    (p.get("isAirbnb") or p.get("is_airbnb")) and (
                         market_city in (p.get("market") or "").lower()
                         or market_city in (p.get("address") or "").lower()
+                        or market_city in (p.get("name") or "").lower()
                     )
                     for p in props
                 )
