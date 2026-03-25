@@ -6385,6 +6385,9 @@ def users_search():
                 props = s.get("custom_props", []) or s.get("properties", [])
                 # Extract city name from market query (e.g. "houston, tx, usa" → "houston")
                 market_city = market.split(",")[0].strip()
+                logger.info("Market search: user=%s, market_city=%s, props_count=%d, props=%s",
+                    uname, market_city, len(props),
+                    [(p.get("name","?"), p.get("address","?"), p.get("market","?"), p.get("isAirbnb"), p.get("is_airbnb")) for p in props[:5]])
                 has_market = any(
                     (p.get("isAirbnb") or p.get("is_airbnb")) and (
                         market_city in (p.get("market") or "").lower()
