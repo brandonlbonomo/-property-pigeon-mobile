@@ -1615,7 +1615,8 @@ export function SettingsScreen({ route }: any) {
         // Override mode: set manual_income for the month (replaces Plaid)
         const current = await apiFetch('/api/manual-income').catch(() => ({ manual: {} }));
         const manual = { ...(current.manual || {}) };
-        manual[entry.monthKey] = parseFloat(entry.amount);
+        const overrideKey = `${entry.monthKey}_${entry.incomeType}`;
+        manual[overrideKey] = parseFloat(entry.amount);
         await apiFetch('/api/manual-income', { method: 'POST', body: JSON.stringify({ manual }) });
       } else {
         // Additive mode: append as a separate income entry (does NOT touch manual_income overrides)
@@ -1629,7 +1630,8 @@ export function SettingsScreen({ route }: any) {
       // a reload cascade across all mounted screens (source of the freeze).
       invalidateFinancials();
       const mode = entry.override ? 'override set' : 'income added';
-      glassAlert('Done', `$${entry.amount} ${mode} for ${entry.monthKey}.`);
+      const typeLabel = entry.incomeType === 'airbnb' ? 'Airbnb' : 'Property';
+      glassAlert('Done', `$${entry.amount} ${mode} for ${entry.monthKey} (${typeLabel}).`);
     } catch { glassAlert('Error', 'Could not save income entry. Please try again.'); }
     finally { setIsSavingIncome(false); }
   };
@@ -2049,8 +2051,18 @@ export function SettingsScreen({ route }: any) {
   }
 
   if (section === 'income') {
+    const formatOverrideKey = (key: string) => {
+      const parts = key.split('_');
+      if (parts.length >= 2 && /^\d{4}-\d{2}$/.test(parts[0])) {
+        const type = parts.slice(1).join('_');
+        const label = type === 'airbnb' ? 'Airbnb' : type === 'property' ? 'Property' : type;
+        return `${parts[0]} (${label})`;
+      }
+      return key;
+    };
+
     const handleRemoveOverride = async (monthKey: string) => {
-      glassAlert('Remove Override', `Revert ${monthKey} to Plaid data?`, [
+      glassAlert('Remove Override', `Revert ${formatOverrideKey(monthKey)} to Plaid data?`, [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Remove', style: 'destructive', onPress: async () => {
           try {
@@ -2059,7 +2071,7 @@ export function SettingsScreen({ route }: any) {
             await apiFetch('/api/manual-income', { method: 'POST', body: JSON.stringify({ manual: updated }) });
             setManualOverrides(updated);
             invalidateAll();
-            glassAlert('Removed', `${monthKey} reverted to Plaid data.`);
+            glassAlert('Removed', `${formatOverrideKey(monthKey)} reverted to Plaid data.`);
           } catch { glassAlert('Error', 'Could not remove override.'); }
         }},
       ]);
@@ -2095,7 +2107,7 @@ export function SettingsScreen({ route }: any) {
                 <React.Fragment key={monthKey}>
                   <View style={styles.propRow}>
                     <View style={styles.propInfo}>
-                      <Text style={styles.propName}>{monthKey}</Text>
+                      <Text style={styles.propName}>{formatOverrideKey(monthKey)}</Text>
                       <Text style={styles.propType}>${Number(amount).toLocaleString()}</Text>
                     </View>
                     <TouchableOpacity activeOpacity={0.7} onPress={() => handleRemoveOverride(monthKey)}>

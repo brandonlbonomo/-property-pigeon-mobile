@@ -5805,6 +5805,16 @@ def cockpit_data():
         expense_by_prop= {}
         revenue_by_prop= {}
 
+        # Compound keys: YYYY-MM_airbnb / YYYY-MM_property (new).
+        # Legacy key: YYYY-MM only (backward compat — treated as full override).
+        _airbnb_key   = f"{month_key}_airbnb"
+        _property_key = f"{month_key}_property"
+        _has_airbnb   = bool(manual.get(_airbnb_key))
+        _has_property = bool(manual.get(_property_key))
+        # Legacy key is active only when no compound keys exist for this month.
+        _has_legacy   = bool(manual.get(month_key)) and not _has_airbnb and not _has_property
+        _any_override = _has_airbnb or _has_property or _has_legacy
+
         for tx_id, tx in txs_dict.items():
             if (tx.get("date") or "")[:7] != month_key:
                 continue
@@ -5832,7 +5842,7 @@ def cockpit_data():
             is_income = cat_tag in INCOME_CATS or (not cat_tag and tx_type == "in")
 
             if is_income:
-                if month_key not in manual:
+                if not _any_override:
                     total_rev += amount
                     revenue_tx_ids.append(tx_id)
                     if prop_id:
@@ -5845,14 +5855,23 @@ def cockpit_data():
 
         # Manual income overrides Plaid revenue for this month
         is_manual = False
-        if month_key in manual and manual[month_key]:
+        if _has_legacy:
             total_rev      = float(manual[month_key])
             revenue_tx_ids = []
             is_manual      = True
             revenue_by_prop.clear()
+        elif _has_airbnb or _has_property:
+            total_rev      = 0.0
+            revenue_tx_ids = []
+            revenue_by_prop.clear()
+            if _has_airbnb:
+                total_rev += float(manual[_airbnb_key])
+            if _has_property:
+                total_rev += float(manual[_property_key])
+            is_manual = True
 
         # Per-property income and additive income supplement Plaid when no override is set
-        if month_key not in manual:
+        if not _any_override:
             for pid, months in prop_inc.items():
                 if month_key in months:
                     pi = months[month_key]
@@ -6485,7 +6504,7 @@ def _compute_portfolio_score(user_id, user_data=None):
         manual = s.get("manual_income", {})
         prop_inc = s.get("property_income", {})
         has_manual = any(
-            isinstance(v, dict) and any(v.values()) for v in manual.values()
+            isinstance(v, (int, float)) and v for v in manual.values()
         ) if isinstance(manual, dict) else bool(manual)
         has_prop_inc = any(
             isinstance(v, dict) and any(v.values()) for v in prop_inc.values()
@@ -6534,12 +6553,15 @@ def _compute_portfolio_score(user_id, user_data=None):
             else:
                 monthly_exp[month_key] = monthly_exp.get(month_key, 0) + amount
 
-        # Add manual income months
+        # Add manual income months (keys may be YYYY-MM or YYYY-MM_type compound keys)
         if isinstance(manual, dict):
-            for month_key, val in manual.items():
+            for override_key, val in manual.items():
                 if val and isinstance(val, (int, float, str)):
+                    # Strip _airbnb/_property suffix to get the YYYY-MM month
+                    parts = override_key.split('_', 1)
+                    mk = parts[0] if len(parts) > 1 and len(parts[0]) == 7 else override_key
                     try:
-                        monthly_rev[month_key] = monthly_rev.get(month_key, 0) + abs(float(val))
+                        monthly_rev[mk] = monthly_rev.get(mk, 0) + abs(float(val))
                     except (ValueError, TypeError):
                         pass
 
@@ -6643,10 +6665,9 @@ def users_profile(user_id):
         plaid_total = sum(abs(float(t.get("amount", 0))) for t in tx_store.values())
         manual = s.get("manual_income", {})
         manual_total = 0.0
-        for _prop_id, months in manual.items():
-            if isinstance(months, dict):
-                for _month, val in months.items():
-                    manual_total += abs(float(val)) if val else 0
+        for _key, val in manual.items():
+            if isinstance(val, (int, float)) and val:
+                manual_total += abs(float(val))
         total = plaid_total + manual_total
         if total > 0:
             plaid_verified_pct = round(plaid_total / total * 100)
