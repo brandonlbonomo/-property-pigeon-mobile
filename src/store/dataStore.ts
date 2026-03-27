@@ -1,7 +1,10 @@
 import { create } from 'zustand';
+import * as SecureStore from 'expo-secure-store';
 import { apiFetch } from '../services/api';
 import { useUserStore } from './userStore';
 import { findCatalogItem } from '../constants/inventoryCatalog';
+
+const COCKPIT_CACHE_KEY = 'pp_cockpit_cache';
 
 const CACHE_TTL = 30 * 1000; // 30 seconds — match server cache, never serve stale data
 
@@ -70,6 +73,9 @@ interface DataState {
   deleteProperty: (propId: string) => Promise<any>;
   clearError: () => void;
   invalidateAll: () => void;
+  /** Clears only cockpit + analytics cache. Use after saving income/financial data
+   *  to avoid triggering a full reload cascade across all mounted screens. */
+  invalidateFinancials: () => void;
 }
 
 export const useDataStore = create<DataState>((set, get) => ({
@@ -90,6 +96,16 @@ export const useDataStore = create<DataState>((set, get) => ({
   // Normalize to: { kpis: { revenue_mtd, expenses_mtd, net_mtd, ... }, pct_changes, prior, month, raw }
   fetchCockpit: async (force = false) => {
     const cached = get().cockpit;
+    // If nothing in memory, try loading from disk (instant display on relaunch)
+    if (!cached) {
+      try {
+        const stored = await SecureStore.getItemAsync(COCKPIT_CACHE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          set({ cockpit: { data: parsed, fetchedAt: 0 } }); // fetchedAt=0 so it refetches
+        }
+      } catch {}
+    }
     if (!force && isFresh(cached)) return cached!.data;
     if (!isDataActive()) {
       set({ cockpit: { data: EMPTY_COCKPIT, fetchedAt: Date.now() } });
@@ -120,9 +136,10 @@ export const useDataStore = create<DataState>((set, get) => ({
           raw,
         };
         set({ cockpit: { data, fetchedAt: Date.now() }, lastError: null });
+        // Persist for instant relaunch — don't await
+        SecureStore.setItemAsync(COCKPIT_CACHE_KEY, JSON.stringify(data)).catch(() => {});
         return data;
       } catch (e: any) {
-        // cockpit fetch failed — use empty defaults
         set({ cockpit: { data: EMPTY_COCKPIT, fetchedAt: Date.now() }, lastError: 'Could not load financial data. Pull down to retry.' });
         return EMPTY_COCKPIT;
       }
@@ -273,8 +290,17 @@ export const useDataStore = create<DataState>((set, get) => ({
             prop_id: p.id || p.prop_id,
             label: p.label || p.name,
             name: p.name,
+            address: p.address || '',
             isAirbnb: p.isAirbnb ?? true,
             units: p.units,
+            market: p.market,
+            lat: p.lat,
+            lng: p.lng,
+            unitLabels: p.unitLabels,
+            purchasePrice: p.purchasePrice,
+            purchaseDate: p.purchaseDate,
+            downPaymentPct: p.downPaymentPct,
+            icalUrls: p.icalUrls,
           }));
           // Sync backend properties into the local profile
           if (result.length > 0) {
@@ -284,13 +310,21 @@ export const useDataStore = create<DataState>((set, get) => ({
           return result;
         }
 
-        // Local props exist — merge with backend, filtering orphans
-        const localIds = new Set(localProps.map(p => p.id));
-        const validApiProps = apiData.filter((p: any) => localIds.has(p.id || p.prop_id));
-        const validApiIds = new Set(validApiProps.map((p: any) => p.id || p.prop_id));
-        const merged = [...validApiProps, ...localProps.filter(p => !validApiIds.has(p.id))];
-        set({ props: { data: merged, fetchedAt: Date.now() } });
-        return merged;
+        // Local props exist — merge with backend, preserving local fields
+        // (backend may not return address, lat/lng, etc.)
+        const localById = new Map(localProps.map(p => [p.id, p]));
+        const apiIds = new Set(apiData.map((p: any) => p.id || p.prop_id));
+        const merged = apiData.map((p: any) => {
+          const apiId = p.id || p.prop_id;
+          const local = localById.get(apiId);
+          // Merge: local data is the base, API data overrides only defined fields
+          return { ...local, id: apiId, prop_id: apiId, name: p.name || local?.name, isAirbnb: p.isAirbnb ?? local?.isAirbnb ?? true, units: p.units ?? local?.units };
+        });
+        // Add any local-only props not on the server
+        const localOnly = localProps.filter(p => p.id && !apiIds.has(p.id));
+        const result = [...merged, ...localOnly];
+        set({ props: { data: result, fetchedAt: Date.now() } });
+        return result;
       } catch {
         // props fetch failed — fall back to local
         set({ props: { data: localProps, fetchedAt: Date.now() } });
@@ -381,17 +415,18 @@ export const useDataStore = create<DataState>((set, get) => ({
         const groups = Array.isArray(raw) ? raw : (raw?.groups ?? []);
         const data = groups.map((g: any) => {
           // Resolve which property IDs this group covers
-          const groupPropIds: string[] = [];
+          const groupPropIdsList: string[] = [];
           if (g.linkType === 'property' && g.propertyId) {
-            groupPropIds.push(g.propertyId);
+            groupPropIdsList.push(g.propertyId);
           } else if (g.linkType === 'city' && g.city) {
             const cityLower = g.city.toLowerCase();
             properties.forEach((p: any) => {
               if (p.isAirbnb && p.market?.toLowerCase() === cityLower) {
-                groupPropIds.push(p.id);
+                groupPropIdsList.push(p.id);
               }
             });
           }
+          const groupPropIds = new Set(groupPropIdsList);
 
           return {
             id: g.id,
@@ -421,7 +456,7 @@ export const useDataStore = create<DataState>((set, get) => ({
 
               // Compute depletion from iCal checkouts
               let effectiveQty = baseQty;
-              if (perStay > 0 && groupPropIds.length > 0) {
+              if (perStay > 0 && groupPropIds.size > 0) {
                 // Baseline = later of (createdAt, last restock date)
                 const createdAt = item.createdAt ? new Date(item.createdAt) : null;
                 const lastRestock = restocks.reduce((latest: Date | null, r: any) => {
@@ -435,7 +470,7 @@ export const useDataStore = create<DataState>((set, get) => ({
 
                 if (baseline) {
                   const checkouts = icalEvents.filter((e: any) => {
-                    if (!groupPropIds.includes(e.prop_id)) return false;
+                    if (!groupPropIds.has(e.prop_id)) return false;
                     const co = new Date(e.check_out);
                     return co >= baseline && co <= today;
                   }).length;
@@ -579,4 +614,6 @@ export const useDataStore = create<DataState>((set, get) => ({
     invGroups: null, analytics: null, customCategories: null, lastError: null,
     dataVersion: s.dataVersion + 1,
   })),
+
+  invalidateFinancials: () => set({ cockpit: null, analytics: null }),
 }));

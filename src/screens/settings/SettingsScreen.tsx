@@ -9,6 +9,7 @@ import { GradientHeader } from '../../components/GradientHeader';
 import * as SecureStore from 'expo-secure-store';
 // Lazy-load expo-clipboard to avoid crash if native module missing
 const Clipboard = { setStringAsync: async (s: string) => { try { const C = require('expo-clipboard'); await C.setStringAsync(s); } catch { /* fallback */ } } };
+import * as ImagePicker from 'expo-image-picker';
 import { useDataStore } from '../../store/dataStore';
 import { useOnboardingStore } from '../../store/onboardingStore';
 import { useUserStore, generatePropertyId } from '../../store/userStore';
@@ -167,6 +168,72 @@ function UsernameEditor({ currentUsername }: { currentUsername: string }) {
           disabled={!available || value.length < 3 || saving}
           style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.sm, backgroundColor: available && value.length >= 3 ? Colors.primary : Colors.glassDark, opacity: saving ? 0.6 : 1 }}>
           {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: available && value.length >= 3 ? '#fff' : Colors.textDim, fontWeight: '600', fontSize: FontSize.sm }}>Save</Text>}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function DisplayNameEditor({ currentName }: { currentName: string }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentName);
+  const [saving, setSaving] = useState(false);
+  const setProfile = useUserStore(s => s.setProfile);
+
+  const handleSave = () => {
+    const trimmed = value.trim();
+    setEditing(false);
+    // Save in background to avoid blocking the UI
+    requestAnimationFrame(() => {
+      setProfile({ displayName: trimmed }).catch(() => {});
+      apiFetch('/api/user/display-name', {
+        method: 'PUT',
+        body: JSON.stringify({ display_name: trimmed }),
+      }).catch(() => {});
+    });
+  };
+
+  if (!editing) {
+    return (
+      <SettingRow
+        icon="text-outline"
+        label="Display Name"
+        sub={currentName || 'Not set — tap to add your name'}
+        onPress={() => { setValue(currentName); setEditing(true); }}
+      />
+    );
+  }
+
+  return (
+    <View style={{ padding: Spacing.md }}>
+      <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 }}>DISPLAY NAME</Text>
+      <TextInput
+        style={{
+          fontSize: FontSize.md, color: Colors.text,
+          borderWidth: 1, borderColor: Colors.glassBorder,
+          borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 10,
+        }}
+        value={value}
+        onChangeText={(t) => setValue(t.slice(0, 50))}
+        placeholder="Your name (e.g. John Doe)"
+        placeholderTextColor={Colors.textDim}
+        autoCapitalize="words"
+        autoCorrect={false}
+        maxLength={50}
+        autoFocus
+      />
+      <Text style={{ color: Colors.textDim, fontSize: FontSize.xs, marginTop: 4 }}>
+        This is how your name appears to others
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+        <TouchableOpacity activeOpacity={0.7} onPress={() => setEditing(false)}
+          style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.sm, backgroundColor: Colors.glassDark }}>
+          <Text style={{ color: Colors.textSecondary, fontWeight: '600', fontSize: FontSize.sm }}>Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.7} onPress={handleSave}
+          disabled={saving}
+          style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.sm, backgroundColor: Colors.primary, opacity: saving ? 0.6 : 1 }}>
+          {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '600', fontSize: FontSize.sm }}>Save</Text>}
         </TouchableOpacity>
       </View>
     </View>
@@ -710,7 +777,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
                   <View style={{ backgroundColor: Colors.glassDark, borderRadius: Radius.md, padding: Spacing.sm, marginTop: Spacing.xs, borderWidth: 0.5, borderColor: Colors.glassBorder }}>
                     <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
                       {/* Month selector */}
-                      <ScrollView style={{ flex: 1, maxHeight: 150 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                      <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1, maxHeight: 150 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
                         {MONTHS.map((m, i) => (
                           <TouchableOpacity
                             key={m}
@@ -726,7 +793,7 @@ function AddPropertyModal({ visible, onClose, onSave, portfolioType, editData }:
                         ))}
                       </ScrollView>
                       {/* Year selector */}
-                      <ScrollView style={{ width: 80, maxHeight: 150 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                      <ScrollView keyboardShouldPersistTaps="handled" style={{ width: 80, maxHeight: 150 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
                         {years.map(y => (
                           <TouchableOpacity
                             key={y}
@@ -1166,6 +1233,7 @@ const PILL_LABELS: Record<string, string> = {
 // ══════════════════════════════════════
 export function SettingsScreen({ route }: any) {
   const invalidateAll = useDataStore(s => s.invalidateAll);
+  const invalidateFinancials = useDataStore(s => s.invalidateFinancials);
   const fetchProps = useDataStore(s => s.fetchProps);
   const fetchCustomCategoriesApi = useDataStore(s => s.fetchCustomCategories);
   const saveCustomCategoryApi = useDataStore(s => s.saveCustomCategory);
@@ -1194,6 +1262,7 @@ export function SettingsScreen({ route }: any) {
   const [unitsPerYearDraft, setUnitsPerYearDraft] = useState('');
   const [showAddIncome, setShowAddIncome] = useState(false);
   const [manualOverrides, setManualOverrides] = useState<Record<string, number>>({});
+  const [isSavingIncome, setIsSavingIncome] = useState(false);
 
   // Fetch manual overrides when income section is active
   useEffect(() => {
@@ -1278,7 +1347,9 @@ export function SettingsScreen({ route }: any) {
   }, []);
 
   // Stripe Connect setup for cleaners
+  const [connectLoading, setConnectLoading] = useState(false);
   const handleConnectSetup = async () => {
+    setConnectLoading(true);
     try {
       const res = await startConnectOnboarding();
       if (res.status === 'active') {
@@ -1293,7 +1364,9 @@ export function SettingsScreen({ route }: any) {
         glassAlert('Error', 'Could not start payment setup. Please try again.');
       }
     } catch (e: any) {
-      glassAlert('Error', e?.serverError || e?.message || 'Could not set up payments.');
+      glassAlert('Error', e?.serverError || e?.message || 'Connect onboarding failed — please try again');
+    } finally {
+      setConnectLoading(false);
     }
   };
 
@@ -1353,12 +1426,14 @@ export function SettingsScreen({ route }: any) {
       return;
     }
     setTxEditingId(t.id);
+    const amt = t.amount ?? 0;
     setTxEditFields({
-      amount: String(Math.abs(t.amount ?? 0)),
-      name: t.name || t.merchant || t.description || '',
+      amount: String(Math.abs(amt)),
+      name: t.payee || t.name || t.merchant || t.description || '',
       date: t.date || '',
       category: t.category || '',
       property_tag: t.property_tag || '',
+      type: t.type === 'in' || amt < 0 ? 'income' : 'expense',
     });
   };
 
@@ -1376,15 +1451,16 @@ export function SettingsScreen({ route }: any) {
     try {
       const tx = allTransactions.find((t: any) => t.id === txEditingId);
       if (!tx) return;
-      const isExpense = (tx.amount ?? 0) < 0;
+      const isExpense = txEditFields.type === 'expense';
       const newAmount = parseFloat(txEditFields.amount || '0');
-      const finalAmount = isExpense ? -Math.abs(newAmount) : Math.abs(newAmount);
+      const finalAmount = isExpense ? Math.abs(newAmount) : -Math.abs(newAmount);
 
       await apiFetch('/api/transactions/update', {
         method: 'POST',
         body: JSON.stringify({
           id: txEditingId,
           amount: finalAmount,
+          type: isExpense ? 'out' : 'in',
           name: txEditFields.name,
           date: txEditFields.date,
           category: txEditFields.category,
@@ -1456,12 +1532,10 @@ export function SettingsScreen({ route }: any) {
       ...(p.icalUrls?.some(u => u?.trim()) ? { icalUrls: p.icalUrls } : {}),
     };
     const updatedProps = [...currentProps, newProp];
-    await setUserProfile({ properties: updatedProps });
     setProperties(updatedProps);
-    // Sync to backend
-    try {
-      await apiFetch('/api/props', { method: 'POST', body: JSON.stringify({ props: updatedProps }) });
-    } catch {}
+    setUserProfile({ properties: updatedProps });
+    // Sync to backend in background — don't block UI
+    apiFetch('/api/props', { method: 'POST', body: JSON.stringify({ props: updatedProps }) }).catch(() => {});
     // Fire iCal sync in background — don't block the save
     if (p.icalUrls?.some(u => u?.trim())) {
       apiFetch('/api/ical/sync', { method: 'POST' }).catch(() => {});
@@ -1500,33 +1574,33 @@ export function SettingsScreen({ route }: any) {
   };
 
   const handleDeleteProperty = (indexStr: string, label: string) => {
-    const currentProps = userProfile?.properties || [];
+    // Read fresh from local state (not stale closure)
+    const currentProps = [...properties];
     const idx = parseInt(indexStr, 10);
     const prop = currentProps[idx];
+    if (!prop) return;
     const propId = prop?.id || prop?.name;
 
-    glassAlert(
+    // Use native Alert.alert for reliability on all devices (iPad included)
+    Alert.alert(
       'Delete Property',
       `Deleting "${label}" will permanently remove all associated data including units, calendar events, transaction tags, inventory, and P&L history.\n\nThis cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete All Data', style: 'destructive', onPress: async () => {
           try {
-            // Backend cascade delete — removes feeds, events, tags, inventory, etc.
             if (propId) {
               try {
                 await useDataStore.getState().deleteProperty(propId);
               } catch {
-                // Backend may not support cascade delete yet — continue with local delete
                 useDataStore.getState().invalidateAll();
               }
             }
-            // Remove from local profile
             const updatedProps = currentProps.filter((_, i) => i !== idx);
-            await setUserProfile({ properties: updatedProps });
             setProperties(updatedProps);
+            setUserProfile({ properties: updatedProps });
           } catch (e: any) {
-            glassAlert('Error', e.message || 'Could not delete property. Please try again.');
+            Alert.alert('Error', e.message || 'Could not delete property.');
           }
         }},
       ],
@@ -1534,23 +1608,30 @@ export function SettingsScreen({ route }: any) {
   };
 
   const handleAddManualIncome = async (entry: { propId: string; amount: string; description: string; date: string; incomeType: string; override: boolean; monthKey: string }) => {
+    if (isSavingIncome) return;
+    setIsSavingIncome(true);
     try {
       if (entry.override) {
         // Override mode: set manual_income for the month (replaces Plaid)
         const current = await apiFetch('/api/manual-income').catch(() => ({ manual: {} }));
-        const manual = current.manual || {};
+        const manual = { ...(current.manual || {}) };
         manual[entry.monthKey] = parseFloat(entry.amount);
         await apiFetch('/api/manual-income', { method: 'POST', body: JSON.stringify({ manual }) });
-        setManualOverrides(manual);
       } else {
-        // Additive mode: add as a separate income entry
+        // Additive mode: append as a separate income entry (does NOT touch manual_income overrides)
         await apiFetch('/api/income/manual', { method: 'POST', body: JSON.stringify(entry) });
       }
-      await activateData();
-      invalidateAll();
+      // Re-fetch overrides from server so UI reflects current state
+      const refreshed = await apiFetch('/api/manual-income').catch(() => ({ manual: {} }));
+      setManualOverrides(refreshed.manual || {});
+      activateData().catch(() => {});
+      // Only invalidate financial caches, not the full data store, to avoid
+      // a reload cascade across all mounted screens (source of the freeze).
+      invalidateFinancials();
       const mode = entry.override ? 'override set' : 'income added';
       glassAlert('Done', `$${entry.amount} ${mode} for ${entry.monthKey}.`);
     } catch { glassAlert('Error', 'Could not save income entry. Please try again.'); }
+    finally { setIsSavingIncome(false); }
   };
 
   const handleSaveCleanerFeed = async (feed: { propId: string; cleanerName: string; url: string; user_id?: string; username?: string }) => {
@@ -1670,29 +1751,35 @@ export function SettingsScreen({ route }: any) {
   };
 
   const handleDeleteAccount = () => {
-    glassAlert('Delete Account', 'This will permanently delete all your data. This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        // 1. Delete account on server
-        try { await apiDeleteAccount(); } catch { /* continue with local cleanup */ }
-        // 2. Clear all Zustand in-memory data cache
-        invalidateAll();
-        // 3. Clear user profile + reset API token
-        await clearUserStore();
-        setToken(null);
-        // 4. Clear ALL SecureStore keys
-        await Promise.all([
-          SecureStore.deleteItemAsync('pp_user_profile'),
-          SecureStore.deleteItemAsync('pp_token'),
-          SecureStore.deleteItemAsync('pp_biometric'),
-          SecureStore.deleteItemAsync('pp_onboarding_complete'),
-          SecureStore.deleteItemAsync('pp_portfolio_type'),
-          SecureStore.deleteItemAsync('pp_email'),
-        ]);
-        // 5. Reset onboarding → triggers full app re-render to LandingScreen
-        await resetOnboarding();
-      }},
-    ]);
+    // Use native Alert.alert instead of custom GlassAlert for maximum
+    // compatibility across all devices (iPad, iPhone, all OS versions)
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete all your data. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: async () => {
+          // 1. Delete account on server
+          try { await apiDeleteAccount(); } catch { /* continue with local cleanup */ }
+          // 2. Clear all Zustand in-memory data cache
+          invalidateAll();
+          // 3. Clear user profile + reset API token
+          await clearUserStore();
+          setToken(null);
+          // 4. Clear ALL SecureStore keys
+          await Promise.all([
+            SecureStore.deleteItemAsync('pp_user_profile'),
+            SecureStore.deleteItemAsync('pp_token'),
+            SecureStore.deleteItemAsync('pp_biometric'),
+            SecureStore.deleteItemAsync('pp_onboarding_complete'),
+            SecureStore.deleteItemAsync('pp_portfolio_type'),
+            SecureStore.deleteItemAsync('pp_email'),
+          ]);
+          // 5. Reset onboarding → triggers full app re-render to LandingScreen
+          await resetOnboarding();
+        }},
+      ],
+    );
   };
 
   const handleSignOut = () => {
@@ -1751,6 +1838,8 @@ export function SettingsScreen({ route }: any) {
                   <Text style={{ fontSize: FontSize.sm, fontWeight: '500', color: Colors.primary }}>Edit</Text>
                 </TouchableOpacity>
                 <TouchableOpacity activeOpacity={0.7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={{ padding: Spacing.xs }}
           onPress={() => handleDeleteProperty(String(i), label)}>
                   <Text style={styles.deleteText}>Delete</Text>
                 </TouchableOpacity>
@@ -1859,11 +1948,9 @@ export function SettingsScreen({ route }: any) {
               downPaymentPct: p.downPaymentPct || undefined,
               ...(p.icalUrls?.some(u => u?.trim()) ? { icalUrls: p.icalUrls } : { icalUrls: undefined }),
             };
-            await setUserProfile({ properties: currentProps });
             setProperties(currentProps);
-            try {
-              await apiFetch('/api/props', { method: 'POST', body: JSON.stringify({ props: currentProps }) });
-            } catch {}
+            setUserProfile({ properties: currentProps });
+            apiFetch('/api/props', { method: 'POST', body: JSON.stringify({ props: currentProps }) }).catch(() => {});
 
             // Fire iCal sync in background — don't block the save
             if (p.icalUrls?.some(u => u?.trim())) {
@@ -2369,12 +2456,13 @@ export function SettingsScreen({ route }: any) {
     const q = txSearch.toLowerCase();
     const filtered = q
       ? allTransactions.filter((t: any) => {
-          const fields = [t.name, t.merchant, t.description, t.category, t.property_tag].filter(Boolean);
+          const fields = [t.payee, t.name, t.merchant, t.description, t.category, t.property_tag].filter(Boolean);
           return fields.some((f: string) => f.toLowerCase().includes(q));
         })
       : allTransactions;
 
     const propLabel = (pid: string) => {
+      if (pid === '__general__') return 'General';
       const p = properties.find((p: any) => (p.id || p.prop_id) === pid);
       return p?.label || pid;
     };
@@ -2382,19 +2470,22 @@ export function SettingsScreen({ route }: any) {
     const renderTxItem = ({ item: t }: { item: any }) => {
       const isEditing = txEditingId === t.id;
       const amt = t.amount ?? 0;
+      const txIsIncome = t.type === 'in' || amt < 0;
       return (
         <View>
           <TouchableOpacity activeOpacity={0.7} onPress={() => startTxEdit(t)} style={styles.propRow}>
             <View style={styles.propInfo}>
               <Text style={styles.propName} numberOfLines={1}>
-                {t.name || t.merchant || t.description || 'Transaction'}
+                {t.payee || t.name || t.merchant || t.description || 'Transaction'}
               </Text>
               <Text style={styles.propType}>
-                {fmtDate(t.date || '')}{t.property_tag ? ` · ${propLabel(t.property_tag)}` : ''}
+                {fmtDate(t.date || '')}
+                {t.property_tag ? ` · ${propLabel(t.property_tag)}` : ''}
+                {' · '}<Text style={{ color: txIsIncome ? Colors.green : Colors.red, fontWeight: '600' }}>{txIsIncome ? 'Income' : 'Expense'}</Text>
               </Text>
             </View>
             <View style={{ alignItems: 'flex-end', flexDirection: 'row', gap: 8 }}>
-              <Text style={{ fontSize: FontSize.md, fontWeight: '700', color: amt >= 0 ? Colors.green : Colors.red }}>
+              <Text style={{ fontSize: FontSize.md, fontWeight: '700', color: txIsIncome ? Colors.green : Colors.red }}>
                 {fmt$(Math.abs(amt))}
               </Text>
               <Ionicons
@@ -2428,6 +2519,22 @@ export function SettingsScreen({ route }: any) {
                   placeholder="YYYY-MM-DD" placeholderTextColor={Colors.textDim}
                   maxLength={10} />
               </View>
+              {/* Income / Expense toggle */}
+              <View style={{ marginBottom: Spacing.sm }}>
+                <Text style={styles.inputLabel}>Type</Text>
+                <View style={styles.propPillRow}>
+                  <TouchableOpacity activeOpacity={0.7}
+                    style={[styles.propPill, txEditFields.type === 'income' && { backgroundColor: Colors.green, borderColor: Colors.green }]}
+                    onPress={() => setTxEditFields(f => ({ ...f, type: 'income' }))}>
+                    <Text style={[styles.propPillText, txEditFields.type === 'income' && { color: '#fff' }]}>Income</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity activeOpacity={0.7}
+                    style={[styles.propPill, txEditFields.type === 'expense' && { backgroundColor: Colors.red, borderColor: Colors.red }]}
+                    onPress={() => setTxEditFields(f => ({ ...f, type: 'expense' }))}>
+                    <Text style={[styles.propPillText, txEditFields.type === 'expense' && { color: '#fff' }]}>Expense</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
               <View style={{ marginBottom: Spacing.sm }}>
                 <Text style={styles.inputLabel}>Category</Text>
                 <TextInput style={styles.settingsInput} value={txEditFields.category}
@@ -2435,27 +2542,30 @@ export function SettingsScreen({ route }: any) {
                   placeholder="e.g. utilities, rent" placeholderTextColor={Colors.textDim}
                   maxLength={100} />
               </View>
-              {properties.length > 0 && (
-                <View style={{ marginBottom: Spacing.sm }}>
-                  <Text style={styles.inputLabel}>Property</Text>
-                  <View style={styles.propPillRow}>
-                    <TouchableOpacity activeOpacity={0.7}
-                      style={[styles.propPill, !txEditFields.property_tag && styles.propPillActive]}
-                      onPress={() => setTxEditFields(f => ({ ...f, property_tag: '' }))}>
-                      <Text style={[styles.propPillText, !txEditFields.property_tag && styles.propPillTextActive]}>None</Text>
+              <View style={{ marginBottom: Spacing.sm }}>
+                <Text style={styles.inputLabel}>Property</Text>
+                <View style={styles.propPillRow}>
+                  <TouchableOpacity activeOpacity={0.7}
+                    style={[styles.propPill, !txEditFields.property_tag && styles.propPillActive]}
+                    onPress={() => setTxEditFields(f => ({ ...f, property_tag: '' }))}>
+                    <Text style={[styles.propPillText, !txEditFields.property_tag && styles.propPillTextActive]}>None</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity activeOpacity={0.7}
+                    style={[styles.propPill, txEditFields.property_tag === '__general__' && styles.propPillActive]}
+                    onPress={() => setTxEditFields(f => ({ ...f, property_tag: '__general__' }))}>
+                    <Text style={[styles.propPillText, txEditFields.property_tag === '__general__' && styles.propPillTextActive]}>General</Text>
+                  </TouchableOpacity>
+                  {properties.map(p => (
+                    <TouchableOpacity key={p.id} activeOpacity={0.7}
+                      style={[styles.propPill, txEditFields.property_tag === p.id && styles.propPillActive]}
+                      onPress={() => setTxEditFields(f => ({ ...f, property_tag: p.id }))}>
+                      <Text style={[styles.propPillText, txEditFields.property_tag === p.id && styles.propPillTextActive]}>
+                        {p.label || p.id}
+                      </Text>
                     </TouchableOpacity>
-                    {properties.map(p => (
-                      <TouchableOpacity key={p.id} activeOpacity={0.7}
-                        style={[styles.propPill, txEditFields.property_tag === p.id && styles.propPillActive]}
-                        onPress={() => setTxEditFields(f => ({ ...f, property_tag: p.id }))}>
-                        <Text style={[styles.propPillText, txEditFields.property_tag === p.id && styles.propPillTextActive]}>
-                          {p.label || p.id}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                  ))}
                 </View>
-              )}
+              </View>
               <View style={styles.modalBtns}>
                 <TouchableOpacity activeOpacity={0.7} style={styles.modalCancelBtn}
                   onPress={() => { setTxEditingId(null); setTxEditFields({}); }}>
@@ -2505,7 +2615,7 @@ export function SettingsScreen({ route }: any) {
           </View>
 
           {/* Count header */}
-          <Text style={styles.sectionTitle}>
+          <Text style={[styles.sectionTitle, { paddingTop: Spacing.xs, marginBottom: -Spacing.xs }]}>
             {txLoading ? 'LOADING...' : `${filtered.length} TRANSACTION${filtered.length !== 1 ? 'S' : ''}`}
           </Text>
         </View>
@@ -2641,6 +2751,48 @@ export function SettingsScreen({ route }: any) {
           </View>
         </CardGroup>
 
+        <SectionTitle title="Business Logo" />
+        <CardGroup>
+          <View style={{ padding: Spacing.md, alignItems: 'center', gap: Spacing.sm }}>
+            <Image
+              source={invPrefs.businessLogo ? { uri: invPrefs.businessLogo } : require('../../../assets/logo.png')}
+              style={{ width: 80, height: 80, borderRadius: Radius.md }}
+              resizeMode="contain"
+            />
+            <Text style={{ fontSize: FontSize.xs, color: Colors.textDim }}>
+              {invPrefs.businessLogo ? 'Custom logo' : 'Using Portfolio Pigeon logo'}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+              <TouchableOpacity activeOpacity={0.7}
+                style={{ paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.lg, backgroundColor: Colors.green }}
+                onPress={async () => {
+                  const result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: 'images',
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.5,
+                    base64: true,
+                  });
+                  if (!result.canceled && result.assets[0]?.base64) {
+                    const uri = `data:image/jpeg;base64,${result.assets[0].base64}`;
+                    savePrefs({ businessLogo: uri });
+                  }
+                }}
+              >
+                <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: '#fff' }}>Upload Logo</Text>
+              </TouchableOpacity>
+              {invPrefs.businessLogo ? (
+                <TouchableOpacity activeOpacity={0.7}
+                  style={{ paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.lg, backgroundColor: Colors.glassDark, borderWidth: 0.5, borderColor: Colors.glassBorder }}
+                  onPress={() => savePrefs({ businessLogo: '' })}
+                >
+                  <Text style={{ fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary }}>Remove</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+        </CardGroup>
+
         <SectionTitle title="Business Info" />
         <CardGroup>
           <View style={{ padding: Spacing.md, gap: Spacing.sm }}>
@@ -2753,10 +2905,10 @@ export function SettingsScreen({ route }: any) {
           <CardGroup>
             <SettingRow
               icon="wallet-outline"
-              label="Receive Payments"
+              label={connectLoading ? 'Opening Stripe...' : 'Receive Payments'}
               sub={isReadOnly ? 'Subscribe to Pro to receive payments' : connectStatus === 'active' ? 'Stripe connected — ready to receive' : 'Set up to receive invoice payments'}
-              onPress={isReadOnly ? handleProGate : handleConnectSetup}
-              right={connectStatus === 'active' ? <Ionicons name="checkmark-circle" size={18} color={Colors.green} /> : undefined}
+              onPress={isReadOnly ? handleProGate : connectLoading ? undefined : handleConnectSetup}
+              right={connectLoading ? <ActivityIndicator size="small" color={Colors.green} /> : connectStatus === 'active' ? <Ionicons name="checkmark-circle" size={18} color={Colors.green} /> : undefined}
             />
           </CardGroup>
 
@@ -2823,8 +2975,25 @@ export function SettingsScreen({ route }: any) {
         </>
       )}
 
+      {/* Profile header — Instagram-style */}
+      <View style={{ alignItems: 'center', paddingVertical: Spacing.lg }}>
+        <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: Colors.green + '20', alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.sm }}>
+          <Text style={{ fontSize: 26, fontWeight: '700', color: Colors.green }}>
+            {(userProfile?.displayName || userProfile?.username || '?')[0].toUpperCase()}
+          </Text>
+        </View>
+        <Text style={{ fontSize: FontSize.lg, fontWeight: '700', color: Colors.text }}>
+          {userProfile?.displayName || userProfile?.username || 'Set your name'}
+        </Text>
+        {userProfile?.displayName && userProfile?.username && (
+          <Text style={{ fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 }}>@{userProfile.username}</Text>
+        )}
+      </View>
+
       <SectionTitle title="Your HQ" />
       <CardGroup>
+        <DisplayNameEditor currentName={userProfile?.displayName || ''} />
+        <Divider />
         <UsernameEditor currentUsername={userProfile?.username || ''} />
         <Divider />
         <SettingRow icon="mail-outline" label="Email" sub={userProfile?.email || ''} chevron={false} />

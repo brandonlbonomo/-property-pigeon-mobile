@@ -3168,10 +3168,22 @@ def get_manual_income():
     return jsonify({"manual": store.get("manual_income", {})})
 
 @app.route("/api/manual-income", methods=["POST"])
-@app.route("/api/income/manual", methods=["POST"])
 def save_manual_income():
     store = load_store()
     store["manual_income"] = request.json.get("manual", {})
+    save_store(store)
+    return jsonify({"ok": True})
+
+@app.route("/api/income/manual", methods=["POST"])
+def add_additive_income():
+    """Additive income: appends to existing income instead of overriding Plaid data."""
+    body = request.json or {}
+    if not body.get("amount") or not body.get("monthKey"):
+        return jsonify({"ok": False, "error": "Missing amount or monthKey"}), 400
+    store = load_store()
+    entries = store.get("additive_income", [])
+    entries.append(body)
+    store["additive_income"] = entries
     save_store(store)
     return jsonify({"ok": True})
 
@@ -5771,10 +5783,11 @@ def cockpit_data():
     prev_str  = prev_date.strftime("%Y-%m")
 
     store    = load_store()
-    tags     = store.get("tags",           {})
-    txs_dict = store.get("transactions",   {})
-    manual   = store.get("manual_income",  {})
-    prop_inc = store.get("property_income",{})
+    tags         = store.get("tags",           {})
+    txs_dict     = store.get("transactions",   {})
+    manual       = store.get("manual_income",  {})
+    prop_inc     = store.get("property_income",{})
+    additive_inc = store.get("additive_income", [])
 
     # Dynamic property IDs from user's store (no more hardcoded lists)
     user_props = store.get("properties", [])
@@ -5838,7 +5851,7 @@ def cockpit_data():
             is_manual      = True
             revenue_by_prop.clear()
 
-        # Per-property income supplements if no manual_income entry
+        # Per-property income and additive income supplement Plaid when no override is set
         if month_key not in manual:
             for pid, months in prop_inc.items():
                 if month_key in months:
@@ -5847,6 +5860,14 @@ def cockpit_data():
                     total_rev += payout
                     if payout:
                         revenue_by_prop[pid] = revenue_by_prop.get(pid, 0.0) + payout
+            # Additive income entries are added on top of Plaid (not applied when override is set)
+            for entry in additive_inc:
+                if entry.get("monthKey") == month_key:
+                    amt = float(entry.get("amount", 0) or 0)
+                    total_rev += amt
+                    pid = entry.get("propId")
+                    if pid and pid != "airbnb":
+                        revenue_by_prop[pid] = revenue_by_prop.get(pid, 0.0) + amt
 
         total_rev_r = round(total_rev, 2)
         total_exp   = round(expenses, 2)
